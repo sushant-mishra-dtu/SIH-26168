@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "idr-26168"
+version = "0.1.0"
+description = "AI-based intelligent dead reckoning for GNSS-denied ground-vehicle navigation (SIH 2026 PS 26168)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+# Learning components. Kept optional so the harness and its CI run without a
+# torch install -- the harness is the critical path and must never be blocked
+# on a 2 GB download.
+ml = [
+    "torch>=2.0",
+]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+]
+plot = [
+    "matplotlib>=3.7",
+]
+
+[project.scripts]
+idr-eval = "eval.run:main"
+
+[tool.setuptools]
+packages = ["idr", "eval", "eval.loaders", "eval.metrics", "eval.outages", "models", "core.reference"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

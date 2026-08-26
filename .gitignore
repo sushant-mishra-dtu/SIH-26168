@@ -1,0 +1,62 @@
+# --- data: never committed; only the manifest is ---
+data/*
+!data/README.md
+!data/manifest/
+!data/manifest/**
+
+# --- build ---
+build/
+target/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+compile_commands.json
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- models / large artefacts ---
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pte
+runs/
+wandb/
+lightning_logs/
+checkpoints/
+
+# --- maps (regenerate from .pbf; never commit extracts) ---
+maps/extracts/
+*.pbf
+*.osm
+*.csr
+
+# --- android ---
+android/.gradle/
+android/local.properties
+android/**/build/
+*.apk
+*.aab
+*.keystore
+
+# --- generated figures are reproducible; commit only what the write-up uses ---
+eval/figures/_scratch/
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

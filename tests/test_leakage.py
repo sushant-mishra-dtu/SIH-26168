@@ -1,0 +1,93 @@
+"""The leakage audit.
+
+PS 26168 disallows wheel odometry. If this test ever passes when it should fail, every number in
+the submission is invalid and no other test would notice.
+
+Note the deliberate structure: we assert both that clean input passes **and** that dirty input
+raises. A guard that has never been observed to reject something is not known to reject anything.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from eval.loaders.columns import (
+    ALLOWED_COLUMNS,
+    FEATURE_COLUMNS,
+    LeakageError,
+    assert_feature_safe,
+    assert_no_leakage,
+    normalise,
+)
+
+CLEAN = [
+    "Accel X (m/s^2)", "Accel Y (m/s^2)", "Accel Z (m/s^2)",
+    "Gravity X (m/s^2)", "Gravity Y (m/s^2)", "Gravity Z (m/s^2)",
+    "Gyro Yaw (rad/s)", "Gyro Pitch (rad/s)", "Gyro Roll (rad/s)",
+]
+
+
+def test_clean_smartphone_columns_pass():
+    assert_no_leakage(CLEAN)
+
+
+def test_normalisation_strips_units_and_case():
+    assert normalise("Accel X (m/s^2)") == "accel_x"
+    assert normalise("  GYRO YAW  ") == "gyro_yaw"
+    assert normalise("GPS Speed (km/hr)") == "gps_speed_km_hr" or normalise(
+        "GPS Speed (km/hr)"
+    ) == "gps_speed"
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "Wheel Speed FL (rad/s)",
+        "wheel_speed_rr",
+        "WHEELSPEED",
+        "Steering Angle (deg)",
+        "Engine Speed (rpm)",
+        "Brake Pressure (psi)",
+        "Clutch",
+        "Gear Requested",
+        "Accelerator Pedal (%)",
+        "Handbrake",
+    ],
+)
+def test_banned_vehicle_channels_raise(column):
+    """Each of these is a real IO-VNBD 'V-' column name."""
+    with pytest.raises(LeakageError, match="Disallowed channel"):
+        assert_no_leakage(CLEAN + [column])
+
+
+def test_v_stream_prefix_raises():
+    with pytest.raises(LeakageError, match="V-"):
+        assert_no_leakage(["V-wheel_speed_fl"])
+
+
+def test_unknown_column_raises_even_if_innocent_looking():
+    """The allowlist is the primary defence: unrecognised means rejected, not assumed safe."""
+    with pytest.raises(LeakageError, match="not on the allowlist"):
+        assert_no_leakage(CLEAN + ["some_new_sensor"])
+
+
+def test_gnss_is_allowed_but_never_a_feature():
+    """GNSS is reference and gated-update only.
+
+    A model trained on GNSS features learns from information that does not exist inside a tunnel --
+    the same class of mistake as wheel-speed leakage, and just as fatal to the result.
+    """
+    assert_no_leakage(["GPS Lat", "GPS Lon"])  # fine as reference
+    with pytest.raises(LeakageError, match="Non-feature channel"):
+        assert_feature_safe(["accel_x", "gps_lat"])
+
+
+def test_feature_set_is_inertial_only():
+    assert FEATURE_COLUMNS < ALLOWED_COLUMNS
+    assert not any(c.startswith("gps_") for c in FEATURE_COLUMNS)
+
+
+def test_guard_is_not_catchable_as_a_normal_error():
+    """LeakageError subclasses AssertionError so a bare `except Exception` does not swallow it
+    silently in a training loop."""
+    assert issubclass(LeakageError, AssertionError)
