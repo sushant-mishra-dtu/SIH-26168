@@ -35,10 +35,20 @@ design a reader will assume we built.
 
 Include the block diagram. Include the state vector, written out.
 
+**Source:** [SE23_PROPAGATION.md](SE23_PROPAGATION.md) §2–5. Take the state layout and `A_RI`
+from there verbatim. §4 has the group-affine caveat to state honestly rather than overclaim, and
+§6 has the argument for the right-invariant error — the zero attitude column in §7.1 is the single
+most defensible technical point we have; make it in this section.
+
 ## 4. Kinematic constraints — `[TODO]` *(S)*
 
 NHC, ZUPT, ZARU: what each observes, and — the part that is usually left out — **the gating
 conditions under which each is switched off**. An ungated NHC during a slip is worse than no NHC.
+
+**Source:** [SE23_PROPAGATION.md](SE23_PROPAGATION.md) §7.1–7.3 derives what each one actually
+observes. The honest and non-obvious point: NHC gives **no instantaneous heading information** —
+yaw reaches it only through the gravity coupling, slowly and only while accelerating — which is
+why ZARU, a direct observation of gyro bias, matters more for the dominant error term.
 
 ## 5. Learned forward speed — `[TODO]` *(M)*
 
@@ -60,6 +70,11 @@ R_sv in the filter state, observable through turns under NHC; PCA on horizontal 
 straight-line accel/brake as an initialiser only. Mount-disturbance detector re-inflates the
 covariance. Derive the ~1° requirement from the error budget so the reader sees why this is not
 optional.
+
+**Source:** [SE23_PROPAGATION.md](SE23_PROPAGATION.md) §7.2 makes the observability claim
+quantitative: the NHC rows observe mount yaw and pitch with **gain equal to forward speed**. That
+gives the section its figure (σ(ξ_sv,z) against speed) and, at zero speed, states the car-park
+limitation (D-016) as a property of the math rather than an apology.
 
 ## 8. Map matching — `[TODO]` *(P)*
 

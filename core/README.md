@@ -38,5 +38,10 @@ configuration is the Gate 1 baseline.
 
 ## Status
 
-Scaffold only. Sprint 0: choose the language, stand up the build and CI, start the multi-hour
-stationary log for Allan variance, work the SE₂(3) propagation on paper.
+Scaffold only. The SE₂(3) propagation is **derived and CI-verified** —
+[../docs/SE23_PROPAGATION.md](../docs/SE23_PROPAGATION.md) is what Sprint 1 writes
+`propagate()` and the update family from; do not re-derive it at the keyboard.
+
+Still open in Sprint 0: start the multi-hour stationary log for Allan variance (Gate 1's
+process noise depends on it), and agree the `ffi/` interface with seat A. Language choice is
+deferred to the October port by D-022 — the screening filter is the Python reference.

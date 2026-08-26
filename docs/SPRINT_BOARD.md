@@ -88,7 +88,9 @@ The whole sprint builds the thing that measures us. Nothing trains this week, de
 - [x] Error-state layout fixed (18-vector) and the FFI-facing interface defined.
 - [ ] **Start the multi-hour stationary log for Allan variance today** — it needs hours, and
       Gate 1's process noise depends on it.
-- [ ] SE₂(3) propagation on paper before in code.
+- [x] SE₂(3) propagation on paper before in code — [SE23_PROPAGATION.md](SE23_PROPAGATION.md),
+      verified in CI by `tests/test_se23_derivation.py`. Yielded D-028–D-033; three of those
+      corrected the derivation. Sprint 1 writes `propagate()` from §8 and reuses §9 tests 1–6.
 - [ ] Agree the `core/ffi/` interface contract with seat A.
 
 ### M — Learning
