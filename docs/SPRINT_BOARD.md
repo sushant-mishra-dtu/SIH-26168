@@ -1,5 +1,13 @@
 # Sprint Board
 
+> **SUPERSEDED 27 Aug 2026 by [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).**
+> That file is now the authoritative calendar and task board. It consolidates this board with the
+> engineering survey, the Master Implementation Plan and the seat-P Delhi Road Graph study, and it
+> carries an audit of what is built against the code rather than against a document.
+> Two items below are explicitly changed there: the Allan-variance source (D-038) and the Gate 0
+> figure-regeneration criterion (R-6). Everything else is carried forward.
+> Kept for the record; do not plan from it.
+
 **Today: Wed 26 Aug 2026 — Sprint 0, day 1.**
 **Screening submission: Tue 8 Sep 2026 — 13 days out.**
 

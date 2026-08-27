@@ -40,7 +40,8 @@ Three inputs the filter can't get wrong quietly:
 
 ## Sprints
 
-> **STALE — superseded 26 Aug 2026 by [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md).**
+> **STALE — superseded 26 Aug 2026 by docs/SPRINT_BOARD.md, and again 27 Aug 2026 by
+> [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md), which is now authoritative.**
 > The real cut-off is Tue 8 Sep, not 20 Sep. The calendar below places Sprints 2 and 3
 > *after* the actual deadline. Kept for the record; do not plan from it. (DECISION_LOG D-021.)
 

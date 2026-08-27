@@ -3,8 +3,10 @@
 Smart India Hackathon 2026 · Problem Statement **26168** · AI-based intelligent dead reckoning.
 
 > **Grade metric:** position drift under **10% of distance travelled**
-> **Screening submission:** **Tue 8 Sep 2026** — 13 days from Sprint 0 start
-> **Status:** Sprint 0. Harness green (79 tests), filter not yet wired.
+> **Screening submission:** **Tue 8 Sep 2026**
+> **Status:** Sprint 0, day 2. Harness green in CI, filter not yet wired.
+> **Plan of record:** [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) *(27 Aug — supersedes
+> the sprint calendars in AGENTS.md and SPRINT_BOARD.md)*
 
 ---
 
@@ -145,7 +147,7 @@ and the C++/Rust port. See [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md).
 python -m venv .venv && ./.venv/Scripts/pip install -e ".[dev]"
 ```
 
-Run the tests — 79 of them, none needing the dataset:
+Run the tests — none of them need the dataset:
 
 ```bash
 pytest -q
@@ -206,7 +208,7 @@ idr-26168/
 ├── android/           foreground logger + demo UI                       [seat A]
 ├── data/              gitignored; manifest with checksums is committed
 ├── docs/              method, error budget, decision log, protocol
-└── tests/             79 tests; the leakage audit is its own CI gate
+└── tests/             the leakage audit is its own CI gate
 ```
 
 ---
@@ -215,13 +217,15 @@ idr-26168/
 
 | # | Document | Why |
 |---|---|---|
-| 1 | [AGENTS.md](AGENTS.md) | The plan of record. Seats, sprints, gates, risks, cut list. |
-| 2 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | InEKF, NHC, ZUPT, CTE/CRSE — read once, save everyone time. |
-| 3 | [docs/EVALUATION.md](docs/EVALUATION.md) | **Frozen protocol.** Every number in the submission comes from here. |
-| 4 | [docs/ERROR_BUDGET.md](docs/ERROR_BUDGET.md) | Where the 10% goes, term by term, with the arithmetic shown. |
-| 5 | [docs/DATASETS.md](docs/DATASETS.md) | IO-VNBD schema, splits, the three traps. |
-| 6 | [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md) | What each seat does today. |
-| 7 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, CI gates, reproducibility rules. |
+| 1 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **The plan of record.** Audit of what is built, the reconciliation of the two prior plans, the 12-day calendar, gates. Start here. |
+| 2 | [AGENTS.md](AGENTS.md) | Seats, risks, cut list, citation hygiene. Its sprint table is stale — see above. |
+| 3 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | InEKF, NHC, ZUPT, CTE/CRSE — read once, save everyone time. |
+| 4 | [docs/EVALUATION.md](docs/EVALUATION.md) | **Frozen protocol.** Every number in the submission comes from here. |
+| 5 | [docs/ERROR_BUDGET.md](docs/ERROR_BUDGET.md) | Where the 10% goes, term by term, with the arithmetic shown. |
+| 6 | [docs/SE23_PROPAGATION.md](docs/SE23_PROPAGATION.md) | The derivation the filter is written from, checked in CI before the filter existed. |
+| 7 | [docs/DATASETS.md](docs/DATASETS.md) | IO-VNBD schema, splits, the three traps. |
+| 8 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, CI gates, reproducibility rules. |
+| — | [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md) | Superseded by the plan of record. Kept for the record. |
 | — | [docs/DECISION_LOG.md](docs/DECISION_LOG.md) | Append-only. Every non-obvious choice and its reason. |
 | — | [docs/METHOD.md](docs/METHOD.md) | Grows into the submission write-up. Fill as you go. |
 
