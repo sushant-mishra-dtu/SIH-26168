@@ -21,6 +21,7 @@ from eval.splits import (
     MANDATORY_PLOT_SEQUENCES,
     TRAIN,
     assert_split_disjoint,
+    assert_split_is_loadable,
     split_of,
 )
 from eval.splits import test_sequences as held_out_sequences  # aliased: pytest collects `test_*`
@@ -33,6 +34,12 @@ from idr.stamp import make_stamp, seed_everything
 
 def test_split_is_disjoint():
     assert_split_disjoint()
+
+
+def test_split_names_only_sequences_that_have_a_smartphone_stream():
+    """Eleven IO-VNBD stems ship on the "V-" ECU stream only. A split entry naming one of them
+    surfaces as a leakage error at load time, which sends you debugging the wrong thing."""
+    assert_split_is_loadable()
 
 
 def test_no_sequence_is_in_two_challenging_groups():
@@ -49,7 +56,7 @@ def test_mandatory_plot_sequences_are_held_out():
 
 
 def test_long_outage_set_matches_the_documented_protocol():
-    for seq in ("V-St6", "V-St7", "V-S3a"):
+    for seq in ("S3a", "Vtb3", "Vta1a"):
         assert seq in LONG_OUTAGE
     assert not set(LONG_OUTAGE) & set(TRAIN)
 
@@ -76,7 +83,7 @@ def test_outage_lengths_are_the_mandated_sweep():
 
 def test_outages_are_non_overlapping_and_correctly_sized():
     # 10 minutes at 10 Hz = 6,000 samples; 30 s warmup leaves 5,700 for 60 s windows.
-    outages = generate_outages("V-St6", 6000, 60)
+    outages = generate_outages("S3a", 6000, 60)
     assert len(outages) == 9
     assert all(o.n_samples == 600 for o in outages)
     assert all(o.n_epochs == 60 for o in outages)
@@ -85,7 +92,7 @@ def test_outages_are_non_overlapping_and_correctly_sized():
 
 def test_warmup_is_respected():
     """Starting an outage at sample zero measures filter initialisation, not dead reckoning."""
-    outages = generate_outages("V-St6", 6000, 60, warmup_s=30)
+    outages = generate_outages("S3a", 6000, 60, warmup_s=30)
     assert outages[0].start_idx == 300
 
 
@@ -112,7 +119,7 @@ def test_overlap_detector_actually_detects_overlap():
 
 
 def test_gnss_mask_is_false_exactly_during_outages():
-    outages = generate_outages("V-St6", 6000, 60)
+    outages = generate_outages("S3a", 6000, 60)
     mask = mask_gnss(6000, outages)
     assert mask[:300].all()  # warmup: GNSS available
     assert not mask[300:900].any()  # first outage: fully denied

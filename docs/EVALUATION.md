@@ -88,6 +88,14 @@ subsets not listed above. **No sequence appears in both.** The split is fixed in
 **Mandatory position plots for the submission:** V-St6, V-St7, V-S3a (long outage) and at least one
 roundabout scenario.
 
+> ⚠️ **This table is the protocol as drafted from the paper, and it is not yet loadable.** The paper
+> is written against the `V-` vehicle stream; we consume `S-` only. Eleven of the stems above —
+> `St1`, `St6`, `St7`, `Y2`, `Vtb13`, `Vfb01c`, `Vfb02a`, `Vfb02b`, `Vfb02d`, `Vfb02e`, `Vfb02g` —
+> have **no `S-` smartphone file** in either IO-VNBD folder. `eval/splits.py` is the authority and
+> currently holds the loadable subset: long outage `S3a, Vtb3, Vta1a`; mandatory plots `S3a, Vta11`;
+> train `S1, S2, S3c, S4, M`. **Seat D re-picks replacements and rewrites this table before the
+> Gate 0 freeze** — see [DECISION_LOG.md](DECISION_LOG.md) D-044.
+
 ---
 
 ## 4. Metrics

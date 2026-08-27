@@ -1,0 +1,5 @@
+path,bytes,sha256,source_url,upstream_last_modified,download_date
+maps/extracts/northern-zone-latest.osm.pbf,222721988,31fe357c42be2620f3d885212446332d906a681c6f7bbab58d0b865a89e1e7f5,https://download.geofabrik.de/asia/india/northern-zone-latest.osm.pbf,"Mon, 24 Aug 2026 22:46:02 GMT",2026-08-27
+maps/extracts/northern-zone.poly,12725,e26ea64e9513ad1e538d014909492d2141e823b9cc3da8eb5f09347049ad2f19,https://download.geofabrik.de/asia/india/northern-zone.poly,,2026-08-27
+maps/extracts/central-zone-latest.osm.pbf,350773565,69689815f17473665133d31bd6652b382ac2a8e292669894aed3c1de7e417ba1,https://download.geofabrik.de/asia/india/central-zone-latest.osm.pbf,"Mon, 24 Aug 2026 22:46:11 GMT",2026-08-27
+maps/extracts/central-zone.poly,20103,60ef8e58e8636ddd11a2cd1c0f2197627ca6a551a7782a976df3fa5d69ccb16e,https://download.geofabrik.de/asia/india/central-zone.poly,,2026-08-27
