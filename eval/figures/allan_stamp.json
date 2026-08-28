@@ -1,8 +1,8 @@
 {
-  "commit": "f7808ef-dirty",
+  "commit": "b4aaa48",
   "seed": 26168,
-  "timestamp_utc": "2026-08-28T11:20:14Z",
+  "timestamp_utc": "2026-08-28T11:38:31Z",
   "python": "3.13.5",
   "platform": "Windows-11-10.0.26200-SP0",
-  "numpy": "2.5.2"
+  "numpy": "2.2.6"
 }
