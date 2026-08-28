@@ -94,7 +94,11 @@ def load_sequence(path: str | Path, name: str | None = None) -> Sequence:
             "disallowed by PS 26168. Load the paired 'S-' sequence instead."
         )
 
-    raw = pd.read_csv(p)
+    # latin-1, not utf-8: the shipped headers carry raw 0xB0/0xB5 bytes ("(deg)", "(uT)") that
+    # are not valid UTF-8, so the default encoding raises before the guard ever runs. latin-1
+    # never fails, and the bytes it mis-renders live only inside parentheses that normalise()
+    # strips anyway.
+    raw = pd.read_csv(p, encoding="latin-1", low_memory=False)
     df = _canonicalise(raw)
 
     imu_cols = sorted(c for c in df.columns if c in FEATURE_COLUMNS)

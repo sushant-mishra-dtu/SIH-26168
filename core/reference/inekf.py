@@ -48,16 +48,33 @@ GRAVITY_NED = np.array([0.0, 0.0, 9.80665])
 class FilterConfig:
     """Tuning. Process noise is seeded from a measured Allan-variance run, never guessed.
 
-    The defaults below are *placeholders sized from published phone-MEMS ranges* so the filter can
-    be exercised before our own Allan run lands. Replace them at Gate 1 and record the measured
-    numbers in docs/ERROR_BUDGET.md -- a filter tuned on assumed noise is tuned on fiction.
+    The four noise defaults are **measured**, from IO-VNBD's own stationary segments (D-045), by
+    `eval/allan.py`. They are the worst axis across the two segments quiet enough to characterise
+    a sensor on -- `S-T2[31422:36490]` (507 s) and `S-T7[47809:52285]` (448 s) -- because an
+    undersized Q makes the filter over-trust its own propagation and reject good measurements at
+    the chi-squared gate, and that failure reads as a sensor fault rather than a tuning error.
+
+    Regenerate with::
+
+        python -m eval.allan --paths-from <list of S- csv paths> --out-dir eval/figures
+
+    The measured `gyro_arw` is 1.41 deg/sqrt(hr), inside the 0.5-5 deg/sqrt(hr) phone-MEMS range
+    in docs/ERROR_BUDGET.md section 9. It replaces a 3.0e-3 placeholder that was 10.3 deg/sqrt(hr)
+    -- 7x pessimistic and outside our own stated range (plan item R-2, self-flagged in
+    SE23_PROPAGATION.md section 10).
     """
 
-    # Allan-variance-derived, per docs/ERROR_BUDGET.md section 9.
-    gyro_arw: float = 3.0e-3  # rad/s/sqrt(Hz)
-    accel_vrw: float = 3.0e-2  # m/s^2/sqrt(Hz)
-    gyro_bias_rw: float = 1.0e-5  # rad/s^2/sqrt(Hz)
-    accel_bias_rw: float = 1.0e-4  # m/s^3/sqrt(Hz)
+    # Allan-variance-derived, per docs/ERROR_BUDGET.md section 9. Measured on IO-VNBD, not assumed.
+    gyro_arw: float = 4.11e-4  # rad/s/sqrt(Hz)  == 1.41 deg/sqrt(hr)
+    accel_vrw: float = 7.46e-3  # m/s^2/sqrt(Hz) == 0.45 m/s/sqrt(hr)
+
+    # Not measured: a 507 s record cannot resolve the +1/2 rate-random-walk slope (it reaches
+    # tau = 51 s). Derived instead from the two quantities that *were* measured, by modelling each
+    # bias as first-order Gauss-Markov with steady-state spread B and correlation time tau_c taken
+    # from the Allan minimum: q = B sqrt(2 / tau_c). A modelling choice, labelled as one, and the
+    # conservative direction. See eval.allan.gauss_markov_bias_driving_noise and D-045.
+    gyro_bias_rw: float = 5.48e-5  # rad/s^2/sqrt(Hz), from B = 42 deg/hr, tau_c = 27.7 s
+    accel_bias_rw: float = 1.04e-3  # m/s^3/sqrt(Hz), from B = 0.34 mg, tau_c = 20.3 s
 
     # NHC: lateral and vertical body velocity are ~0. Loose defaults; the AI-IMU CNN replaces
     # these with a per-step prediction once seat M's adaptive head lands (D-005).

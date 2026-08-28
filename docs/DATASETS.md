@@ -43,8 +43,23 @@ not in a notebook**, and no sequence appears on both sides.
 
 ### 1.4 Data-quality notes
 
-- **Dedicated stationary segments (>20 min)** exist for bias estimation. Use them — they are free
-  ZUPT/ZARU ground truth and a sanity check on the Allan-variance numbers.
+- **Stationary segments exist, but the longest is 8.4 min, not >20 min.** ⚠️ This bullet previously
+  claimed ">20 min"; that did not survive being checked against the files (D-045). Sweeping all 168
+  distinct `S-` files with the filter's own ZUPT criteria, the longest continuous,
+  uniformly-sampled, still stretch is **507 s in `S-T2`**, followed by 448 s in `S-T7` and two in
+  `S-A6`. Nothing else clears 120 s. They remain free ZUPT/ZARU ground truth and they are what the
+  Allan run in [ERROR_BUDGET.md](ERROR_BUDGET.md) §9.1 is computed on — but they cap τ at ~51 s,
+  which is why bias instability is reported there as an upper bound and rate random walk is
+  derived rather than measured. Regenerate the inventory with
+  `python -m eval.allan --inventory-only --paths-from data/manifest/allan_segments_input.txt`.
+- `S-I.csv` looks like a dedicated stationary recording (9.7 min, Lagos, parked) and is **not
+  usable as one block**: it contains a 285 s recorder pause, and past that pause it switches to a
+  burst mode whose timestamps repeat at ~1 ms with 39% duplicates. Allan variance assumes a uniform
+  grid, so the loader-side segment finder rejects it.
+- `S-A4.csv` is **malformed and must not be loaded**: an extra empty field at column 6 shifts every
+  column after it by one, so the header's `ACCELEROMETER X` sits over the `DATE` string. The
+  leakage guard happens to reject it (a trailing comma leaves an `Unnamed: 24`), but it is caught
+  by accident rather than by design. TODO(seat D): record it in `data/manifest/` as excluded.
 - A **"GPS outages" index file** flags poor-reception samples. Naturally-degraded samples are not the
   same thing as our injected outages; keep them separate and say which is which.
 - Smartphone vibration noise ≈ 0.15 g on accel and ≈ 0.08 rad/s on yaw at hard brakes and bumps.

@@ -547,14 +547,21 @@ def test_arw_conversion_round_trips():
     assert sigma / ((np.pi / 180) / 60) == pytest.approx(deg_per_sqrt_hr)
 
 
-def test_default_gyro_arw_placeholder_is_outside_the_documented_phone_range():
-    """FilterConfig.gyro_arw = 3e-3 rad/s/sqrt(Hz) is ~10.3 deg/sqrt(hr); ERROR_BUDGET.md section 9
-    puts phone MEMS at 0.5-5. The placeholder is pessimistic rather than wrong, but it is
-    inconsistent with our own documentation and the Allan run must replace it (Gate 1)."""
+def test_default_gyro_arw_is_the_measured_value_inside_the_documented_phone_range():
+    """Replaces the R-2 placeholder assertion, at that test's own instruction.
+
+    It used to assert `gyro_arw > 5 deg/sqrt(hr)` -- i.e. that the 3e-3 placeholder was outside the
+    0.5-5 range ERROR_BUDGET.md section 9 states -- with a message saying to delete it once the
+    Allan run landed. It landed (D-045): 4.11e-4 rad/s/sqrt(Hz) = 1.41 deg/sqrt(hr), measured on
+    IO-VNBD's own stationary segments. The assertion is inverted to hold the range from the other
+    side, so a future edit that reintroduces an out-of-range guess still fails here.
+    """
     from core.reference.inekf import FilterConfig
 
     deg_sqrt_hr = FilterConfig().gyro_arw / ((np.pi / 180) / 60)
-    assert deg_sqrt_hr > 5.0, (
-        "gyro_arw placeholder now sits inside the ERROR_BUDGET section 9 range -- if the Allan "
-        "run landed, delete this test and record the measured value instead"
+    assert 0.5 <= deg_sqrt_hr <= 5.0, (
+        f"gyro_arw is {deg_sqrt_hr:.2f} deg/sqrt(hr), outside the 0.5-5 phone-MEMS range in "
+        "ERROR_BUDGET.md section 9. Either re-run `python -m eval.allan` and update both, or say "
+        "in the budget why this sensor sits outside it."
     )
+    assert deg_sqrt_hr == pytest.approx(1.41, abs=0.02)

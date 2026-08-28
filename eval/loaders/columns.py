@@ -68,16 +68,72 @@ class LeakageError(AssertionError):
     """
 
 
+# --------------------------------------------------------------------------------------------
+# Real AndroSensor headers.
+#
+# The generic normalisation below was written against the *paper's* column names and does not
+# survive contact with the shipped CSVs: "ACCELEROMETER X (m/s^2)" generically normalises to
+# "accelerometer_x", which is not on the allowlist, so every real "S-" file was rejected wholesale.
+# Worse, all three "ORIENTATION (Yaw|Pitch|Roll) (deg)" columns collapse to the single name
+# "orientation" once the parenthesised groups are stripped.
+#
+# These aliases are matched *before* the generic path, against the whitespace-collapsed lowercase
+# header. They map the shipped spellings onto names that are already on the allowlist -- they add
+# no new permitted concept, so the guard is not widened by them.
+#
+# Two spellings of the same three gyro columns exist. The categorised folder writes
+# "GYROSCOPE Yaw/Pitch/Roll", the uncategorised folder writes "GYROSCOPE X/Y/Z", and the files are
+# byte-identical in those columns (verified on S-S1, which ships in both) -- so this is AndroSensor
+# labelling, not a different axis order. "gyro_yaw" is therefore device x, not the vertical axis.
+# --------------------------------------------------------------------------------------------
+
+_HEADER_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^gps latitude\b"), "gps_lat"),
+    (re.compile(r"^gps longitude\b"), "gps_lon"),
+    (re.compile(r"^gps altitude\b"), "gps_altitude_m"),
+    (re.compile(r"^gps speed\b"), "gps_speed_kmh"),
+    (re.compile(r"^gps accuracy\b"), "gps_accuracy_m"),
+    (re.compile(r"^gps orientation\b"), "gps_orientation_deg"),
+    # Both spellings ship, with and without the "GPS " prefix.
+    (re.compile(r"^(gps )?satellites in range\b"), "gps_sats"),
+    # Some files truncate the format string and leave the parenthesis unclosed, so the
+    # generic paren-stripping never fires and the whole format leaks into the name.
+    (re.compile(r"^date\b"), "date"),
+    # Anchored on the unit so the "V-" stream's "Time Since Start of Day (seconds)" -- a different
+    # quantity on a banned sheet -- cannot be laundered into an allowed name by this rule.
+    (re.compile(r"^time since start \(ms"), "time_since_start_ms"),
+    (re.compile(r"^accelerometer x\b"), "accel_x"),
+    (re.compile(r"^accelerometer y\b"), "accel_y"),
+    (re.compile(r"^accelerometer z\b"), "accel_z"),
+    (re.compile(r"^gyroscope (yaw|x)\b"), "gyro_yaw"),
+    (re.compile(r"^gyroscope (pitch|y)\b"), "gyro_pitch"),
+    (re.compile(r"^gyroscope (roll|z)\b"), "gyro_roll"),
+    (re.compile(r"^magnetic field x\b"), "magnetic_x"),
+    (re.compile(r"^magnetic field y\b"), "magnetic_y"),
+    (re.compile(r"^magnetic field z\b"), "magnetic_z"),
+    (re.compile(r"^orientation \((yaw|azimuth)"), "orientation_yaw"),
+    (re.compile(r"^orientation \(pitch"), "orientation_pitch"),
+    (re.compile(r"^orientation \(roll"), "orientation_roll"),
+)
+
+
 def normalise(name: str) -> str:
     """Normalise a raw CSV header to our canonical snake_case form.
 
     AndroSensor headers are inconsistent across the three logging devices, carrying units,
     spaces and parentheses. Normalising here means the allowlist has one spelling to check
     rather than three.
+
+    Shipped spellings are matched against _HEADER_ALIASES first; anything unrecognised falls
+    through to the generic strip-units-and-punctuation path and is then judged by the allowlist.
     """
-    n = name.strip().lower()
-    n = re.sub(r"\(.*?\)", " ", n)        # drop "(m/s^2)", "(deg)", ...
-    n = re.sub(r"[^a-z0-9]+", "_", n)     # everything else becomes an underscore
+    collapsed = re.sub(r"\s+", " ", name.strip().lower())
+    for pattern, canonical in _HEADER_ALIASES:
+        if pattern.match(collapsed):
+            return canonical
+
+    n = re.sub(r"\(.*?\)", " ", collapsed)  # drop "(m/s^2)", "(deg)", ...
+    n = re.sub(r"[^a-z0-9]+", "_", n)         # everything else becomes an underscore
     return n.strip("_")
 
 

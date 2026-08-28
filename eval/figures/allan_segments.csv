@@ -1,0 +1,6 @@
+# commit f7808ef-dirty | seed 26168 | 2026-08-28T11:20:14Z
+sequence,path,start,stop,n_samples,dt_s,duration_s,max_gap_s,duplicate_dt_fraction,accel_var_mean,gyro_norm_mean,is_quiet
+S-T2,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T2.csv,31422,36490,5068,0.09999999999990905,506.6999999999998,0.10400000000026921,0.0,0.0005977995128193922,0.000868128552187377,True
+S-T7,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T7.csv,47809,52285,4476,0.1000000000003638,447.5010000000002,0.10600000000067666,0.0,0.00047081520894722847,0.0008476441658518107,True
+S-A6,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv,51633,55941,4308,0.0999999999994543,364.8019999999997,0.37300000000050204,0.0009287206872533086,0.0025900357733517542,0.003481291054425132,False
+S-A6,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv,83825,85086,1261,0.1000000000003638,126.0,0.10800000000017462,0.0,0.017126448007195795,0.01637613534720657,False

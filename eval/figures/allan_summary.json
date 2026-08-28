@@ -1,0 +1,86 @@
+{
+  "stamp": {
+    "commit": "f7808ef-dirty",
+    "seed": 26168,
+    "timestamp_utc": "2026-08-28T11:20:14Z",
+    "python": "3.13.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "numpy": "2.5.2"
+  },
+  "segments": [
+    {
+      "sequence": "S-T2",
+      "path": "data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T2.csv",
+      "start": 31422,
+      "stop": 36490,
+      "n_samples": 5068,
+      "dt_s": 0.09999999999990905,
+      "duration_s": 506.6999999999998,
+      "max_gap_s": 0.10400000000026921,
+      "duplicate_dt_fraction": 0.0,
+      "accel_var_mean": 0.0005977995128193922,
+      "gyro_norm_mean": 0.000868128552187377,
+      "is_quiet": true
+    },
+    {
+      "sequence": "S-T7",
+      "path": "data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T7.csv",
+      "start": 47809,
+      "stop": 52285,
+      "n_samples": 4476,
+      "dt_s": 0.1000000000003638,
+      "duration_s": 447.5010000000002,
+      "max_gap_s": 0.10600000000067666,
+      "duplicate_dt_fraction": 0.0,
+      "accel_var_mean": 0.00047081520894722847,
+      "gyro_norm_mean": 0.0008476441658518107,
+      "is_quiet": true
+    },
+    {
+      "sequence": "S-A6",
+      "path": "data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv",
+      "start": 51633,
+      "stop": 55941,
+      "n_samples": 4308,
+      "dt_s": 0.0999999999994543,
+      "duration_s": 364.8019999999997,
+      "max_gap_s": 0.37300000000050204,
+      "duplicate_dt_fraction": 0.0009287206872533086,
+      "accel_var_mean": 0.0025900357733517542,
+      "gyro_norm_mean": 0.003481291054425132,
+      "is_quiet": false
+    },
+    {
+      "sequence": "S-A6",
+      "path": "data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv",
+      "start": 83825,
+      "stop": 85086,
+      "n_samples": 1261,
+      "dt_s": 0.1000000000003638,
+      "duration_s": 126.0,
+      "max_gap_s": 0.10800000000017462,
+      "duplicate_dt_fraction": 0.0,
+      "accel_var_mean": 0.017126448007195795,
+      "gyro_norm_mean": 0.01637613534720657,
+      "is_quiet": false
+    }
+  ],
+  "summary": {
+    "gyro_arw_rad_s_sqrt_hz": 0.0004105377593090728,
+    "gyro_arw_deg_sqrt_hr": 1.4113248563500496,
+    "gyro_arw_deg_sqrt_hr_min": 0.5962474237314784,
+    "gyro_arw_deg_sqrt_hr_max": 1.4113248563500496,
+    "accel_vrw_mps2_sqrt_hz": 0.0074642208547286,
+    "accel_vrw_mps_sqrt_hr": 0.447853251283716,
+    "accel_vrw_mps_sqrt_hr_min": 0.447853251283716,
+    "accel_vrw_mps_sqrt_hr_max": 0.447853251283716,
+    "gyro_bias_instability_rad_s": 0.00020405402417243462,
+    "gyro_bias_instability_deg_hr": 42.089163759867546,
+    "accel_bias_instability_mps2": 0.003324685587273131,
+    "accel_bias_instability_mg": 0.3390235796396457,
+    "gyro_bias_rw_rad_s2_sqrt_hz": 5.483025646391863e-05,
+    "accel_bias_rw_mps3_sqrt_hz": 0.001043560325578415,
+    "gyro_bias_tau_s": 27.699999999974807,
+    "accel_bias_tau_s": 20.30000000007385
+  }
+}
