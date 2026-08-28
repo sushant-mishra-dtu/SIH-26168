@@ -1,4 +1,4 @@
-# commit b4aaa48 | seed 26168 | 2026-08-28T11:38:31Z
+# commit ef10dcc | seed 26168 | 2026-08-28T11:54:43Z
 segment,axis,unit,tau_s,adev,independent_clusters,rel_error
 S-T2[31422:36490],gyro_yaw,rad/s,0.1,0.000557071,5067,0.009934
 S-T2[31422:36490],gyro_yaw,rad/s,0.2,0.000427913,2533,0.01405

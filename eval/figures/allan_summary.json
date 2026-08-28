@@ -1,11 +1,11 @@
 {
   "stamp": {
-    "commit": "b4aaa48",
+    "commit": "ef10dcc",
     "seed": 26168,
-    "timestamp_utc": "2026-08-28T11:38:31Z",
+    "timestamp_utc": "2026-08-28T11:54:43Z",
     "python": "3.13.5",
     "platform": "Windows-11-10.0.26200-SP0",
-    "numpy": "2.2.6"
+    "numpy": "2.5.2"
   },
   "segments": [
     {
