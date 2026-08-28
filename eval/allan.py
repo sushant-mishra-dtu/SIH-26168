@@ -497,6 +497,20 @@ def analyse_segment(
     return curves, [coefficients(c, segment=label) for c in curves]
 
 
+def _fixed(value: object) -> object:
+    """Round floats to 6 significant figures on the way into a CSV.
+
+    Not cosmetic -- it is what makes the artefact byte-reproducible. `np.polyfit` runs through
+    LAPACK, whose last one or two digits move between numpy/BLAS builds: regenerating the same
+    segment under numpy 2.2.6 and 2.5.2 gives `random_walk_slope` of -0.5241071855489501 against
+    -0.524107185548951, with every other field identical to the last bit. Emitting raw repr would
+    therefore fail Gate 0's "same commit + same seed -> identical output" check on a machine
+    difference rather than on anything about the method. Six significant figures is far more than a
+    slope diagnostic carries meaning to.
+    """
+    return f"{value:.6g}" if isinstance(value, float) else value
+
+
 def write_report(report: AllanReport, out_dir: Path, stamp) -> None:
     """Write the curve, the coefficients, the segment inventory and the provenance stamp.
 
@@ -512,7 +526,7 @@ def write_report(report: AllanReport, out_dir: Path, stamp) -> None:
         w.writerow([f"# {caption}"])
         w.writerow([f.name for f in StationarySegment.__dataclass_fields__.values()])
         for s in report.segments:
-            w.writerow(list(asdict(s).values()))
+            w.writerow([_fixed(v) for v in asdict(s).values()])
 
     with (out_dir / "allan_curve.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
@@ -536,7 +550,7 @@ def write_report(report: AllanReport, out_dir: Path, stamp) -> None:
         w.writerow([f"# {caption}"])
         w.writerow([f.name for f in NoiseCoefficients.__dataclass_fields__.values()])
         for c in report.coefficients:
-            w.writerow(list(asdict(c).values()))
+            w.writerow([_fixed(v) for v in asdict(c).values()])
 
     stamp.to_json(out_dir / "allan_stamp.json")
 
