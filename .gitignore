@@ -54,6 +54,12 @@ android/**/build/
 # --- generated figures are reproducible; commit only what the write-up uses ---
 eval/figures/_scratch/
 
+# --- local exploration; must not dirty the tree ---
+# idr/stamp.py marks an artefact '-dirty' whenever `git status --porcelain` is non-empty,
+# and untracked files count. Scratch scripts left lying here would make every generated
+# figure unreproducible-by-stamp without changing a single line that produced it.
+scratchpad/
+
 # --- os / editor ---
 .DS_Store
 Thumbs.db
