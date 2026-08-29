@@ -224,6 +224,15 @@ carrying the commit SHA and seed that produced it.
 | Accel bias instability | **0.34 mg** at τ ≈ 20 s | `accel_x`, S-T7 | 3.32e-3 m/s² |
 | Gyro bias driving noise | *derived, not measured* | — | `gyro_bias_rw = 5.48e-5` rad/s²/√Hz |
 | Accel bias driving noise | *derived, not measured* | — | `accel_bias_rw = 1.04e-3` m/s³/√Hz |
+| Mount driving noise `σ_sv` | **not measured, and not guessed** | — | `mount_rw = 0.0` rad/s/√Hz (D-048) |
+
+The last row is the one to read twice. [SE23_PROPAGATION.md](SE23_PROPAGATION.md) §5.3 names `σ_sv`
+in `Q_c`, but nothing in this repo measures it — the Allan run characterises the IMU, not the way a
+phone sits in a cradle. It is therefore **zero**, which states the model P-02 actually implements
+(a rigid mount) rather than dressing a guess as a measurement. The consequence is concrete: the
+`ξ_sv` block of `P` cannot grow under propagation, so until P-11 estimates `R_sv` in-filter and
+wires `detect_mount_disturbance` to re-inflate it, the ~1° requirement in §5 rests on the PCA
+initialiser alone. That is a limitation to state in the write-up, not a term the filter models.
 
 All four measured values land inside the phone-MEMS column of §9.3. The ARW replaces a `3.0e-3`
 placeholder that was 10.3 °/√hr — 7× pessimistic and outside our own stated range (plan item R-2).

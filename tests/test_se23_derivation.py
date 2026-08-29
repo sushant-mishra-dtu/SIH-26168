@@ -5,10 +5,11 @@ that is wrong on paper becomes a filter that runs, produces smooth plausible tra
 undebuggable. Every matrix the document asserts is checked here against a numerical ground truth,
 so the derivation is protected by CI *before* the code that uses it exists.
 
-**The helpers below are the specification, not a second implementation.** When Sprint 1 (seat S)
-implements `core.reference.inekf`, these local helpers are deleted and the same assertions are
-re-pointed at the real code. The `test_sprint1_surface_fails_loudly_rather_than_silently` case in
-`test_filter.py` fails the moment `propagate()` is implemented, which forces that migration.
+**The assertions now run against `core.reference.inekf` itself.** They were originally written
+against local helpers that *were* the specification; Sprint 1 (seat S) implemented that
+specification and deleted the helpers, so there is one implementation and these tests check it
+rather than a copy of it. `closed_form_gammas` below is the one survivor, and it is not a second
+implementation -- it is the deliberately unguarded form, kept only to show where it breaks.
 
 Numbers that came out of writing this, now recorded in the document:
 
@@ -24,45 +25,34 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-GRAVITY_NED = np.array([0.0, 0.0, 9.80665])
-
-#: Below this angle, use the Taylor series rather than the closed form. Established by
-#: ``test_small_angle_cutoff_is_not_set_too_low`` -- see the module docstring.
-SMALL_ANGLE = 1e-3
-
+from core.reference.inekf import (
+    ERROR_STATE_DIM,
+    GRAVITY_NED,
+    IDX_MOUNT,
+    REORTHONORMALISE_EVERY,
+    SMALL_ANGLE,
+    FilterConfig,
+    InEKF,
+    a_ri,
+    adjoint,
+    exp_so3,
+    expm_series,
+    g_ri,
+    gammas,
+    process_noise_psd,
+    propagate_nominal,
+    se23_exp,
+    se23_hat,
+    se23_log,
+    skew,
+    unpack,
+    van_loan,
+    x_of,
+)
 
 # ------------------------------------------------------------------------------------------
-# The math the document asserts
+# The one helper that stays local: the unguarded closed form, kept to show where it breaks
 # ------------------------------------------------------------------------------------------
-
-
-def skew(a: np.ndarray) -> np.ndarray:
-    a = np.asarray(a, dtype=float)
-    return np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
-
-
-def gammas(phi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Gamma_0, Gamma_1, Gamma_2 of docs/SE23_PROPAGATION.md section 8.1.
-
-    The series branch is not an optimisation -- the closed form is 0/0 at rest, which is exactly
-    the ZUPT case and therefore constant.
-    """
-    n = float(np.linalg.norm(phi))
-    s = skew(phi)
-    s2 = s @ s
-    if n < SMALL_ANGLE:
-        c0s, c0c = 1 - n**2 / 6, 0.5 - n**2 / 24
-        c1a, c1b = 0.5 - n**2 / 24, 1 / 6 - n**2 / 120
-        c2a, c2b = 1 / 6 - n**2 / 120, 1 / 24 - n**2 / 720
-    else:
-        c0s, c0c = np.sin(n) / n, (1 - np.cos(n)) / n**2
-        c1a, c1b = (1 - np.cos(n)) / n**2, (n - np.sin(n)) / n**3
-        c2a, c2b = (n - np.sin(n)) / n**3, (n**2 + 2 * np.cos(n) - 2) / (2 * n**4)
-    return (
-        np.eye(3) + c0s * s + c0c * s2,
-        np.eye(3) + c1a * s + c1b * s2,
-        0.5 * np.eye(3) + c2a * s + c2b * s2,
-    )
 
 
 def closed_form_gammas(phi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -76,113 +66,6 @@ def closed_form_gammas(phi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndar
         + ((m - np.sin(m)) / m**3) * s
         + ((m**2 + 2 * np.cos(m) - 2) / (2 * m**4)) * s2,
     )
-
-
-def exp_so3(phi: np.ndarray) -> np.ndarray:
-    return gammas(phi)[0]
-
-
-def log_so3(rot: np.ndarray) -> np.ndarray:
-    theta = float(np.arccos(np.clip((np.trace(rot) - 1) / 2, -1.0, 1.0)))
-    w = np.array([rot[2, 1] - rot[1, 2], rot[0, 2] - rot[2, 0], rot[1, 0] - rot[0, 1]])
-    return w / 2 if theta < 1e-8 else theta / (2 * np.sin(theta)) * w
-
-
-def expm_series(m: np.ndarray, terms: int = 30) -> np.ndarray:
-    """Scaling-and-squaring Taylor expm. scipy is deliberately not a dependency (D-024)."""
-    nrm = float(np.max(np.abs(m)))
-    squarings = int(np.ceil(np.log2(nrm / 0.5))) if nrm > 0.5 else 0
-    a = m / (2.0**squarings)
-    out = term = np.eye(m.shape[0])
-    for k in range(1, terms):
-        term = term @ a / k
-        out = out + term
-    for _ in range(squarings):
-        out = out @ out
-    return out
-
-
-def x_of(rot: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
-    x = np.eye(5)
-    x[:3, :3], x[:3, 3], x[:3, 4] = rot, v, p
-    return x
-
-
-def unpack(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    return x[:3, :3].copy(), x[:3, 3].copy(), x[:3, 4].copy()
-
-
-def se23_hat(xi: np.ndarray) -> np.ndarray:
-    m = np.zeros((5, 5))
-    m[:3, :3], m[:3, 3], m[:3, 4] = skew(xi[0:3]), xi[3:6], xi[6:9]
-    return m
-
-
-def se23_exp(xi: np.ndarray) -> np.ndarray:
-    g0, g1, _ = gammas(xi[0:3])
-    return x_of(g0, g1 @ xi[3:6], g1 @ xi[6:9])
-
-
-def se23_log(x: np.ndarray) -> np.ndarray:
-    rot, v, p = unpack(x)
-    phi = log_so3(rot)
-    j_inv = np.linalg.inv(gammas(phi)[1])
-    return np.concatenate([phi, j_inv @ v, j_inv @ p])
-
-
-def adjoint(x: np.ndarray) -> np.ndarray:
-    """Section 2.1."""
-    rot, v, p = unpack(x)
-    a = np.zeros((9, 9))
-    a[0:3, 0:3] = rot
-    a[3:6, 0:3], a[3:6, 3:6] = skew(v) @ rot, rot
-    a[6:9, 0:3], a[6:9, 6:9] = skew(p) @ rot, rot
-    return a
-
-
-def propagate(rot, v, p, omega, accel, dt):
-    """Section 8.1. Exact under a constant-input assumption over dt, not an Euler step."""
-    g0, g1, g2 = gammas(omega * dt)
-    return (
-        rot @ g0,
-        v + rot @ g1 @ accel * dt + GRAVITY_NED * dt,
-        p + v * dt + rot @ g2 @ accel * dt**2 + 0.5 * GRAVITY_NED * dt**2,
-    )
-
-
-def a_ri(rot: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
-    """Section 5.2. Ordering matches the IDX_* slices in core/reference/inekf.py."""
-    a = np.zeros((18, 18))
-    a[3:6, 0:3] = skew(GRAVITY_NED)
-    a[6:9, 3:6] = np.eye(3)
-    a[0:3, 9:12] = -rot
-    a[3:6, 9:12] = -skew(v) @ rot
-    a[6:9, 9:12] = -skew(p) @ rot
-    a[3:6, 12:15] = -rot
-    return a
-
-
-def g_ri(rot: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
-    """Section 5.3."""
-    g = np.zeros((18, 15))
-    g[0:3, 0:3] = -rot
-    g[3:6, 0:3] = -skew(v) @ rot
-    g[6:9, 0:3] = -skew(p) @ rot
-    g[3:6, 3:6] = -rot
-    g[9:12, 6:9] = np.eye(3)
-    g[12:15, 9:12] = np.eye(3)
-    g[15:18, 12:15] = np.eye(3)
-    return g
-
-
-def van_loan(a: np.ndarray, gqg: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
-    """Section 8.2."""
-    n = a.shape[0]
-    m = np.zeros((2 * n, 2 * n))
-    m[:n, :n], m[:n, n:], m[n:, n:] = -a, gqg, a.T
-    e = expm_series(m * dt)
-    phi = e[n:, n:].T
-    return phi, phi @ e[:n, n:]
 
 
 # A representative mid-drive state: heading 40 deg, 16 m/s, a few tens of metres from the origin.
@@ -275,7 +158,7 @@ def test_stationary_phone_does_not_drift():
     rot, v, p = np.eye(3), np.zeros(3), np.zeros(3)
     f_static = -GRAVITY_NED
     for _ in range(600):  # 60 s at 10 Hz
-        rot, v, p = propagate(rot, v, p, np.zeros(3), f_static, 0.1)
+        rot, v, p = propagate_nominal(rot, v, p, np.zeros(3), f_static, 0.1)
     assert np.linalg.norm(p) < 1e-3
 
 
@@ -312,8 +195,8 @@ def _numeric_transition(dt: float, eps: float = 1e-6) -> np.ndarray:
     def step(e0: np.ndarray) -> np.ndarray:
         xi, dbg, dba, xsv = e0[0:9], e0[9:12], e0[12:15], e0[15:18]
         rot_h, v_h, p_h = unpack(se23_exp(xi) @ x_of(REF_R, REF_V, REF_P))
-        true2 = propagate(REF_R, REF_V, REF_P, RAW_OMEGA - REF_BG, RAW_ACCEL - REF_BA, dt)
-        est2 = propagate(
+        true2 = propagate_nominal(REF_R, REF_V, REF_P, RAW_OMEGA - REF_BG, RAW_ACCEL - REF_BA, dt)
+        est2 = propagate_nominal(
             rot_h, v_h, p_h, RAW_OMEGA - (REF_BG + dbg), RAW_ACCEL - (REF_BA + dba), dt
         )
         new_xi = se23_log(x_of(*est2) @ np.linalg.inv(x_of(*true2)))
@@ -345,7 +228,9 @@ def test_evaluating_a_at_the_step_midpoint_removes_the_second_order_error():
     dt = 1e-3
     numeric = _numeric_transition(dt)
     at_start = np.max(np.abs(numeric - expm_series(a_ri(REF_R, REF_V, REF_P) * dt)))
-    midpoint = propagate(REF_R, REF_V, REF_P, RAW_OMEGA - REF_BG, RAW_ACCEL - REF_BA, dt / 2)
+    midpoint = propagate_nominal(
+        REF_R, REF_V, REF_P, RAW_OMEGA - REF_BG, RAW_ACCEL - REF_BA, dt / 2
+    )
     at_mid = np.max(np.abs(numeric - expm_series(a_ri(*midpoint) * dt)))
     assert at_mid < at_start / 100
 
@@ -565,3 +450,145 @@ def test_default_gyro_arw_is_the_measured_value_inside_the_documented_phone_rang
         "in the budget why this sensor sits outside it."
     )
     assert deg_sqrt_hr == pytest.approx(1.41, abs=0.02)
+
+
+# ------------------------------------------------------------------------------------------
+# Section 8 -- InEKF.propagate, the wiring of the pieces above
+#
+# The tests above check the matrices. These check that propagate() actually uses them: the
+# right ones, at the right linearisation point, with the biases removed first. A filter can
+# have every matrix correct and still be wrong here, and the symptom is a smooth plausible
+# trajectory.
+# ------------------------------------------------------------------------------------------
+
+
+def test_propagate_leaves_a_stationary_phone_where_it_started():
+    """SE_2(3) test 2 at the filter level. Closed-form reference: exactly zero.
+
+    A level phone at rest reports specific force -g. If the gravity sign is wrong anywhere in
+    propagate(), 60 s of this puts the vehicle ~176 m away, which is the whole error budget.
+    """
+    f = InEKF()
+    for _ in range(600):  # 60 s at 10 Hz
+        f.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
+    assert np.linalg.norm(f.state.p) < 1e-3
+    assert np.linalg.norm(f.state.v) < 1e-4
+
+
+def test_propagate_subtracts_the_bias_before_integrating():
+    """Feed the filter exactly its own bias estimate; the state must not move at all.
+
+    Hand-computed: omega - b_g = 0 and a - b_a = -g, so R stays I and the gravity terms cancel.
+    Catches a propagate() that integrates the raw reading, which no matrix test can see.
+    """
+    f = InEKF()
+    f.state.b_g = np.array([0.01, -0.02, 0.03])
+    f.state.b_a = np.array([0.2, -0.1, 0.05])
+    for _ in range(100):
+        f.propagate(f.state.b_g.copy(), -GRAVITY_NED + f.state.b_a, 0.1)
+    assert np.max(np.abs(f.state.R - np.eye(3))) < 1e-12
+    assert np.linalg.norm(f.state.p) < 1e-9
+
+
+def test_propagate_refuses_a_non_positive_dt():
+    """Five IO-VNBD S- files restart their clock mid-recording (M, S2, S4, Y1, S3b). A window
+    placed across one hands propagate() a negative interval; integrating it silently runs the
+    filter backwards, so it must raise instead."""
+    f = InEKF()
+    for bad in (0.0, -0.1):
+        with pytest.raises(ValueError, match="dt must be positive"):
+            f.propagate(np.zeros(3), -GRAVITY_NED, bad)
+
+
+def test_propagate_rejects_a_non_finite_sample():
+    f = InEKF()
+    with pytest.raises(ValueError, match="non-finite"):
+        f.propagate(np.array([np.nan, 0.0, 0.0]), -GRAVITY_NED, 0.1)
+
+
+def test_covariance_stays_symmetric_and_psd_and_grows_without_measurements():
+    """With no update applied there is nothing to shrink P, so its trace must increase
+    monotonically. A P that shrinks under pure propagation is a filter inventing information."""
+    f = InEKF()
+    traces = []
+    for _ in range(200):
+        f.propagate(np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1)
+        assert np.max(np.abs(f.P - f.P.T)) < 1e-18 * max(1.0, np.max(np.abs(f.P)))
+        traces.append(np.trace(f.P))
+    assert np.min(np.linalg.eigvalsh(f.P)) > 0, "covariance left the PSD cone"
+    assert all(b > a for a, b in zip(traces, traces[1:], strict=False)), "trace(P) must grow"
+
+
+def test_propagate_linearises_at_the_midpoint_not_the_step_start():
+    """D-029. Composing the same step with A evaluated at the interval start must give a
+    *measurably* different covariance -- if it did not, the midpoint evaluation is not actually
+    happening and the O(dt^2) error the derivation measured is still there.
+
+    Measured separation at dt = 0.1 s from a mid-drive state: 3.7% of max|P|. The threshold below
+    is two orders under that, so the test fails on a regression to start-linearisation rather than
+    merely on float noise.
+    """
+    gyro, accel, dt = np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1
+    f = InEKF()
+    f.state.v = np.array([16.0, 1.5, -0.2])
+    f.state.p = np.array([32.0, -14.0, 6.0])
+    p_before = f.P.copy()
+    f.propagate(gyro, accel, dt)
+
+    a_start = a_ri(np.eye(3), np.array([16.0, 1.5, -0.2]), np.array([32.0, -14.0, 6.0]))
+    g_start = g_ri(np.eye(3), np.array([16.0, 1.5, -0.2]), np.array([32.0, -14.0, 6.0]))
+    qc = process_noise_psd(FilterConfig())
+    phi, qd = van_loan(a_start, g_start @ qc @ g_start.T, dt)
+    at_start = phi @ p_before @ phi.T + qd
+    separation = np.max(np.abs(f.P - at_start)) / np.max(np.abs(f.P))
+    assert separation > 1e-3, (
+        f"P is within {separation:.2e} of the start-linearised composition -- propagate() "
+        "is evaluating A at the interval start, not the midpoint (D-029)"
+    )
+
+
+def test_reorthonormalisation_keeps_r_on_so3():
+    f = InEKF()
+    for _ in range(REORTHONORMALISE_EVERY):
+        f.propagate(np.array([0.05, -0.02, 0.35]), np.array([0.4, -0.3, -9.6]), 0.01)
+    assert f.steps % REORTHONORMALISE_EVERY == 0, "the counter must have reached the cadence"
+    assert np.max(np.abs(f.state.R.T @ f.state.R - np.eye(3))) < 1e-15
+    assert np.linalg.det(f.state.R) == pytest.approx(1.0, abs=1e-15)
+
+
+# ------------------------------------------------------------------------------------------
+# Section 5.3 -- Q_c is read from FilterConfig, not retyped
+# ------------------------------------------------------------------------------------------
+
+
+def test_process_noise_psd_is_the_squares_of_the_measured_config_values():
+    """Q_c must be the D-045 measured Allan coefficients squared, in that order. A transposed
+    block here scales the gyro noise by the accelerometer's, which is invisible downstream."""
+    cfg = FilterConfig()
+    qc = process_noise_psd(cfg)
+    assert qc.shape == (15, 15)
+    assert np.array_equal(qc, np.diag(np.diag(qc))), "Q_c is diagonal by construction"
+    expected = np.concatenate(
+        [
+            np.full(3, cfg.gyro_arw**2),
+            np.full(3, cfg.accel_vrw**2),
+            np.full(3, cfg.gyro_bias_rw**2),
+            np.full(3, cfg.accel_bias_rw**2),
+            np.full(3, cfg.mount_rw**2),
+        ]
+    )
+    assert np.array_equal(np.diag(qc), expected)
+
+
+def test_the_mount_block_of_q_carries_no_process_noise_yet():
+    """D-048, asserted rather than left to a comment. The derivation names sigma_sv but no source
+    in the repo gives it a magnitude, so it is zero -- the mount is modelled as rigid until P-11
+    estimates R_sv and the bump detector re-inflates it. If P-11 sets a value, this test is the
+    thing that says so out loud."""
+    assert FilterConfig().mount_rw == 0.0
+    f = InEKF()
+    before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
+    for _ in range(50):
+        f.propagate(np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1)
+    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], before)
+    assert f.P.shape == (ERROR_STATE_DIM, ERROR_STATE_DIM)

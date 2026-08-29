@@ -43,6 +43,155 @@ ERROR_STATE_DIM = 18
 
 GRAVITY_NED = np.array([0.0, 0.0, 9.80665])
 
+#: Below this angle the Gamma functions use their Taylor series rather than the closed form.
+#: **1e-3, not 1e-6** (D-032): the guard has to sit where the closed form is still accurate, not
+#: where it finally divides by zero. Sweeping the exact identities `Gamma_0 = I + phi^ Gamma_1`
+#: and `Gamma_1 = I + phi^ Gamma_2` puts the worst residual at phi ~ 1.2e-6, which a 1e-6 cutoff
+#: would route to the closed form -- the branch that is already degraded there.
+SMALL_ANGLE = 1e-3
+
+#: Re-project R onto SO(3) this often (docs/SE23_PROPAGATION.md section 8.1). Float drift off the
+#: group is slow but not zero, and a non-orthonormal R makes R.T stop being R^-1 in every Jacobian.
+REORTHONORMALISE_EVERY = 1000
+
+
+# --------------------------------------------------------------------------------------------
+# SE_2(3) group operations
+#
+# Transcribed from docs/SE23_PROPAGATION.md, which is checked against numerical ground truth in
+# tests/test_se23_derivation.py. These lived in that test file as "the specification" until the
+# filter existed; the tests now assert against these, so there is one implementation, not two.
+# --------------------------------------------------------------------------------------------
+
+
+def skew(a: np.ndarray) -> np.ndarray:
+    """The hat map: `skew(a) @ b == np.cross(a, b)`."""
+    a = np.asarray(a, dtype=float)
+    return np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+
+
+def gammas(phi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Gamma_0, Gamma_1, Gamma_2 of docs/SE23_PROPAGATION.md section 8.1.
+
+    The series branch is not an optimisation. The closed forms carry 1/phi^3 and 1/phi^4
+    coefficients that are 0/0 at rest -- which is the ZUPT case, and therefore constant.
+    """
+    n = float(np.linalg.norm(phi))
+    s = skew(phi)
+    s2 = s @ s
+    if n < SMALL_ANGLE:
+        c0s, c0c = 1 - n**2 / 6, 0.5 - n**2 / 24
+        c1a, c1b = 0.5 - n**2 / 24, 1 / 6 - n**2 / 120
+        c2a, c2b = 1 / 6 - n**2 / 120, 1 / 24 - n**2 / 720
+    else:
+        c0s, c0c = np.sin(n) / n, (1 - np.cos(n)) / n**2
+        c1a, c1b = (1 - np.cos(n)) / n**2, (n - np.sin(n)) / n**3
+        c2a, c2b = (n - np.sin(n)) / n**3, (n**2 + 2 * np.cos(n) - 2) / (2 * n**4)
+    return (
+        np.eye(3) + c0s * s + c0c * s2,
+        np.eye(3) + c1a * s + c1b * s2,
+        0.5 * np.eye(3) + c2a * s + c2b * s2,
+    )
+
+
+def exp_so3(phi: np.ndarray) -> np.ndarray:
+    """Rodrigues. Gamma_0 *is* the SO(3) exponential."""
+    return gammas(phi)[0]
+
+
+def log_so3(rot: np.ndarray) -> np.ndarray:
+    theta = float(np.arccos(np.clip((np.trace(rot) - 1) / 2, -1.0, 1.0)))
+    w = np.array([rot[2, 1] - rot[1, 2], rot[0, 2] - rot[2, 0], rot[1, 0] - rot[0, 1]])
+    return w / 2 if theta < 1e-8 else theta / (2 * np.sin(theta)) * w
+
+
+def expm_series(m: np.ndarray, terms: int = 30) -> np.ndarray:
+    """Scaling-and-squaring Taylor matrix exponential.
+
+    scipy is deliberately not a dependency (D-024): the harness is the critical path and must not
+    block on an install. This is the one linear-algebra primitive numpy does not ship.
+    """
+    nrm = float(np.max(np.abs(m)))
+    squarings = int(np.ceil(np.log2(nrm / 0.5))) if nrm > 0.5 else 0
+    a = m / (2.0**squarings)
+    out = term = np.eye(m.shape[0])
+    for k in range(1, terms):
+        term = term @ a / k
+        out = out + term
+    for _ in range(squarings):
+        out = out @ out
+    return out
+
+
+def orthonormalise(rot: np.ndarray) -> np.ndarray:
+    """Nearest rotation matrix in the Frobenius sense, with the reflection branch excluded."""
+    u, _, vt = np.linalg.svd(rot)
+    if np.linalg.det(u @ vt) < 0:
+        u = u.copy()
+        u[:, -1] *= -1
+    return u @ vt
+
+
+def x_of(rot: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """Pack (R, v, p) into the 5x5 SE_2(3) matrix of section 2."""
+    x = np.eye(5)
+    x[:3, :3], x[:3, 3], x[:3, 4] = rot, v, p
+    return x
+
+
+def unpack(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return x[:3, :3].copy(), x[:3, 3].copy(), x[:3, 4].copy()
+
+
+def se23_hat(xi: np.ndarray) -> np.ndarray:
+    m = np.zeros((5, 5))
+    m[:3, :3], m[:3, 3], m[:3, 4] = skew(xi[0:3]), xi[3:6], xi[6:9]
+    return m
+
+
+def se23_exp(xi: np.ndarray) -> np.ndarray:
+    g0, g1, _ = gammas(xi[0:3])
+    return x_of(g0, g1 @ xi[3:6], g1 @ xi[6:9])
+
+
+def se23_log(x: np.ndarray) -> np.ndarray:
+    rot, v, p = unpack(x)
+    phi = log_so3(rot)
+    j_inv = np.linalg.inv(gammas(phi)[1])
+    return np.concatenate([phi, j_inv @ v, j_inv @ p])
+
+
+def adjoint(x: np.ndarray) -> np.ndarray:
+    """Section 2.1. Used by the GNSS update to move a left-invariant observation into the
+    right-invariant convention the covariance is carried in (D-028)."""
+    rot, v, p = unpack(x)
+    a = np.zeros((9, 9))
+    a[0:3, 0:3] = rot
+    a[3:6, 0:3], a[3:6, 3:6] = skew(v) @ rot, rot
+    a[6:9, 0:3], a[6:9, 6:9] = skew(p) @ rot, rot
+    return a
+
+
+def propagate_nominal(
+    rot: np.ndarray, v: np.ndarray, p: np.ndarray, omega: np.ndarray, accel: np.ndarray, dt: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Section 8.1. Exact under a constant-input assumption over dt, **not** an Euler step (D-029).
+
+    `omega` and `accel` are already bias-corrected. `accel` is specific force in the body frame;
+    gravity is added in the navigation frame, so a level phone at rest reading `-GRAVITY_NED`
+    cancels to exactly zero -- which is what makes SE_2(3) test 2 a gravity-sign check.
+
+    At 10 Hz and 0.6 rad/s the Gamma_1 correction is ~3% of the velocity increment, and it is
+    rotation-direction-dependent, so it does not average out over the 1800 steps of a 180 s
+    outage. It is systematic heading-correlated drift, which the error budget has no room for.
+    """
+    g0, g1, g2 = gammas(omega * dt)
+    return (
+        rot @ g0,
+        v + rot @ g1 @ accel * dt + GRAVITY_NED * dt,
+        p + v * dt + rot @ g2 @ accel * dt**2 + 0.5 * GRAVITY_NED * dt**2,
+    )
+
 
 @dataclass
 class FilterConfig:
@@ -75,6 +224,14 @@ class FilterConfig:
     # conservative direction. See eval.allan.gauss_markov_bias_driving_noise and D-045.
     gyro_bias_rw: float = 5.48e-5  # rad/s^2/sqrt(Hz), from B = 42 deg/hr, tau_c = 27.7 s
     accel_bias_rw: float = 1.04e-3  # m/s^3/sqrt(Hz), from B = 0.34 mg, tau_c = 20.3 s
+
+    # Mount-rotation process noise, the sigma_sv block of Q_c in SE23_PROPAGATION.md section 5.3.
+    # **Zero, and deliberately so** (D-048): the derivation names the term but no source in the
+    # repo gives it a magnitude, and inventing one would be a guessed number inside the covariance
+    # every downstream chi-squared gate reads. Zero states the model actually in force here -- the
+    # mount is rigid -- rather than dressing a guess up as a measurement. P-11 owns both the value
+    # and the bump-detector re-inflation that makes a non-zero one meaningful.
+    mount_rw: float = 0.0  # rad/s/sqrt(Hz)
 
     # NHC: lateral and vertical body velocity are ~0. Loose defaults; the AI-IMU CNN replaces
     # these with a per-step prediction once seat M's adaptive head lands (D-005).
@@ -117,6 +274,91 @@ class NavState:
     def yaw(self) -> float:
         """Heading in radians. The quantity the whole error budget turns on."""
         return float(np.arctan2(self.R[1, 0], self.R[0, 0]))
+
+
+# --------------------------------------------------------------------------------------------
+# Linearised error dynamics and discrete covariance
+# --------------------------------------------------------------------------------------------
+
+
+def a_ri(rot: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """Right-invariant error-state matrix, section 5.2. Ordering matches the IDX_* slices above.
+
+    Read the top-left 9x9: `skew(g)` and `I`, and nothing else. No R, no v, no omega, no a. That
+    block is the same matrix on a straight motorway and mid-roundabout, at any heading, however
+    wrong the current attitude estimate is -- which is the entire reason for carrying the
+    right-invariant error (D-002, D-028). Every state dependence sits in the bias columns.
+    """
+    a = np.zeros((ERROR_STATE_DIM, ERROR_STATE_DIM))
+    a[IDX_VELOCITY, IDX_ATTITUDE] = skew(GRAVITY_NED)
+    a[IDX_POSITION, IDX_VELOCITY] = np.eye(3)
+    a[IDX_ATTITUDE, IDX_GYRO_BIAS] = -rot
+    a[IDX_VELOCITY, IDX_GYRO_BIAS] = -skew(v) @ rot
+    a[IDX_POSITION, IDX_GYRO_BIAS] = -skew(p) @ rot
+    a[IDX_VELOCITY, IDX_ACCEL_BIAS] = -rot
+    return a
+
+
+def g_ri(rot: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """Noise mapping, section 5.3. Columns are `[w_g, w_a, w_bg, w_ba, w_sv]`, 15 wide.
+
+    Process noise enters exactly where the bias errors do -- same algebra, `w_g` in place of
+    `delta b_g`.
+    """
+    g = np.zeros((ERROR_STATE_DIM, 15))
+    g[IDX_ATTITUDE, 0:3] = -rot
+    g[IDX_VELOCITY, 0:3] = -skew(v) @ rot
+    g[IDX_POSITION, 0:3] = -skew(p) @ rot
+    g[IDX_VELOCITY, 3:6] = -rot
+    g[IDX_GYRO_BIAS, 6:9] = np.eye(3)
+    g[IDX_ACCEL_BIAS, 9:12] = np.eye(3)
+    g[IDX_MOUNT, 12:15] = np.eye(3)
+    return g
+
+
+def process_noise_psd(cfg: FilterConfig) -> np.ndarray:
+    """Continuous-time `Q_c`, section 5.3: `diag(sigma_g^2, sigma_a^2, sigma_bg^2, sigma_ba^2,
+    sigma_sv^2)`, each repeated three times.
+
+    Every value is read from `FilterConfig`, which carries the D-045 measured Allan coefficients.
+    Nothing here is retyped from a document: `gyro_arw` and `accel_vrw` trace to
+    `eval/figures/allan_coefficients.csv` (worst axis, `gyro_pitch` on S-T2 and `accel_z` on S-T7)
+    and the two bias driving noises are the *derived* Gauss-Markov quantities, labelled as derived
+    in ERROR_BUDGET.md section 9.1 and everywhere they appear.
+
+    Units are PSD amplitudes squared. A factor-of-60 slip between deg/sqrt(hr) and rad/s/sqrt(Hz)
+    is invisible -- the filter still runs, with a confidence wrong by 3600x in variance -- so the
+    conversion happens once, at the config boundary, and never here.
+    """
+    return np.diag(
+        np.concatenate(
+            [
+                np.full(3, cfg.gyro_arw**2),
+                np.full(3, cfg.accel_vrw**2),
+                np.full(3, cfg.gyro_bias_rw**2),
+                np.full(3, cfg.accel_bias_rw**2),
+                np.full(3, cfg.mount_rw**2),
+            ]
+        )
+    )
+
+
+def van_loan(a: np.ndarray, gqg: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
+    """Discrete transition and process noise by Van Loan's method, section 8.2 (D-031).
+
+    Returns `(Phi, Q_d)`. The `Phi G Q_c G^T Phi^T dt` shortcut is ~4.2% wrong at dt = 0.1 s at
+    our own noise values, and it is wrong by *misallocating* noise between the position and
+    velocity blocks. An under-sized Q makes the filter reject good measurements at the chi-squared
+    gate, and that failure reads as a sensor problem rather than as a tuning one.
+
+    One 36x36 `expm` per step, which is the identified hotspot for the October C++ port (D-022).
+    """
+    n = a.shape[0]
+    m = np.zeros((2 * n, 2 * n))
+    m[:n, :n], m[:n, n:], m[n:, n:] = -a, gqg, a.T
+    e = expm_series(m * dt)
+    phi = e[n:, n:].T
+    return phi, phi @ e[:n, n:]
 
 
 # --------------------------------------------------------------------------------------------
@@ -205,14 +447,61 @@ class InEKF:
         self.cfg = cfg or FilterConfig()
         self.state = NavState()
         self.P = np.eye(ERROR_STATE_DIM) * 1e-3
+        #: Steps since the last re-projection of R onto SO(3). See REORTHONORMALISE_EVERY.
+        self.steps = 0
 
     def propagate(self, gyro: np.ndarray, accel: np.ndarray, dt: float) -> None:
         """IMU propagation. Always runs, GNSS or not -- this is the spine.
 
         `dt` comes from real timestamps. Never a nominal value: sensor timestamps jitter and
         batch, and assuming 1/100 s silently integrates the wrong interval (D-013).
+
+        Section 8.1 for the nominal step, 8.2 for the covariance. Three things the derivation
+        insists on, each with a decision behind it:
+
+        * the exact Gamma_0/Gamma_1/Gamma_2 closed form, not an Euler step (D-029);
+        * `A_RI` evaluated at the step **midpoint**, not at the interval start (D-029) -- the
+          bias-coupling columns carry `skew(v) @ R` and `skew(p) @ R`, both of which move during
+          the step, so evaluating at the start leaves an O(dt^2) error that the midpoint removes
+          almost entirely (~1800x at dt = 1 ms);
+        * `Q_d` by Van Loan, not the `Phi G Q_c G^T Phi^T dt` shortcut (D-031).
         """
-        raise NotImplementedError("Sprint 1, seat S: SE_2(3) propagation with bias states")
+        gyro = np.asarray(gyro, dtype=float).ravel()
+        accel = np.asarray(accel, dtype=float).ravel()
+        if gyro.shape != (3,) or accel.shape != (3,):
+            raise ValueError(f"expected 3-vectors, got gyro {gyro.shape}, accel {accel.shape}")
+        if not np.isfinite(gyro).all() or not np.isfinite(accel).all():
+            raise ValueError("non-finite IMU sample -- fix the loader, do not propagate through it")
+        if dt <= 0:
+            raise ValueError(
+                f"dt must be positive, got {dt}. A non-positive interval means the timestamps "
+                "went backwards; five IO-VNBD S- files restart their clock mid-recording, and "
+                "propagating through one integrates the wrong interval silently."
+            )
+
+        s = self.state
+        omega = gyro - s.b_g
+        specific_force = accel - s.b_a
+
+        # Linearise at the midpoint (D-029). A and G share the linearisation point: Van Loan's
+        # block matrix mixes them, so evaluating them at different states would be inconsistent.
+        mid_rot, mid_v, mid_p = propagate_nominal(s.R, s.v, s.p, omega, specific_force, dt / 2)
+        a = a_ri(mid_rot, mid_v, mid_p)
+        g = g_ri(mid_rot, mid_v, mid_p)
+        gqg = g @ process_noise_psd(self.cfg) @ g.T
+
+        phi, q_d = van_loan(a, gqg, dt)
+
+        s.R, s.v, s.p = propagate_nominal(s.R, s.v, s.p, omega, specific_force, dt)
+        # Biases are unchanged in the nominal propagation; their uncertainty grows through Q_d.
+
+        p_new = phi @ self.P @ phi.T + q_d
+        self.P = 0.5 * (p_new + p_new.T)  # cheap insurance against a drift out of symmetry
+
+        self.steps += 1
+        if self.steps % REORTHONORMALISE_EVERY == 0:
+            s.R = orthonormalise(s.R)
+            s.R_sv = orthonormalise(s.R_sv)
 
     def update_gnss(self, position_ned: np.ndarray, cov: np.ndarray) -> bool:
         """chi-squared-gated GNSS position update. Returns whether the fix was accepted.

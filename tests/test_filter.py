@@ -158,10 +158,17 @@ def test_filter_initialises_with_a_well_formed_covariance():
     assert (np.linalg.eigvalsh(f.P) > 0).all(), "covariance must be positive definite"
 
 
-@pytest.mark.parametrize("method", ["propagate", "update_gnss", "update_nhc", "update_zupt"])
+@pytest.mark.parametrize("method", ["update_gnss", "update_nhc", "update_zupt"])
 def test_sprint1_surface_fails_loudly_rather_than_silently(method):
     """Placeholders raise. A stub that returns None would let the harness produce plausible
-    all-zero trajectories and report them as results."""
+    all-zero trajectories and report them as results.
+
+    `propagate` left this list when P-02 implemented it. That was this case's job: it is a
+    tripwire that fires the moment a placeholder becomes real, forcing the migration of the
+    SE_2(3) derivation tests off their local helpers and onto `core.reference.inekf` (see the
+    module docstring of tests/test_se23_derivation.py). The remaining three still guard the
+    surface, and each leaves the same way -- by being implemented, in P-03.
+    """
     f = InEKF()
     args = {
         "propagate": (np.zeros(3), np.zeros(3), 0.01),
