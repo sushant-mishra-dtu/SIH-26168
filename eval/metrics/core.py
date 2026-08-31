@@ -19,30 +19,48 @@ from idr.geo import wrap_to_pi
 
 
 class CrseConvention(str, Enum):
-    """Unresolved definitional ambiguity -- see docs/EVALUATION.md section 4.2.
+    """How "Cumulative Root Square Error" is read. **Settled against the paper** -- D-054.
 
-    Our source for the CTE/CRSE definitions is a secondary summary, not the paper's equations.
-    "Cumulative Root Square Error" admits two readings:
+    R-WhONet (arXiv 2209.05877) **Eq. (16)**::
 
-      SUM_SQUARES  sqrt(sum(e_i^2))    -- 'cumulative', grows with outage length
+        CRSE = sum_{t=1..N_t} sqrt(e_pred^2)
+
+    The root is taken **per term, inside the sum**, so CRSE is the sum of *absolute* per-second
+    errors -- `sum |e_i|` -- and not a root of any sum. Eq. (17) gives `CTE = sum e_pred`, the
+    signed counterpart. "Where N_t is GNSS outage length, e_pred refers to the prediction error,
+    and t represents the sampling period which we define as 1 second in this research." The
+    original WhONet paper (arXiv 2104.02581 section 3.2) carries the same metrics at the same
+    equation numbers. Both papers' *prose* says "cumulative root mean squared", which the equation
+    contradicts; the equation wins.
+
+      SUM_ABS      sum(|e_i|)          -- Eq. (16). The paper's metric.
+      SUM_SQUARES  sqrt(sum(e_i^2))    -- 'cumulative', grows as sqrt of outage length
       RMS          sqrt(mean(e_i^2))   -- 'root mean square', length-independent
 
-    Consistency check against WhONet's published 180 s physics baseline (CTE 2.90 m,
-    CRSE 13.67 m, ~180 one-second epochs): under SUM_SQUARES a typical per-epoch error is
-    13.67/sqrt(180) ~ 1.0 m, which sits sensibly beside a signed sum of 2.90 m after cancellation.
-    Under RMS every epoch would average 13.67 m of error while the signed sum stayed at 2.90 m,
-    which requires implausible cancellation. SUM_SQUARES is therefore the default.
+    Confirmed arithmetically against WhONet's own published tables (docs/DATASETS.md section 3;
+    four outage lengths x two methods). Only SUM_ABS makes the per-epoch error rate `CRSE / N_t`
+    come out flat, which is what a per-epoch error rate should do:
 
-    This is a reasoned default, not a verified one. Seat D pins it against the paper's equation
-    numbers before Gate 0; flipping this enum is then a one-line change rather than a rewrite.
+        divide by N_t     (SUM_ABS)      physics spread 1.4%, WhONet spread 2.3%
+        divide by sqrt(N_t) (SUM_SQUARES)              spread 2.4x
+        leave as-is       (RMS)                        spread 5.9x
+
+    Pinned by test_only_sum_abs_makes_the_published_tables_consistent, so the reason for the
+    choice is executable rather than a comment that can drift away from the code.
+
+    This supersedes D-023, which chose SUM_SQUARES on a consistency argument about the 180 s row
+    alone and labelled itself "reasoned, not verified". This is that verification, and it went the
+    other way: the 180 s argument is satisfied by SUM_ABS too (13.67/180 = 0.076 m per epoch
+    beside a signed sum of 2.90 m), so it never discriminated between the readings.
     """
 
+    SUM_ABS = "sum_abs"
     SUM_SQUARES = "sum_squares"
     RMS = "rms"
 
 
-#: Default until seat D confirms against the paper. Tracked as the Gate 0 blocker.
-CRSE_CONVENTION = CrseConvention.SUM_SQUARES
+#: The paper's Eq. (16). Verified against its own tables, not inferred -- D-054.
+CRSE_CONVENTION = CrseConvention.SUM_ABS
 
 
 @dataclass(frozen=True)
@@ -122,12 +140,22 @@ def cte(estimated: np.ndarray, truth: np.ndarray) -> float:
 def crse(
     estimated: np.ndarray, truth: np.ndarray, *, convention: CrseConvention | None = None
 ) -> float:
-    """Cumulative Root Square Error, in metres. See CrseConvention for the open ambiguity."""
+    """Cumulative Root Square Error, in metres. See CrseConvention for which reading and why.
+
+    Every member is handled explicitly and an unknown one raises. There is no `else` fallthrough
+    on purpose: this function used to end in a bare `return sqrt(mean(...))`, so adding a member
+    without adding a branch would have silently computed RMS under the new name -- a wrong metric
+    that runs, reports a plausible number, and scales every CRSE in the submission.
+    """
     conv = convention or CRSE_CONVENTION
     errors = per_epoch_errors(estimated, truth)
+    if conv is CrseConvention.SUM_ABS:
+        return float(np.sum(np.abs(errors)))
     if conv is CrseConvention.SUM_SQUARES:
         return float(np.sqrt(np.sum(errors**2)))
-    return float(np.sqrt(np.mean(errors**2)))
+    if conv is CrseConvention.RMS:
+        return float(np.sqrt(np.mean(errors**2)))
+    raise ValueError(f"unhandled CRSE convention {conv!r} -- add a branch, do not fall through")
 
 
 def drift_percent(final_error_m: float, distance_m: float) -> float:

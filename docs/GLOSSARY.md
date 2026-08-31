@@ -140,7 +140,10 @@ from an OSM `.pbf` extract.
 **CTE — Cumulative True Error** — The **signed** sum of per-second position errors over an outage.
 **Not cross-track error.** The task brief mislabels it.
 
-**CRSE — Cumulative Root Square Error** — RMS of the per-second position errors. **Not ATE.**
+**CRSE — Cumulative Root Square Error** — the **sum of absolute** per-second position errors,
+`Σ|eᵢ|` (R-WhONet Eq. 16). The root is taken per term, inside the sum, so this is not an RMS and
+not a root of any sum — the papers' prose says "root mean squared" and their equation does not.
+See D-054. **Not ATE.**
 
 **ATE — Absolute Trajectory Error** — Used in the pedestrian-odometry literature. We do not use it,
 and pedestrian ATE figures in metres are **not comparable** to vehicle drift percentages.

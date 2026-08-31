@@ -147,7 +147,7 @@ def test_normal_driving_is_not_a_bump():
 
 
 # ------------------------------------------------------------------------------------------
-# Unimplemented surface
+# Unimplemented surface, and the gating property that makes GNSS optional
 # ------------------------------------------------------------------------------------------
 
 
@@ -158,23 +158,46 @@ def test_filter_initialises_with_a_well_formed_covariance():
     assert (np.linalg.eigvalsh(f.P) > 0).all(), "covariance must be positive definite"
 
 
-@pytest.mark.parametrize("method", ["update_gnss", "update_nhc", "update_zupt"])
-def test_sprint1_surface_fails_loudly_rather_than_silently(method):
+@pytest.mark.parametrize(("method", "sprint"), [("update_speed", "Sprint 2")])
+def test_unimplemented_surface_fails_loudly_rather_than_silently(method, sprint):
     """Placeholders raise. A stub that returns None would let the harness produce plausible
     all-zero trajectories and report them as results.
 
-    `propagate` left this list when P-02 implemented it. That was this case's job: it is a
-    tripwire that fires the moment a placeholder becomes real, forcing the migration of the
-    SE_2(3) derivation tests off their local helpers and onto `core.reference.inekf` (see the
-    module docstring of tests/test_se23_derivation.py). The remaining three still guard the
-    surface, and each leaves the same way -- by being implemented, in P-03.
+    `propagate` left this list when P-02 implemented it, and `update_gnss`, `update_nhc` and
+    `update_zupt` left it in P-03. That is this case's job: it is a tripwire that fires the moment
+    a placeholder becomes real, and each entry leaves the same way -- by being implemented, with
+    its own behavioural tests replacing this one. `update_speed` is the last one standing; it is
+    seat M's speed head fused in P-09, and until then it must raise rather than return None.
+
+    The behaviour this used to guard for the update family is now guarded properly, by SE_2(3)
+    tests 7-11 in tests/test_se23_derivation.py.
     """
     f = InEKF()
-    args = {
-        "propagate": (np.zeros(3), np.zeros(3), 0.01),
-        "update_gnss": (np.zeros(3), np.eye(3)),
-        "update_nhc": (),
-        "update_zupt": (),
-    }[method]
-    with pytest.raises(NotImplementedError, match="Sprint 1"):
+    args = {"update_speed": (10.0, 0.5)}[method]
+    with pytest.raises(NotImplementedError, match=sprint):
         getattr(f, method)(*args)
+
+
+def test_a_rejected_gnss_fix_changes_absolutely_nothing():
+    """The architectural claim, asserted rather than described.
+
+    There is no tunnel mode and no re-initialisation on re-acquisition; a fix that fails the gate
+    simply is not applied. If a future edit adds a "fall back to a weaker correction" branch, the
+    state or the covariance moves here and this fails. Kept in this file rather than with tests
+    7-11 because it is a property of the *gating*, which is what this file tests.
+    """
+    f = InEKF()
+    f.state.p = np.array([10.0, -4.0, 1.0])
+    for _ in range(20):
+        f.propagate(np.array([0.0, 0.0, 0.2]), np.array([0.3, -0.1, -9.7]), 0.1)
+    state_before = (f.state.R.copy(), f.state.v.copy(), f.state.p.copy(), f.state.b_g.copy())
+    p_before = f.P.copy()
+
+    accepted = f.update_gnss(f.state.p + np.array([500.0, 0.0, 0.0]), np.eye(3) * 4.0)
+
+    assert accepted is False
+    for before, after in zip(
+        state_before, (f.state.R, f.state.v, f.state.p, f.state.b_g), strict=True
+    ):
+        assert np.array_equal(before, after), "a rejected fix must not move the state at all"
+    assert np.array_equal(p_before, f.P), "a rejected fix must not move the covariance either"

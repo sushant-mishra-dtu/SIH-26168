@@ -109,30 +109,64 @@ under-prediction shows up instead of cancelling into an RMS.
 
 ### 4.2 CRSE — Cumulative Root Square Error
 
-The name admits two readings, and they differ by √n:
+**The sum of absolute per-second errors, `Σ|eᵢ|`.** Settled against the paper's own equations —
+[DECISION_LOG.md](DECISION_LOG.md) D-054, superseding D-023.
 
-| Convention | Formula | Behaviour |
+R-WhONet (arXiv 2209.05877) **Eq. (16)**, verbatim:
+
+```
+CRSE = Σ_{t=1}^{N_t} √(e_pred²)
+```
+
+and **Eq. (17)**:
+
+```
+CTE = Σ_{t=1}^{N_t} e_pred
+```
+
+> "Where `N_t` is GNSS outage length, `e_pred` refers to the prediction error, and `t` represents
+> the sampling period which we define as 1 second in this research."
+
+The root is taken **per term, inside the sum**. CRSE is therefore the sum of absolute per-second
+errors and not a root of any sum, and CTE is its signed counterpart — the two differ only by the
+absolute value, which is exactly why they are reported as a pair. The original WhONet paper
+(arXiv 2104.02581 §3.2) carries the same metrics at the same equation numbers.
+
+Both papers' *prose* calls it "cumulative root mean squared", which the equation contradicts.
+**The equation wins**, and the prose is why three documents in this repo described it as an RMS.
+
+| Convention | Formula | Status |
 |---|---|---|
-| **`SUM_SQUARES`** *(current default)* | √(Σ eᵢ²) | "Cumulative" — grows with outage length |
-| `RMS` | √(mean eᵢ²) | Length-independent |
+| **`SUM_ABS`** *(default)* | Σ\|eᵢ\| | **Eq. (16). The paper's metric.** |
+| `SUM_SQUARES` | √(Σ eᵢ²) | Retained; D-023's reading, kept so earlier working is reproducible |
+| `RMS` | √(mean eᵢ²) | Retained; the reading the prose suggests |
 
-**Default is `SUM_SQUARES`, on a consistency argument.** Against WhONet's published 180 s physics
-baseline (CTE 2.90 m, CRSE 13.67 m, ~180 one-second epochs): under `SUM_SQUARES` a typical
-per-epoch error is 13.67/√180 ≈ 1.0 m, which sits sensibly beside a signed sum of 2.90 m after
-cancellation. Under `RMS`, every epoch would average 13.67 m of error while the signed sum stayed
-at 2.90 m — requiring implausible cancellation.
+**Confirmed arithmetically against WhONet's own tables** (§3 of [DATASETS.md](DATASETS.md), four
+outage lengths × two methods). A CRSE that sums over `N_t` one-second epochs has a per-epoch error
+rate of `CRSE / N_t`, which should be roughly flat across outage lengths. Only Eq. (16) makes it so:
 
-Implemented as `CrseConvention` in [`eval/metrics/core.py`](../eval/metrics/core.py), so switching
-is a one-line change rather than a rewrite.
+| Divide published CRSE by | Physics spread | WhONet spread |
+|---|---|---|
+| `N_t` — the `SUM_ABS` reading | **1.4 %** | **2.3 %** |
+| `√N_t` — the `SUM_SQUARES` reading | 2.4× | 2.4× |
+| nothing — the `RMS` reading | 5.9× | 5.9× |
+
+D-023 chose `SUM_SQUARES` from the 180 s row alone and labelled itself *"reasoned, not verified"*.
+That argument never discriminated: `SUM_ABS` satisfies it too (13.67/180 ≈ 0.076 m per epoch beside
+a signed sum of 2.90 m). It takes all four rows to separate the readings.
+
+Implemented as `CrseConvention` in [`eval/metrics/core.py`](../eval/metrics/core.py). Every member
+is branched on explicitly and an unknown one raises — there is no `else` fallthrough, because the
+function previously ended in a bare `return √(mean(…))` and a new member added without a branch
+would have silently computed RMS under the new name.
 
 > **These are Onyekpe's definitions — Cumulative True Error and Cumulative Root Square Error.
 > They are NOT cross-track error and NOT ATE.** The task brief mislabels them, and so does most
 > secondary writing about this dataset. State the definition explicitly in the write-up.
 >
-> **Open item for Sprint 0 (blocks freeze):** the reasoning above is a consistency argument, not a
-> verified reading. Seat D must pin the exact equations against the WhONet paper's own equation
-> numbers and record them here verbatim before Gate 0. If they differ, the paper wins — flip the
-> enum and re-run the sweep.
+> **R-4 is closed.** The equations above are quoted from the paper, not inferred, and the
+> convention they fix is verified against the paper's published tables. Nothing was invalidated by
+> the change: no CRSE had been computed on real data when it was made.
 
 ### 4.3 Drift as % of distance travelled — **this is what PS 26168 grades**
 

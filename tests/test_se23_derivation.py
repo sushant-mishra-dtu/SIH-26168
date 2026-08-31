@@ -22,6 +22,8 @@ Numbers that came out of writing this, now recorded in the document:
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -39,6 +41,9 @@ from core.reference.inekf import (
     expm_series,
     g_ri,
     gammas,
+    is_stationary,
+    log_so3,
+    nhc_is_valid,
     process_noise_psd,
     propagate_nominal,
     se23_exp,
@@ -592,3 +597,443 @@ def test_the_mount_block_of_q_carries_no_process_noise_yet():
         f.propagate(np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1)
     assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], before)
     assert f.P.shape == (ERROR_STATE_DIM, ERROR_STATE_DIM)
+
+
+# ------------------------------------------------------------------------------------------
+# Section 9, tests 7-11 -- the update family (P-03)
+#
+# Tests 1-6 above check that the matrices are right. These check that the four updates use
+# them correctly: the right Jacobian, the right innovation, and -- the one that is easy to get
+# backwards and impossible to see afterwards -- the right SIGN on the correction.
+#
+# Section 5 defines the right-invariant error as `eta_R = X_hat X^-1`, so `xi` is the error *in
+# the estimate*. `delta = K z` therefore estimates that error, and the retraction subtracts it
+# (D-050). Section 8.3 of the derivation still writes a plus; it is wrong and D-050 supersedes it.
+# ------------------------------------------------------------------------------------------
+
+
+def test_zaru_converges_the_gyro_bias_to_truth():
+    """SE_2(3) test 7. A constant injected bias, repeated ZARU, `b_g_hat` -> truth.
+
+    The whole yaw budget rests on this: 40 m of a 100 m error budget is lateral error driven by
+    residual gyro bias, and ZARU is the only thing that observes `b_g` directly (section 7.3).
+    If the correction sign were flipped this diverges rather than converges, which is the failure
+    a convergence assertion catches and a Jacobian assertion does not.
+    """
+    truth = np.array([2.0e-3, -1.5e-3, 3.0e-3])  # rad/s, ~10x the measured 42 deg/hr instability
+    f = InEKF()
+    f.P = np.eye(ERROR_STATE_DIM) * 1e-4
+    before = float(np.linalg.norm(f.state.b_g - truth))
+    for _ in range(300):
+        f.propagate(truth, -GRAVITY_NED, 0.1)
+        f.update_zaru(truth)
+    after = float(np.linalg.norm(f.state.b_g - truth))
+    assert after < before / 100.0, f"b_g did not converge: {before:.3e} -> {after:.3e}"
+    assert np.trace(f.P[9:12, 9:12]) < np.trace(np.eye(3) * 1e-4), "ZARU must shrink the b_g block"
+
+
+def test_zaru_rejects_a_malformed_gyro_sample():
+    """The raw sample is an argument (D-052) precisely so it can be wrong; say so loudly."""
+    f = InEKF()
+    with pytest.raises(ValueError, match="3-vector gyro"):
+        f.update_zaru(np.zeros((3, 3)))
+
+
+def test_zupt_drives_a_wrong_velocity_to_zero_and_shrinks_its_covariance():
+    """SE_2(3) test 8. Stationary with a wrong initial velocity: `v_hat` -> 0 and `P` shrinks."""
+    f = InEKF()
+    f.state.v = np.array([2.0, -1.0, 0.5])
+    v_before = float(np.linalg.norm(f.state.v))
+    p_before = np.trace(f.P[3:6, 3:6])
+    for _ in range(200):
+        f.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
+        f.update_zupt()
+    assert float(np.linalg.norm(f.state.v)) < v_before / 100.0
+    assert np.trace(f.P[3:6, 3:6]) < p_before
+
+
+def test_zupt_does_not_shrink_the_mount_covariance():
+    """D-051. ZUPT uses section 7.1's body-frame Jacobian, not section 7.2's vehicle-frame one.
+
+    The two assert the same thing -- `R_sv` is a rotation, so `R_sv R^T v = 0` exactly when
+    `R^T v = 0` -- but 7.2 carries a `-v_veh_hat^` mount column. Section 7.2's own result is that
+    mount observability through a velocity constraint has **gain equal to forward speed**, and at
+    a standstill that gain is zero. Using 7.2 here would let a stop shrink the mount block in
+    proportion to the filter's own velocity *error*, which is information the stop does not carry.
+
+    The velocity error below is deliberately large, because that is exactly the case where the
+    vehicle-frame Jacobian's mount column is most non-zero and the bug would be biggest.
+    """
+    f = InEKF()
+    f.state.v = np.array([5.0, -3.0, 1.0])
+    mount_before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
+    for _ in range(50):
+        f.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
+        f.update_zupt()
+    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], mount_before), (
+        "ZUPT shrank the mount covariance -- it is using the vehicle-frame Jacobian (section "
+        "7.2) rather than the body-frame one (section 7.1). See D-051."
+    )
+
+
+def _nhc_mount_run(speed: float, steps: int = 300) -> tuple[float, float]:
+    """Straight drive at `speed` with a true 5-degree mount yaw the filter does not know about.
+
+    Returns (final mount-yaw error in degrees, final sigma(xi_sv,z) in degrees). The truth is
+    constructed so the vehicle-frame velocity is exactly `(speed, 0, 0)` -- NHC's assumption
+    holds perfectly, so anything the filter learns is genuinely from the mount, not from a
+    scenario that quietly violates the constraint.
+    """
+    alpha = np.deg2rad(5.0)
+    r_sv_true = exp_so3(np.array([0.0, 0.0, alpha]))
+    f = InEKF()
+    f.state.R = np.eye(3)
+    f.state.v = r_sv_true.T @ np.array([speed, 0.0, 0.0])
+    f.state.R_sv = np.eye(3)  # the filter believes the phone is aligned with the vehicle
+    sd = np.zeros(ERROR_STATE_DIM)
+    sd[0:3] = np.deg2rad(1.0)
+    sd[3:6] = 0.05
+    sd[6:9] = 1.0
+    sd[9:12] = 1e-4
+    sd[12:15] = 1e-3
+    sd[15:18] = np.deg2rad(10.0)  # loose on the mount: it is the thing being learned
+    f.P = np.diag(sd**2)
+    for _ in range(steps):
+        f.update_nhc()
+    err = abs(log_so3(f.state.R_sv @ r_sv_true.T)[2])
+    return float(np.rad2deg(err)), float(np.rad2deg(np.sqrt(f.P[17, 17])))
+
+
+def test_nhc_learns_the_mount_yaw_and_learns_it_faster_at_speed():
+    """SE_2(3) test 9. Section 7.2's `-v_veh_hat^` column made quantitative.
+
+    For a vehicle moving forward at `u` the lateral row of that column is `[0, 0, +u]`, so the
+    mount angle is observable through NHC **with gain equal to forward speed** -- estimated well
+    on a motorway and barely at all in a car park. That is D-006's claim turned into a number,
+    and section 7.2 names `sigma(xi_sv,z)` against speed as the thing to plot at Gate 1.
+
+    Measured here: after 300 updates the residual sigma is 0.660 / 0.220 / 0.132 degrees at
+    5 / 15 / 25 m/s -- monotone in speed, which is the assertion.
+    """
+    errs, sigmas = zip(*(_nhc_mount_run(u) for u in (5.0, 15.0, 25.0)), strict=True)
+    assert errs[-1] < 0.05, f"mount yaw did not converge at speed: {errs[-1]:.3f} deg"
+    assert all(b < a for a, b in zip(sigmas, sigmas[1:], strict=False)), (
+        f"sigma(xi_sv,z) must fall as speed rises (section 7.2); got {sigmas}"
+    )
+    assert all(b < a for a, b in zip(errs, errs[1:], strict=False)), (
+        f"mount-yaw error must fall as speed rises; got {errs}"
+    )
+
+
+def test_gnss_direct_and_adjoint_paths_agree_to_floating_point():
+    """SE_2(3) test 10. Section 7.4 offers two routes and requires they be the same map.
+
+    Direct: `H = [-p_hat^, 0, I, ...]` in the right-invariant coordinates the covariance is
+    carried in. Adjoint: move to left-invariant coordinates with `P_L = Ad_X^-1 P_R Ad_X^-T`,
+    apply `H_L = [0, 0, I]` with rotated noise `R_hat^T Sigma R_hat`, transform back.
+
+    They agree identically only if `H_gnss` is exactly right: `H_R Ad_X = [0, 0, R_hat]`, and a
+    sign or a transpose anywhere in that `-p_hat^` block breaks the identity. This is the test
+    that catches a plausible-looking GNSS Jacobian.
+    """
+    rng = np.random.default_rng(7)
+    f = InEKF()
+    f.state.R = exp_so3(np.array([0.05, -0.03, 0.7]))
+    f.state.v = np.array([14.0, 2.0, -0.3])
+    f.state.p = np.array([220.0, -95.0, 4.0])
+    f.state.R_sv = exp_so3(np.array([0.0, 0.0, 0.08]))
+    a = rng.normal(size=(ERROR_STATE_DIM, ERROR_STATE_DIM))
+    f.P = a @ a.T + np.eye(ERROR_STATE_DIM)
+
+    fix = f.state.p + np.array([1.4, -0.9, 0.3])
+    sigma = np.diag([9.0, 9.0, 25.0])
+
+    # --- the adjoint path, built here from the derivation, not from the implementation ---
+    rot, p_hat, p_r = f.state.R.copy(), f.state.p.copy(), f.P.copy()
+    ad = np.eye(ERROR_STATE_DIM)
+    ad[0:9, 0:9] = adjoint(x_of(rot, f.state.v, p_hat))
+    ad_inv = np.linalg.inv(ad)
+    p_l = ad_inv @ p_r @ ad_inv.T
+    h_l = np.zeros((3, ERROR_STATE_DIM))
+    h_l[:, 6:9] = np.eye(3)
+    z_l = rot.T @ (p_hat - fix)
+    r_l = rot.T @ sigma @ rot
+    k_l = p_l @ h_l.T @ np.linalg.inv(h_l @ p_l @ h_l.T + r_l)
+    delta = ad @ (k_l @ z_l)
+    ikh = np.eye(ERROR_STATE_DIM) - k_l @ h_l
+    p_l_post = ikh @ p_l @ ikh.T + k_l @ r_l @ k_l.T
+    p_expected = ad @ p_l_post @ ad.T
+    p_expected = 0.5 * (p_expected + p_expected.T)
+    x_expected = se23_exp(-delta[0:9]) @ x_of(rot, f.state.v, p_hat)
+    rot_e, v_e, p_e = unpack(x_expected)
+
+    assert f.update_gnss(fix, sigma) is True
+    assert np.max(np.abs(f.state.R - rot_e)) < 1e-9
+    assert np.max(np.abs(f.state.v - v_e)) < 1e-9
+    assert np.max(np.abs(f.state.p - p_e)) < 1e-9
+    assert np.max(np.abs(f.P - p_expected)) / np.max(np.abs(f.P)) < 1e-9
+
+
+def test_gnss_rejects_a_malformed_fix():
+    f = InEKF()
+    with pytest.raises(ValueError, match="3-vector position"):
+        f.update_gnss(np.zeros(2), np.eye(3))
+    with pytest.raises(ValueError, match="3x3 position covariance"):
+        f.update_gnss(np.zeros(3), np.eye(4))
+
+
+# ------------------------------------------------------------------------------------------
+# Section 9, test 11 -- consistency
+#
+# The test that catches an inconsistent filter, which is the failure the whole design exists to
+# avoid. A filter that passes 7-10 and fails 11 is not "nearly working": it is lying about its
+# own covariance, and everything downstream reads that covariance -- the chi-squared gate, the
+# uncertainty ellipse, and the map matcher's emission sigma.
+#
+# Method: draw the initial error from P0, drive truth and filter with the same IMU stream, and
+# form NEES = e^T P^-1 e at the end. Over N runs the mean must sit inside the 95% chi-squared
+# band for 18*N degrees of freedom, divided by N.
+# ------------------------------------------------------------------------------------------
+
+NEES_RUNS = 100
+NEES_DT = 0.1
+NEES_STEPS = 600  # 60 s, the reference outage length
+
+
+def chi2_quantile(p: float, dof: int) -> float:
+    """Inverse chi-squared CDF, by bisection on the regularised lower incomplete gamma.
+
+    scipy is deliberately not a dependency (D-024), and the band this test asserts must be
+    computed rather than pasted in as a magic constant -- a hand-typed quantile is exactly the
+    kind of number that gets quietly widened when a test starts failing.
+
+    `F(x; k) = P(k/2, x/2)`, so the root is found in `x/2` and doubled.
+    """
+    a = dof / 2.0
+
+    def lower(x: float) -> float:
+        if x <= 0:
+            return 0.0
+        scale = math.exp(-x + a * math.log(x) - math.lgamma(a))
+        if x < a + 1.0:  # series
+            term = total = 1.0 / a
+            for n in range(1, 1_000_000):
+                term *= x / (a + n)
+                total += term
+                if abs(term) < abs(total) * 1e-16:
+                    break
+            return total * scale
+        tiny = 1e-300  # continued fraction on the upper tail
+        b, c, d = x + 1.0 - a, 1.0 / tiny, 1.0 / (x + 1.0 - a)
+        h = d
+        for i in range(1, 1_000_000):
+            an = -i * (i - a)
+            b += 2.0
+            d = an * d + b
+            d = tiny if abs(d) < tiny else d
+            c = b + an / c
+            c = tiny if abs(c) < tiny else c
+            d = 1.0 / d
+            delta = d * c
+            h *= delta
+            if abs(delta - 1.0) < 1e-16:
+                break
+        return 1.0 - scale * h
+
+    lo, hi = 0.0, max(10.0 * dof, 100.0)
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if lower(mid) < p:
+            lo = mid
+        else:
+            hi = mid
+    return lo + hi
+
+
+def test_chi2_quantile_matches_published_values():
+    """Including the one the repo already committed: `chi2_gate_3dof` is chi-squared 0.99 at 3 dof.
+
+    That constant was typed into FilterConfig from a table long before this function existed, so
+    agreeing with it is an independent check of both.
+    """
+    assert chi2_quantile(0.99, 3) == pytest.approx(FilterConfig().chi2_gate_3dof, abs=5e-4)
+    assert chi2_quantile(0.95, 1) == pytest.approx(3.8415, abs=1e-3)
+    assert chi2_quantile(0.975, 3) == pytest.approx(9.3484, abs=1e-3)
+    assert chi2_quantile(0.5, 4) == pytest.approx(3.3567, abs=1e-3)
+
+
+def _nees_p0() -> np.ndarray:
+    """The Monte-Carlo prior.
+
+    **This is the test's experimental design, not a proposal for the filter's `P0`** -- that is
+    P-04's, and `InEKF.__init__` still carries a flat `1e-3 I` placeholder. The test is valid for
+    any positive-definite choice, because the truth error is drawn from this same matrix; what it
+    checks is that `P` tracks the error it actually makes, not that `P0` is well chosen.
+
+    The two bias blocks are the D-045 measured bias instabilities (42 deg/hr, 0.34 mg) so that at
+    least those are repo-sourced rather than picked.
+    """
+    sd = np.zeros(ERROR_STATE_DIM)
+    sd[0:2] = np.deg2rad(2.0)
+    sd[2] = np.deg2rad(5.0)
+    sd[3:6] = 0.1
+    sd[6:9] = 1.0
+    sd[9:12] = 42.0 * (np.pi / 180.0) / 3600.0
+    sd[12:15] = 0.34e-3 * 9.80665
+    sd[15:18] = np.deg2rad(1.0)
+    return np.diag(sd**2)
+
+
+def _nees_inputs(k: int) -> tuple[np.ndarray, np.ndarray, bool]:
+    """(omega, specific force, truly stopped) for step `k`: cruise, brake, stop, pull away, cruise.
+
+    Two properties the scenario has to have, both learned the hard way:
+
+    * **The truth must satisfy NHC exactly.** A coordinated turn at speed `u` and yaw rate `r`
+      needs `a_body = (u_dot, u r, -g)` and `omega = (0, 0, r)`; anything else leaves a real
+      lateral velocity and the filter is then punished for a scenario bug. Measured residual is
+      ~1e-3 m/s against an NHC sigma of 0.5.
+    * **The ramps must be smooth, and the vehicle must never be exactly straight while moving.**
+      `is_stationary` tests accelerometer *variance* and gyro magnitude, so a synthetic car
+      cruising in a straight line at constant speed -- no road vibration in the model -- reads as
+      parked, and ZUPT fires at 15 m/s. A constant-deceleration brake does the same. Real data has
+      cabin vibration (D-045 measured 20-30x the mechanical energy on a moving-cabin segment);
+      this scenario has none, so it keeps a small yaw rate instead of inventing a vibration term.
+    """
+    u_cruise, yaw_rate, t_ramp = 15.0, 0.05, 3.0
+    t = k * NEES_DT + NEES_DT / 2
+    amp = np.pi * u_cruise / (2.0 * t_ramp)
+    brake, stop, pull = 20.0, 20.0 + t_ramp, 20.0 + t_ramp + 10.0
+    if t < brake:
+        u, u_dot = u_cruise, 0.0
+    elif t < stop:
+        u = u_cruise * (1 + np.cos(np.pi * (t - brake) / t_ramp)) / 2
+        u_dot = -amp * np.sin(np.pi * (t - brake) / t_ramp)
+    elif t < pull:
+        u, u_dot = 0.0, 0.0
+    elif t < pull + t_ramp:
+        u = u_cruise * (1 - np.cos(np.pi * (t - pull) / t_ramp)) / 2
+        u_dot = amp * np.sin(np.pi * (t - pull) / t_ramp)
+    else:
+        u, u_dot = u_cruise, 0.0
+    stopped = u == 0.0
+    r = 0.0 if stopped else yaw_rate  # a stopped car cannot yaw
+    return np.array([0.0, 0.0, r]), np.array([u_dot, u * r, -9.80665]), stopped
+
+
+def _nees_run(seed: int, *, zupt: bool, zaru: bool, nhc: bool) -> float:
+    """One Monte-Carlo run. Returns NEES at the final step."""
+    cfg = FilterConfig()
+    rng = np.random.default_rng(seed)
+    p0 = _nees_p0()
+    rot_t, v_t, p_t = np.eye(3), np.array([15.0, 0.0, 0.0]), np.zeros(3)
+    r_sv_t = np.eye(3)
+    b_g_t = rng.multivariate_normal(np.zeros(3), p0[9:12, 9:12])
+    b_a_t = rng.multivariate_normal(np.zeros(3), p0[12:15, 12:15])
+
+    xi = rng.multivariate_normal(np.zeros(ERROR_STATE_DIM), p0)
+    f = InEKF(cfg)
+    f.state.R, f.state.v, f.state.p = unpack(se23_exp(xi[0:9]) @ x_of(rot_t, v_t, p_t))
+    f.state.b_g = b_g_t + xi[9:12]
+    f.state.b_a = b_a_t + xi[12:15]
+    f.state.R_sv = exp_so3(xi[15:18]) @ r_sv_t
+    f.P = p0.copy()
+
+    sd_g = cfg.gyro_arw / np.sqrt(NEES_DT)
+    sd_a = cfg.accel_vrw / np.sqrt(NEES_DT)
+    window = max(1, int(round(cfg.zupt_window_s / NEES_DT)))
+    acc_win = np.zeros((0, 3))
+    gyro_win = np.zeros((0, 3))
+
+    for k in range(NEES_STEPS):
+        omega, accel, _ = _nees_inputs(k)
+        gyro_m = omega + b_g_t + rng.normal(0, sd_g, 3)
+        accel_m = accel + b_a_t + rng.normal(0, sd_a, 3)
+        b_g_t = b_g_t + rng.normal(0, cfg.gyro_bias_rw * np.sqrt(NEES_DT), 3)
+        b_a_t = b_a_t + rng.normal(0, cfg.accel_bias_rw * np.sqrt(NEES_DT), 3)
+        rot_t, v_t, p_t = propagate_nominal(rot_t, v_t, p_t, omega, accel, NEES_DT)
+
+        f.propagate(gyro_m, accel_m, NEES_DT)
+        acc_win = np.vstack([acc_win, accel_m])[-window:]
+        gyro_win = np.vstack([gyro_win, gyro_m])[-window:]
+        fired = acc_win.shape[0] == window and is_stationary(acc_win, gyro_win, cfg)
+        if fired:
+            if zupt:
+                f.update_zupt()
+            if zaru:
+                f.update_zaru(gyro_m)
+        elif nhc and nhc_is_valid(
+            float(np.linalg.norm(f.state.v)),
+            gyro_m[2] - f.state.b_g[2],
+            accel_m[1] - f.state.b_a[1],
+            cfg,
+        ):
+            f.update_nhc()
+
+    eta = x_of(f.state.R, f.state.v, f.state.p) @ np.linalg.inv(x_of(rot_t, v_t, p_t))
+    err = np.concatenate(
+        [se23_log(eta), f.state.b_g - b_g_t, f.state.b_a - b_a_t, log_so3(f.state.R_sv @ r_sv_t.T)]
+    )
+    return float(err @ np.linalg.solve(f.P, err))
+
+
+def _mean_nees(**kw: bool) -> tuple[float, float, float]:
+    """(mean NEES, band low, band high) over NEES_RUNS deterministic seeds."""
+    vals = np.array([_nees_run(s, **kw) for s in range(NEES_RUNS)])
+    dof = ERROR_STATE_DIM * NEES_RUNS
+    return (
+        float(vals.mean()),
+        chi2_quantile(0.025, dof) / NEES_RUNS,
+        chi2_quantile(0.975, dof) / NEES_RUNS,
+    )
+
+
+def test_11_nees_propagation_only_is_consistent():
+    """Test 11, propagation alone: P0, Q_c, Van Loan and the nominal step against real error.
+
+    This is the base case -- if it fails, nothing above it means anything, because every update
+    is applied to a covariance this produced. Measured 18.287 against a band of [16.843, 19.195].
+    """
+    mean, lo, hi = _mean_nees(zupt=False, zaru=False, nhc=False)
+    assert lo <= mean <= hi, (
+        f"propagation-only NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+    )
+
+
+def test_11_nees_with_zupt_is_consistent():
+    """Test 11 with ZUPT applied at every detected stop. Measured 18.929, band [16.843, 19.195].
+
+    ZUPT is the update that shrinks `P` the hardest, so it is the one most able to make the filter
+    over-confident. It does not: the covariance still tracks the error it actually makes.
+    """
+    mean, lo, hi = _mean_nees(zupt=True, zaru=False, nhc=False)
+    assert lo <= mean <= hi, f"ZUPT NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+
+
+def test_zaru_sigma_is_below_the_gyro_noise_the_repo_measured():
+    """**The blocker on test 11's full-state case, asserted as the config fact that causes it.**
+
+    `zaru_sigma` is the noise on `z = w~ - b_g_hat` (section 7.3), which is the gyro white noise.
+    D-045 measured that: `gyro_arw = 4.11e-4` rad/s/sqrt(Hz), i.e. `4.11e-4 / sqrt(0.1)` =
+    **1.30e-3** rad/s per sample at the 10 Hz IO-VNBD rate. `FilterConfig` carries 1.0e-3, which
+    predates the Allan run and is understated by 1.3x in sigma, 1.7x in variance -- over-confident,
+    the unsafe direction.
+
+    Measured effect, gyro-bias block NEES against 3.0 expected, 100 runs (see D-053):
+
+        stationary 60 s, ZARU only:  4.65 at 1.0e-3  ->  3.41 at 1.30e-3  ->  2.74 independent
+        drive + 10 s stop, full:    12.03 at 1.0e-3  ->  8.48 at 1.30e-3
+
+    So the sigma is one of two causes and not the larger one; the rest is that the same gyro
+    sample is used both as process noise inside propagate() and as ZARU's measurement, which the
+    Kalman update assumes are independent. Both are P-04's to settle, and P-03 must not tune an R
+    to make a consistency test pass. **When P-04 fixes this, this test fails -- and the full-state
+    NEES assertion above it is then the thing to turn on.**
+    """
+    cfg = FilterConfig()
+    measured = cfg.gyro_arw / np.sqrt(NEES_DT)
+    assert measured == pytest.approx(1.30e-3, abs=1e-5)
+    assert cfg.zaru_sigma < measured, (
+        "zaru_sigma is no longer below the measured gyro white noise -- P-04 has settled it. "
+        "Re-measure the full-state NEES and turn on the assertion in test 11."
+    )
