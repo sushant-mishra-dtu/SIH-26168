@@ -4,10 +4,11 @@
 exactly and reuses its tests; the Python version exists so Gate 1 can be hit inside the compressed
 schedule, not to replace the compiled core.
 
-Propagation and the update step are deliberately left unimplemented -- that is Sprint 1 work and
-writing it speculatively here would produce a filter nobody has reasoned through. What *is* settled
-and encoded below is the part that is easy to get quietly wrong later: the state layout, the
-constraint gating conditions, and the rule that GNSS is never a mode switch.
+Propagation (P-02) and the update family (P-03) are implemented; the learned speed
+pseudo-measurement is Sprint 2 and is still a placeholder that raises. The parts that were settled
+before any of it was written -- the state layout, the constraint gating conditions, and the rule
+that GNSS is never a mode switch -- are unchanged, because they are what is easy to get quietly
+wrong later.
 
 Background: docs/GLOSSARY.md (InEKF, NHC, ZUPT, ZARU), docs/ERROR_BUDGET.md (why yaw dominates).
 """
@@ -438,9 +439,15 @@ def detect_mount_disturbance(gyro_window: np.ndarray, cfg: FilterConfig) -> bool
 class InEKF:
     """Error-state Invariant EKF on SE_2(3).
 
-    Sprint 1 (seat S) implements propagate() and the update family. The interface is fixed here so
-    that seat D can wire the harness against it now and seat A can agree the FFI surface, both
-    without waiting on the implementation.
+    Sprint 1 (seat S) implements propagate() and the update family. The interface was fixed before
+    the implementation so that seat D could wire the harness against it and seat A could agree the
+    FFI surface without waiting.
+
+    **Gating is the caller's job, not this class's.** `is_stationary` and `nhc_is_valid` read the
+    raw IMU stream -- accelerometer variance, gyro magnitude, yaw rate, lateral acceleration --
+    and none of those is a property of the state, so the filter cannot check them for itself. The
+    harness calls the detector, then the update. ZUPT and ZARU fire **together** at every detected
+    stop: a stop where only one runs is a bug, not a tuning choice.
     """
 
     def __init__(self, cfg: FilterConfig | None = None) -> None:
@@ -503,32 +510,164 @@ class InEKF:
             s.R = orthonormalise(s.R)
             s.R_sv = orthonormalise(s.R_sv)
 
+    # ----------------------------------------------------------------------------------------
+    # The one update step. Every measurement below reduces to (z, H, R) and calls this.
+    # ----------------------------------------------------------------------------------------
+
+    def _apply_update(self, z: np.ndarray, h: np.ndarray, r: np.ndarray) -> None:
+        """Error-state Kalman update, with the correction **subtracted** (D-050).
+
+        The sign is not a convention we are free to pick. Section 5 defines the right-invariant
+        error as `eta_R = X_hat X^-1`, so `X_hat = Exp(xi) X` and `xi` is the error *in the
+        estimate*: estimate-minus-truth, and likewise `db_g = b_g_hat - b_g`. Every Jacobian in
+        section 7 is the Jacobian of that subsection's innovation with respect to that same `xi`
+        -- GNSS `z = p_hat - p_gnss` giving `+I` on the position block, ZARU `z = w~ - b_g_hat =
+        -db_g` giving `-I` on the gyro-bias block. So `delta = K z` is an estimate of the error,
+        and removing an error means subtracting it.
+
+        Note this is independent of which way round the innovation is written: flipping `z` to
+        measurement-minus-prediction flips `H` with it, `K` picks up the second sign, and `delta`
+        is unchanged. Only the section 5 error definition sets the sign, which is why section
+        8.3's `X_hat+ = Exp(delta) X_hat` is wrong rather than merely a different convention.
+
+        Joseph form for the covariance: it stays symmetric and PSD under the round-off that the
+        short `(I - KH)P` form does not survive across the ~1800 updates of a 180 s outage.
+        """
+        z = np.asarray(z, dtype=float).ravel()
+        s = h @ self.P @ h.T + r
+        gain = self.P @ h.T @ np.linalg.inv(s)
+        delta = gain @ z
+
+        st = self.state
+        # Pose: left-multiply by the *inverse* increment -- right-invariant retraction, minus.
+        x_corrected = se23_exp(-delta[0:9]) @ x_of(st.R, st.v, st.p)
+        st.R, st.v, st.p = unpack(x_corrected)
+        st.b_g = st.b_g - delta[IDX_GYRO_BIAS]
+        st.b_a = st.b_a - delta[IDX_ACCEL_BIAS]
+        st.R_sv = exp_so3(-delta[IDX_MOUNT]) @ st.R_sv
+
+        ikh = np.eye(ERROR_STATE_DIM) - gain @ h
+        p_new = ikh @ self.P @ ikh.T + gain @ r @ gain.T
+        self.P = 0.5 * (p_new + p_new.T)
+
+    def _h_body_velocity(self) -> np.ndarray:
+        """Section 7.1. `H_vb = [0, R_hat^T, 0, 0, 0, 0]` -- the attitude column is exactly zero.
+
+        A body-frame velocity constraint carries no instantaneous heading information, and the
+        right-invariant filter says so. A naive EKF has a non-zero entry there, gains spurious yaw
+        observability, and then trusts a heading it has no right to trust.
+        """
+        h = np.zeros((3, ERROR_STATE_DIM))
+        h[:, IDX_VELOCITY] = self.state.R.T
+        return h
+
+    def _h_vehicle_velocity(self) -> tuple[np.ndarray, np.ndarray]:
+        """Section 7.2. Returns `(v_veh_hat, H_veh)` with the mount column carried.
+
+        `H_veh = [0, R_sv R_hat^T, 0, 0, 0, -v_veh_hat^]`. The mount column is what makes the
+        mount angle observable through NHC **with gain equal to forward speed** -- estimated well
+        on a motorway and barely at all in a car park.
+        """
+        st = self.state
+        v_veh = st.R_sv @ st.R.T @ st.v
+        h = np.zeros((3, ERROR_STATE_DIM))
+        h[:, IDX_VELOCITY] = st.R_sv @ st.R.T
+        h[:, IDX_MOUNT] = -skew(v_veh)
+        return v_veh, h
+
     def update_gnss(self, position_ned: np.ndarray, cov: np.ndarray) -> bool:
         """chi-squared-gated GNSS position update. Returns whether the fix was accepted.
 
         Not called at all during an injected outage -- see eval/outages/inject.mask_gnss.
+
+        Section 7.4: `z = p_hat - p_gnss`, `H_gnss = [-p_hat^, 0, I, 0, 0, 0]`. The `-p_hat^` is
+        the price of section 6 -- a state dependence on *position*, which is benign because it is
+        not an attitude dependence and so does not touch the yaw-observability property.
+
+        **A rejected fix applies nothing.** Not a smaller correction, not a re-initialisation, not
+        a mode flag -- the method returns False and neither `state` nor `P` is touched. That
+        absence is the architectural claim: there is no branch to switch on tunnel entry, so there
+        is nothing that could produce a jump, and "seamless transition within milliseconds" is
+        satisfied by construction rather than by handling (D-001).
         """
-        raise NotImplementedError("Sprint 1, seat S: gated position update")
+        position_ned = np.asarray(position_ned, dtype=float).ravel()
+        cov = np.asarray(cov, dtype=float)
+        if position_ned.shape != (3,):
+            raise ValueError(f"expected a 3-vector position, got {position_ned.shape}")
+        if cov.shape != (3, 3):
+            raise ValueError(f"expected a 3x3 position covariance, got {cov.shape}")
+
+        z = self.state.p - position_ned
+        h = np.zeros((3, ERROR_STATE_DIM))
+        h[:, IDX_ATTITUDE] = -skew(self.state.p)
+        h[:, IDX_POSITION] = np.eye(3)
+
+        if not chi2_gate(z, h @ self.P @ h.T + cov, self.cfg.chi2_gate_3dof):
+            return False
+        self._apply_update(z, h, cov)
+        return True
 
     def update_nhc(self, r_nhc: np.ndarray | None = None) -> None:
         """Non-holonomic pseudo-measurement. Caller checks nhc_is_valid() first.
 
         `r_nhc` is the per-step covariance from the AI-IMU adaptive head once it exists; None
         falls back to the fixed config values.
+
+        Rows 1 and 2 of section 7.2 -- lateral and vertical vehicle-frame velocity are asserted
+        zero. Row 0 (forward) is left alone: that is the learned speed head's row, in P-09.
+
+        The gating is the caller's job and cannot be moved in here. `nhc_is_valid` needs yaw rate
+        and lateral acceleration, which are properties of the IMU stream and not of the state --
+        the filter does not have them.
         """
-        raise NotImplementedError("Sprint 1, seat S: NHC pseudo-measurement")
+        v_veh, h_full = self._h_vehicle_velocity()
+        rows = [1, 2]
+        h = h_full[rows, :]
+        z = v_veh[rows]
+        if r_nhc is None:
+            r = np.diag([self.cfg.nhc_sigma_lateral**2, self.cfg.nhc_sigma_vertical**2])
+        else:
+            r = np.asarray(r_nhc, dtype=float)
+            if r.shape != (2, 2):
+                raise ValueError(f"expected a 2x2 NHC covariance, got {r.shape}")
+        self._apply_update(z, h, r)
 
     def update_zupt(self) -> None:
-        """Zero-velocity update. Observes accelerometer bias."""
-        raise NotImplementedError("Sprint 1, seat S: ZUPT")
+        """Zero-velocity update. Observes accelerometer bias.
 
-    def update_zaru(self) -> None:
+        Uses section **7.1**'s body-frame Jacobian, not section 7.2's vehicle-frame one (D-051).
+        The two assert the same thing -- `R_sv` is a rotation, so `R_sv R^T v = 0` exactly when
+        `R^T v = 0` -- but 7.2 carries a `-v_veh_hat^` mount column, and at a standstill there is
+        no direction of travel for the mount angle to be measured against. Section 7.2's own
+        result says so: mount observability through a velocity constraint has **gain equal to
+        forward speed**, which is zero here. Keeping that column would let a stop shrink the mount
+        covariance in proportion to the filter's own *velocity error* -- the very quantity ZUPT
+        exists to remove -- which is information the stop does not contain.
+        """
+        self._apply_update(
+            self.state.R.T @ self.state.v,
+            self._h_body_velocity(),
+            np.eye(3) * self.cfg.zupt_sigma**2,
+        )
+
+    def update_zaru(self, gyro: np.ndarray) -> None:
         """Zero-angular-rate update. Observes gyro bias -- the dominant error term.
 
         Apply at *every* detected stop. This is the cheapest yaw-drift mitigation available and
         the error budget assumes it is running (docs/ERROR_BUDGET.md section 3.2).
+
+        `gyro` is the **raw** sample for this step, not a bias-corrected one (D-052). Section 7.3
+        asserts the true rate is zero, so the raw reading *is* the bias: `z = w~ - b_g_hat`, which
+        expands to `-db_g` and gives `H_zaru = [0, 0, 0, -I, 0, 0]`. A **direct** observation of
+        `b_g` -- no coupling, no integration, no waiting. Compare section 7.1, where yaw is only
+        reachable through a second-order path; this is why ZARU matters more for yaw than NHC.
         """
-        raise NotImplementedError("Sprint 1, seat S: ZARU")
+        gyro = np.asarray(gyro, dtype=float).ravel()
+        if gyro.shape != (3,):
+            raise ValueError(f"expected a 3-vector gyro sample, got {gyro.shape}")
+        h = np.zeros((3, ERROR_STATE_DIM))
+        h[:, IDX_GYRO_BIAS] = -np.eye(3)
+        self._apply_update(gyro - self.state.b_g, h, np.eye(3) * self.cfg.zaru_sigma**2)
 
     def update_speed(self, speed_mps: float, variance: float) -> None:
         """Learned forward-speed pseudo-measurement with its predicted variance.
