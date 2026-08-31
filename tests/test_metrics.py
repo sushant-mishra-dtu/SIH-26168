@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from eval.metrics.core import (
+    CRSE_CONVENTION,
     CrseConvention,
     crse,
     cte,
@@ -47,15 +48,72 @@ def test_cte_cancels_where_crse_does_not():
     assert crse(est, truth, convention=CrseConvention.SUM_SQUARES) == pytest.approx(np.sqrt(8.0))
 
 
-def test_crse_conventions_differ_by_sqrt_n():
-    """Documents the open ambiguity numerically -- see CrseConvention."""
+def test_crse_rejects_an_unhandled_convention():
+    """There is no else-fallthrough in crse(): an unknown member must raise, not quietly compute
+    the last branch. See the note in crse() -- a wrong metric that runs is the failure here."""
+    truth = np.tile([10.0, 0.0], (2, 1))
+    with pytest.raises(ValueError, match="unhandled CRSE convention"):
+        crse(truth, truth, convention="not_a_convention")  # type: ignore[arg-type]
+
+
+def test_the_three_crse_conventions_are_all_distinct():
+    """Hand-computed on four epochs of exactly 1 m error each.
+
+    Was a two-way test while the reading was open; extended rather than narrowed now that D-054
+    settled it, because the two rejected readings still have to be *available* and *correct* --
+    D-023's SUM_SQUARES number appears in earlier working, and being able to reproduce it is what
+    makes the supersession checkable.
+    """
     truth = np.tile([10.0, 0.0], (4, 1))
     est = np.tile([11.0, 0.0], (4, 1))
-    total = crse(est, truth, convention=CrseConvention.SUM_SQUARES)
+    total_abs = crse(est, truth, convention=CrseConvention.SUM_ABS)
+    total_sq = crse(est, truth, convention=CrseConvention.SUM_SQUARES)
     mean = crse(est, truth, convention=CrseConvention.RMS)
-    assert total == pytest.approx(2.0)  # sqrt(4 * 1^2)
+    assert total_abs == pytest.approx(4.0)  # sum(|1|) over 4 epochs -- Eq. (16)
+    assert total_sq == pytest.approx(2.0)  # sqrt(4 * 1^2)
     assert mean == pytest.approx(1.0)  # sqrt(mean(1^2))
-    assert total == pytest.approx(mean * np.sqrt(4))
+    assert total_sq == pytest.approx(mean * np.sqrt(4))
+
+
+def test_crse_default_is_the_papers_equation_16():
+    """D-054. The default is what every unqualified call in the harness gets, so pin it."""
+    assert CRSE_CONVENTION is CrseConvention.SUM_ABS
+    truth = np.tile([10.0, 0.0], (4, 1))
+    est = np.tile([11.0, 0.0], (4, 1))
+    assert crse(est, truth) == pytest.approx(4.0)
+
+
+def test_crse_takes_the_root_per_term_so_signs_do_not_cancel():
+    """Eq. (16)'s root is inside the sum, which is the whole difference from CTE (Eq. 17).
+
+    +2 and -2 cancel to zero in CTE and must sum to 4 in CRSE. An implementation that dropped the
+    abs -- computing sum(e_i) and calling it CRSE -- passes a same-sign test and fails here.
+    """
+    truth = np.array([[10.0, 0.0], [10.0, 0.0]])
+    est = np.array([[12.0, 0.0], [8.0, 0.0]])
+    assert cte(est, truth) == pytest.approx(0.0)
+    assert crse(est, truth, convention=CrseConvention.SUM_ABS) == pytest.approx(4.0)
+
+
+def test_only_sum_abs_makes_the_published_tables_consistent():
+    """The arithmetic behind D-054, executable rather than quoted.
+
+    WhONet's own tables (docs/DATASETS.md section 3), four outage lengths x two methods. A CRSE
+    that is a sum over N_t one-second epochs has a per-epoch error rate of CRSE / N_t, and that
+    rate should be roughly flat across outage lengths -- the vehicle does not get better or worse
+    at 180 s than at 30 s. Only Eq. (16)'s reading makes it flat.
+    """
+    lengths = np.array([30.0, 60.0, 120.0, 180.0])
+    physics = np.array([2.31, 4.56, 9.11, 13.67])
+    whonet = np.array([0.67, 1.31, 2.62, 3.93])
+
+    def spread(values: np.ndarray) -> float:
+        return float(values.max() / values.min())
+
+    for published in (physics, whonet):
+        assert spread(published / lengths) < 1.03, "SUM_ABS: per-epoch rate must be ~flat"
+        assert spread(published / np.sqrt(lengths)) > 2.0, "SUM_SQUARES must spread"
+        assert spread(published) > 5.0, "RMS must spread most"
 
 
 def test_drift_percent_hand_computed():

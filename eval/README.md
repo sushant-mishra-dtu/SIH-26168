@@ -29,7 +29,8 @@ and it is frozen after Gate 0.
 ## Metrics, briefly
 
 - **CTE** — Cumulative True Error: signed sum of per-second errors. *Not cross-track error.*
-- **CRSE** — Cumulative Root Square Error: RMS of per-second errors. *Not ATE.*
+- **CRSE** — Cumulative Root Square Error: **sum of absolute** per-second errors, `sum |e_i|`
+  (R-WhONet Eq. 16 — the root is per term, inside the sum, so it is not an RMS). *Not ATE.*
 - **drift %** — final position error / distance travelled. **This is what PS 26168 grades.**
   Report median **and** 95th percentile.
 - **yaw error** — wrapped to (−π, π], RMS and max.

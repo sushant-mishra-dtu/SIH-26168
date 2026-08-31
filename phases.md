@@ -312,7 +312,9 @@ Each block is self-contained. Give the agent §1–§4 plus one block.
 variance landed (done — D-045/D-046/D-047).
 
 **Files in scope.** `docs/EVALUATION.md`, `docs/DECISION_LOG.md` (append), `eval/splits.py`,
-`eval/metrics/core.py` (the `CRSE_CONVENTION` constant only), `tests/test_metrics.py`,
+`eval/metrics/core.py` (the `CrseConvention` enum, the `crse` branch and the `CRSE_CONVENTION`
+constant — widened from "the constant only" by R-4, which turned out to need a third member and a
+branch, not a flip), `tests/test_metrics.py`,
 `tests/test_protocol.py`, `README.md`, `docs/IMPLEMENTATION_PLAN.md` §7 (the R-6 move only).
 
 **Off limits.** `core/`, `models/`, `eval/loaders/columns.py`, the CI workflow.
@@ -1141,3 +1143,5 @@ decision log goes there instead; this section is for observations that are not y
 `2026-08-31` · **P-03** · **Exit criterion NOT met: full-state NEES is 29.90 against a band of [16.843, 19.195].** Propagation-only (18.287) and propagation+ZUPT (18.929) are in band and asserted; ZARU is the sole cause, with two measured contributors (`zaru_sigma` below the D-045 gyro noise, and the same gyro sample serving as both process noise and measurement). Neither fix is P-03's — the first is tuning an `R` to pass a consistency test. **Gate 1 must not be declared until P-04 closes this.** · D-053
 
 `2026-08-31` · **P-03** · `docs/ERROR_BUDGET.md` §9 wants the consistency envelope from D-053 (the per-block NEES table) added, and `docs/SE23_PROPAGATION.md` §10's open item "Initial `P₀`: currently a flat `1e-3·I`" is still open and is now also the blocker on test 11's full-state case. Both files are outside P-03's scope; flagged for P-04. · reported here
+
+`2026-08-31` · **P-01(1)** · **R-4 closed. CRSE is `Σ|eᵢ|` — a third convention, not a flip.** `CrseConvention.SUM_ABS` added with an explicit branch per member and no `else` fallthrough: `crse()` previously ended in a bare `return √(mean(…))`, so a member added without a branch would have silently computed RMS under the new name. Default flipped; `SUM_SQUARES` and `RMS` retained. `EVALUATION.md` §4.2 rewritten with Eq. (16)/(17) verbatim, `GLOSSARY.md` and `eval/README.md` corrected off "RMS of per-second errors". P-01's scope line widened — it said "the `CRSE_CONVENTION` constant only". Nothing invalidated: no CRSE has been computed on real data. · D-054
