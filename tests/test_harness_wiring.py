@@ -64,6 +64,7 @@ def synthetic_drive(
     accel_bias_x: float = 0.0,
     fix_interval_s: float = 9.0,
     name: str = "SYNTH",
+    t_rel_start_s: float = 0.0,
 ):
     """A level vehicle driving due north at a constant speed, as a `Sequence` + `TruthTrack` pair.
 
@@ -71,9 +72,13 @@ def synthetic_drive(
     `S-` side counts milliseconds from the start of the recording and the `V-` side counts seconds
     since midnight, offset by `START_OF_DAY_S`. A harness that quietly treats one as the other
     produces a trajectory that looks like a drive and is graded against the wrong stretch of road.
+
+    `t_rel_start_s` is the value the `S-` relative clock *opens* at. It defaults to zero, which is
+    what this fixture assumed for its whole life and is why nothing here could see the harness
+    deriving epochs from the row index; eleven of the fourteen real held-out stems open non-zero.
     """
     n = int(seconds * SAMPLE_RATE_HZ) + 1
-    t_rel = np.arange(n, dtype=float) / SAMPLE_RATE_HZ
+    t_rel = t_rel_start_s + np.arange(n, dtype=float) / SAMPLE_RATE_HZ
     t_tod = START_OF_DAY_S + t_rel
 
     lat = LAT0 + mps * t_rel * DEG_PER_M
@@ -115,6 +120,45 @@ def test_the_truth_clock_offset_is_recovered_from_the_fixes():
     `date`/`time_since_start_ms` pair can say so."""
     seq, _ = synthetic_drive()
     assert truth_clock_offset_s(seq) == pytest.approx(START_OF_DAY_S, abs=1e-3)
+
+
+def test_the_offset_is_recovered_when_the_relative_clock_does_not_open_at_zero():
+    """`truth_clock_offset_s` differences the two clocks, so a non-zero opening must cancel."""
+    seq, _ = synthetic_drive(t_rel_start_s=1118.51)
+    assert truth_clock_offset_s(seq) == pytest.approx(START_OF_DAY_S, abs=1e-3)
+
+
+def test_an_excerpt_whose_clock_opens_late_is_graded_against_the_road_it_drove():
+    """The epoch of a window comes from the row's own timestamp, never from its row index.
+
+    Vta11, Vta12, Vta9, Vtb3, Vtb8, Vtb11, Vw6, Vw7, Vw8, Vw16b and Vw17 are excerpts that keep
+    the parent recording's clock: `time_since_start_ms` opens at 1118 s on Vta11 and 13365 s on
+    Vw8. Deriving the epoch as `start_idx / SAMPLE_RATE_HZ + offset` assumes that opening is
+    zero, so it addressed truth 1118 s -- and on Vw8 3.7 hours -- before the window actually
+    occurred. The truth track raises rather than interpolating across that gap, which is why this
+    surfaced as a hard failure on the first real sweep and not as a quietly wrong number.
+    """
+    start = 1118.51
+    seq, truth = synthetic_drive(t_rel_start_s=start)
+    results = evaluate_sequence(seq, truth, (60,))
+
+    assert results, "the sweep produced no windows to grade"
+    assert all(np.isfinite(r.metrics.drift_pct) for r in results)
+
+    # The opening value is a property of the recording, not of the road, so the same drive must
+    # yield the same number of graded windows either way.
+    at_zero = evaluate_sequence(*synthetic_drive(t_rel_start_s=0.0), (60,))
+    assert len(results) == len(at_zero)
+
+    # What separates: each method must score the same whether the clock opens at zero or at
+    # `start`, because it is the same road either way. The absolute bound is chosen against the
+    # failure it has to catch -- addressing the window 1118 s early points it at a stretch of road
+    # 16.8 km away, which does not perturb a drift figure, it replaces it. The methods differ
+    # hugely from each other here (the filter has no speed input on this fixture and sits at
+    # ~100 %, the strapdown is exact at ~1e-9 %), so they are compared like for like.
+    assert [r.method for r in results] == [r.method for r in at_zero]
+    for late, zero in zip(results, at_zero, strict=True):
+        assert late.metrics.drift_pct == pytest.approx(zero.metrics.drift_pct, abs=1e-3)
 
 
 def test_a_sequence_whose_fixes_carry_no_date_is_refused():
