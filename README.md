@@ -257,7 +257,8 @@ idr-26168/
 | 8 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, CI gates, reproducibility rules. |
 | — | [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md) | Superseded by the plan of record. Kept for the record. |
 | — | [docs/DECISION_LOG.md](docs/DECISION_LOG.md) | Append-only. Every non-obvious choice and its reason. |
-| — | [docs/METHOD.md](docs/METHOD.md) | Grows into the submission write-up. Fill as you go. |
+| — | [docs/METHOD.md](docs/METHOD.md) | **The write-up.** First full pass, 1 Sep. §0 tags every number with its provenance; §12 (Results) is deliberately empty and says why. |
+| — | [docs/SUBMISSION_AUDIT.md](docs/SUBMISSION_AUDIT.md) | The pre-submission checklist, with evidence per line and the gaps named as gaps. |
 
 ---
 
