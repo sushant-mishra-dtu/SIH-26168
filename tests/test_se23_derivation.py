@@ -561,13 +561,71 @@ def test_propagate_linearises_at_the_midpoint_not_the_step_start():
     )
 
 
+#: Orthogonality budget for a re-orthonormalised rotation, in units of machine epsilon.
+#:
+#: `orthonormalise` is an SVD round-trip, so `R^T R - I` is O(n * eps) with a constant set by the
+#: runner's LAPACK build, not by our code. Measured: **3.00 eps** on numpy 2.4.6 and **5.50 eps**
+#: on numpy 2.5.2. The absolute `1e-15` this replaces is **4.50 eps** -- it sits *between* those
+#: two, so the assertion was a coin flip on the BLAS the runner happened to ship, and it went red
+#: on CI's py3.12 job while py3.10 stayed green.
+#:
+#: 32 eps is ~6x the worst residual observed and ~11x *below* the un-orthonormalised drive, which
+#: `test_reorthonormalisation_is_what_keeps_r_there` measures at 349 eps. The bound is therefore
+#: loose against float noise and tight against the failure it exists to catch.
+SO3_ORTHOGONALITY_EPS = 32
+
+
 def test_reorthonormalisation_keeps_r_on_so3():
+    """R stays on SO(3) across the re-orthonormalisation cadence.
+
+    The bound is in machine epsilon rather than in absolute terms, because the quantity being
+    bounded is float noise from an SVD and its size is a property of LAPACK. See
+    `SO3_ORTHOGONALITY_EPS`, and see the test below for the evidence that the bound still
+    discriminates -- a tolerance nobody has shown to separate anything is not a tolerance.
+    """
+    eps = float(np.finfo(float).eps)
     f = InEKF()
     for _ in range(REORTHONORMALISE_EVERY):
         f.propagate(np.array([0.05, -0.02, 0.35]), np.array([0.4, -0.3, -9.6]), 0.01)
     assert f.steps % REORTHONORMALISE_EVERY == 0, "the counter must have reached the cadence"
-    assert np.max(np.abs(f.state.R.T @ f.state.R - np.eye(3))) < 1e-15
-    assert np.linalg.det(f.state.R) == pytest.approx(1.0, abs=1e-15)
+
+    orthogonality = float(np.max(np.abs(f.state.R.T @ f.state.R - np.eye(3))))
+    assert orthogonality < SO3_ORTHOGONALITY_EPS * eps, (
+        f"R^T R - I is {orthogonality / eps:.2f} eps, over the {SO3_ORTHOGONALITY_EPS} eps budget"
+    )
+    assert np.linalg.det(f.state.R) == pytest.approx(1.0, abs=SO3_ORTHOGONALITY_EPS * eps)
+
+
+def test_reorthonormalisation_is_what_keeps_r_there():
+    """**The discriminating half**, without which the test above bounds nothing.
+
+    Drive the identical inputs through `propagate_nominal` with no re-orthonormalisation at all
+    and the drift off SO(3) is **349 eps** -- 11x the budget and two orders above the 3-5 eps a
+    re-orthonormalised run leaves. So the bound above is not merely satisfied, it separates the
+    two cases by an order of magnitude in each direction.
+
+    Asserted as a ratio rather than as two absolutes, so it cannot start passing for the reason
+    the old absolute threshold started failing.
+    """
+    eps = float(np.finfo(float).eps)
+    gyro, accel, dt = np.array([0.05, -0.02, 0.35]), np.array([0.4, -0.3, -9.6]), 0.01
+
+    f = InEKF()
+    rot, v, p = np.eye(3), np.zeros(3), np.zeros(3)
+    for _ in range(REORTHONORMALISE_EVERY):
+        f.propagate(gyro, accel, dt)
+        rot, v, p = propagate_nominal(rot, v, p, gyro, accel, dt)
+
+    kept = float(np.max(np.abs(f.state.R.T @ f.state.R - np.eye(3))))
+    drifted = float(np.max(np.abs(rot.T @ rot - np.eye(3))))
+    assert drifted > SO3_ORTHOGONALITY_EPS * eps, (
+        f"the un-orthonormalised run only drifts {drifted / eps:.1f} eps, inside the "
+        f"{SO3_ORTHOGONALITY_EPS} eps budget -- the budget no longer discriminates"
+    )
+    assert drifted > 10 * kept, (
+        f"re-orthonormalisation buys only {drifted / kept:.1f}x ({kept / eps:.2f} eps against "
+        f"{drifted / eps:.1f} eps); it is supposed to buy two orders of magnitude"
+    )
 
 
 # ------------------------------------------------------------------------------------------
