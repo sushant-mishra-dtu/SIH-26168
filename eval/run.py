@@ -387,6 +387,13 @@ def evaluate_sequence(
     gyro, accel, t_rel_s = imu_stream(seq)
     dt = assert_uniform_grid(seq.name, t_rel_s)
     offset = truth_clock_offset_s(seq)
+    # Absolute time of day per sample. **Not** `index / SAMPLE_RATE_HZ + offset`: eleven of the
+    # fourteen held-out stems are excerpts cut from a longer recording and keep that recording's
+    # clock, so `time_since_start_ms` opens at 1118 s on Vta11 and 13365 s on Vw8 rather than at
+    # zero. Deriving the epoch from the row index instead of the row's own timestamp shifts the
+    # window by exactly that opening value -- up to 3.7 hours -- and grades the drive against a
+    # stretch of road it never travelled.
+    t_abs_s = t_rel_s + offset
     fix_idx, fix_ned, fix_sigma = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
 
     n = gyro.shape[0]
@@ -402,11 +409,11 @@ def evaluate_sequence(
             mask_gnss(n, windows), cfg=cfg,
         )
         for outage in windows:
-            t0 = outage.start_idx / SAMPLE_RATE_HZ + offset
+            t0 = float(t_abs_s[outage.start_idx])
             trajectories = {
                 "filter": window_trajectory(run.position_ned, outage),
                 "strapdown": _strapdown_for(gyro, accel, dt, outage, truth, t0),
-                "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, offset, t0),
+                "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, t_abs_s, t0),
             }
             for method, traj in trajectories.items():
                 if traj is None:
@@ -478,7 +485,7 @@ def _strapdown_for(gyro, accel, dt, outage: Outage, truth, t0_s: float):
     )
 
 
-def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, offset: float, t0_s: float):
+def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, t_abs_s: np.ndarray, t0_s: float):
     """The GNSS-available baseline over one window, or None if no fix precedes it.
 
     None rather than an exception: a window that opens before the receiver's first fix is a real
@@ -488,7 +495,7 @@ def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, offset: float, t0_s: 
     """
     from eval.baselines import epoch_times
 
-    t_fix = fix_idx / SAMPLE_RATE_HZ + offset
+    t_fix = t_abs_s[fix_idx]
     times = epoch_times(t0_s, outage.length_s)
     usable = t_fix <= times[-1]
     if not usable.any() or t_fix[usable][0] > times[0]:
