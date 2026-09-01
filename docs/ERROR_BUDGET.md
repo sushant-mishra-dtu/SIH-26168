@@ -149,6 +149,41 @@ why R_sv goes into the filter state and is estimated recursively under NHC, rath
 once by PCA at startup (D-006). It is also why the mount-disturbance detector matters: a phone
 knocked by 5° silently costs 87 m over the same outage.
 
+### 5.1 Measured, P-11
+
+`R_sv` is initialised by PCA on horizontal specific force
+([`core.reference.inekf.pca_mount_yaw`](../core/reference/inekf.py)), which also reports the
+**spread** `P₀`'s mount block should carry (§10) — the asymptotic standard error of a 2D
+principal-axis angle, `√(λ₁λ₂ / (n_eff (λ₁−λ₂)²))`, checked by Monte Carlo to within 7% over
+eigenvalue ratios 2–25. `n_eff` is the AR(1) effective sample count from the measured lag-1
+autocorrelation, *not* the sample count: 10 Hz accelerometer samples are not independent draws and
+using `n` understates the spread. PCA returns an **axis**, so forward and backward share a
+principal component; the sign is resolved against a forward-acceleration reference and, without
+one, the 180° ambiguity is reported rather than guessed — a 180° mount error is a vehicle driving
+backwards and will not converge out under NHC.
+
+A knock is then handled by widening the mount block, never by correcting the rotation: a bump is
+news about *uncertainty*, and its actual angle is not observable from the gyro energy that detected
+it. Measured over 60 s of cruising at 15 m/s after a 5° knock:
+
+| | Residual mount-yaw error |
+|---|---|
+| Mount block re-inflated after the knock | **0.43°** |
+| Not re-inflated | **8.56°** |
+
+Not re-inflating is worse than the knock itself: the filter carries a stale rotation behind a
+covariance that says the rotation is known — `mount_rw` is zero (D-048), so nothing else ever
+widens it — and the wrong mount drags the rest of the state with it. At 16.7 m/s over 60 s, 8.56°
+is roughly 150 m of lateral error against a 100 m budget.
+
+**Open, and it is a real gap (D-075).** `mount_disturbance_gyro_thresh = 3.0` rad/s cannot see the
+knock this section is about. A knock of angle θ delivered inside one sample presents at most θ/Δt
+of *measured* rate, so at the `S-` stream's 10 Hz the threshold corresponds to a **17.2°** knock;
+a 5° one presents 0.87 rad/s, 3.4× under, and the detector does not fire. The threshold has no
+source in this repo and is not tuned against a synthetic knock. It needs a recording of a real
+phone being knocked in a cradle — ten minutes of seat A's time — and until it has one, the ~1°
+requirement above rests on the PCA initialiser plus whatever NHC re-estimates unaided.
+
 ---
 
 ## 6. Provisional allocation

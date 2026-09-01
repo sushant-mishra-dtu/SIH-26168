@@ -310,7 +310,137 @@ REFERENCE_SPEED_MPS = 16.7
 MOUNT_KNOCK_RAD = float(np.deg2rad(5.0))
 
 
-def initial_covariance(cfg: FilterConfig | None = None) -> np.ndarray:
+@dataclass(frozen=True)
+class MountInit:
+    """What the PCA initialiser found: the mount rotation, and how well it is pinned down.
+
+    `spread_rad` is the standard error of the principal-axis angle, which is what `P0`'s mount
+    block wants (D-055 uses a 5-degree fallback in its absence). `sign_resolved` is the half of the
+    answer PCA cannot supply on its own.
+    """
+
+    r_sv: np.ndarray
+    yaw_rad: float
+    spread_rad: float
+    sign_resolved: bool
+    eigenvalue_ratio: float
+    n_effective: float
+
+    @property
+    def yaw_deg(self) -> float:
+        return float(np.degrees(self.yaw_rad))
+
+    @property
+    def spread_deg(self) -> float:
+        return float(np.degrees(self.spread_rad))
+
+
+def pca_mount_yaw(
+    accel: np.ndarray, gravity: np.ndarray, forward_reference: np.ndarray | None = None
+) -> MountInit:
+    """Initialise the phone->vehicle rotation `R_sv` by PCA on horizontal specific force.
+
+    **An initialiser only** (D-006). One-shot alignment is fragile and cannot track a mount that
+    shifts, so `R_sv` lives in the filter state and NHC keeps estimating it; this supplies the
+    starting point and, just as importantly, the spread `P0`'s mount block should carry.
+
+    Method. `gravity` fixes the vertical, so the phone's horizontal plane is known; within it, a
+    car's specific force is dominated by braking and acceleration along its own forward axis, with
+    much less side to side. The first principal component of the horizontal specific force is
+    therefore the vehicle's forward axis **expressed in the phone frame**, which is exactly what
+    the mount yaw is -- no navigation-frame quantity is needed and none is used.
+
+    **PCA returns an axis, not a direction.** Forward and backward have the same principal
+    component, and nothing in a covariance can tell them apart. `forward_reference` resolves it: a
+    per-sample signed scalar that grows with forward acceleration -- the finite-differenced
+    `gps_speed_kmh` is the one the `S-` stream can supply -- and the sign is chosen so the two
+    correlate positively. Without it `sign_resolved` is False and the yaw carries a 180-degree
+    ambiguity that the caller must resolve before the result is used. It is returned rather than
+    guessed because a 180-degree mount error is not a large version of a small one: it is a
+    vehicle driving backwards, and it will not converge out under NHC.
+
+    `spread_rad` is the asymptotic standard error of a 2D principal-axis angle,
+    `sqrt(l1 l2 / (n_eff (l1 - l2)^2))`, checked by Monte Carlo to within 7% over eigenvalue
+    ratios 2-25 and n from 200 to 5000. `n_eff` is **not** the sample count: accelerometer samples
+    at 10 Hz are strongly serially correlated, and using `n` would understate the spread by the
+    square root of the correlation time. It is the AR(1) effective sample size
+    `n (1 - rho) / (1 + rho)` from the measured lag-1 autocorrelation of the forward projection --
+    derived, and labelled as derived, in the same spirit as D-045's Gauss-Markov bias noises.
+    """
+    accel = np.asarray(accel, dtype=float)
+    gravity = np.asarray(gravity, dtype=float).ravel()
+    if accel.ndim != 2 or accel.shape[1] != 3:
+        raise ValueError(f"expected (n, 3) accelerometer samples, got {accel.shape}")
+    if gravity.shape != (3,):
+        raise ValueError(f"expected a 3-vector gravity direction, got {gravity.shape}")
+    g_norm = float(np.linalg.norm(gravity))
+    if g_norm < 1e-6:
+        raise ValueError("gravity direction has no magnitude; the vertical cannot be established")
+    if accel.shape[0] < 3:
+        raise ValueError(
+            f"{accel.shape[0]} samples cannot support a principal axis and its standard error"
+        )
+
+    up = gravity / g_norm
+    # The phone's own x axis, projected into the horizontal plane, is the reference direction the
+    # reported yaw is measured from -- so `e1` is not an arbitrary basis choice.
+    x_phone = np.array([1.0, 0.0, 0.0])
+    if abs(float(up @ x_phone)) > 0.999:  # phone stood on its nose: x is the vertical
+        x_phone = np.array([0.0, 1.0, 0.0])
+    e1 = x_phone - float(up @ x_phone) * up
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(up, e1)
+
+    horizontal = np.column_stack([accel @ e1, accel @ e2])
+    horizontal = horizontal - horizontal.mean(axis=0)
+    cov = np.cov(horizontal, rowvar=False)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    l2, l1 = float(eigvals[0]), float(eigvals[1])
+    axis = eigvecs[:, 1]
+
+    projection = horizontal @ axis
+    sign_resolved = False
+    if forward_reference is not None:
+        ref = np.asarray(forward_reference, dtype=float).ravel()
+        if ref.shape[0] != projection.shape[0]:
+            raise ValueError(
+                f"forward_reference has {ref.shape[0]} samples against {projection.shape[0]} "
+                "accelerometer samples; they must be the same stream"
+            )
+        centred = ref - ref.mean()
+        if np.any(centred):
+            if float(projection @ centred) < 0:
+                axis = -axis
+                projection = -projection
+            sign_resolved = True
+
+    # AR(1) effective sample size: 10 Hz accelerometer samples are not independent draws.
+    n = projection.shape[0]
+    a, b = projection[:-1], projection[1:]
+    denom = float(np.sqrt((a @ a) * (b @ b)))
+    rho = float(np.clip((a @ b) / denom, -0.999, 0.999)) if denom > 0 else 0.0
+    n_eff = max(2.0, n * (1.0 - rho) / (1.0 + rho))
+
+    gap = l1 - l2
+    spread = float(np.sqrt(l1 * l2 / (n_eff * gap**2))) if gap > 0 else float(np.pi / 2)
+
+    forward = axis[0] * e1 + axis[1] * e2
+    down = -up
+    right = np.cross(down, forward)
+    r_sv = orthonormalise(np.vstack([forward, right, down]))
+    return MountInit(
+        r_sv=r_sv,
+        yaw_rad=float(np.arctan2(axis[1], axis[0])),
+        spread_rad=min(spread, float(np.pi / 2)),
+        sign_resolved=sign_resolved,
+        eigenvalue_ratio=float(l1 / l2) if l2 > 0 else float("inf"),
+        n_effective=float(n_eff),
+    )
+
+
+def initial_covariance(
+    cfg: FilterConfig | None = None, *, mount_sigma_rad: float | None = None
+) -> np.ndarray:
     """`P0`, block by block, with every entry traceable to a section of docs/ERROR_BUDGET.md.
 
     Replaces the flat `1e-3 * I` of plan item R-3 (D-055). One number, sigma = 0.0316, carried
@@ -343,8 +473,8 @@ def initial_covariance(cfg: FilterConfig | None = None) -> np.ndarray:
       reference speed gives 14.6 deg.
     * **Position** is the fix itself; **velocity** is that same differenced pair.
     * **Both bias blocks** are the D-045 Allan run's measured bias instabilities.
-    * **The mount block** is the one entry with no measured source, and it is not invented. See
-      below.
+    * **The mount block** takes `mount_sigma_rad` when the PCA initialiser (`pca_mount_yaw`)
+      has run and measured a spread; without one it falls back to a stated 5 degrees. See below.
 
     Returns a diagonal matrix: `P0` is a *prior*, and the correlations between blocks are exactly
     what the filter has not learned yet.
@@ -376,7 +506,9 @@ def initial_covariance(cfg: FilterConfig | None = None) -> np.ndarray:
     # correct a real misalignment are not rejected at the gate. Same reasoning as D-048, opposite
     # direction, because here zero is not available. P-11 replaces this with the initialiser's
     # measured spread.
-    sigma_mount = MOUNT_KNOCK_RAD
+    sigma_mount = MOUNT_KNOCK_RAD if mount_sigma_rad is None else float(mount_sigma_rad)
+    if sigma_mount <= 0:
+        raise ValueError(f"mount_sigma_rad must be positive, got {mount_sigma_rad}")
 
     sd = np.empty(ERROR_STATE_DIM)
     sd[0:2] = sigma_level  # roll, pitch
@@ -827,6 +959,34 @@ class InEKF:
             return False
         self._apply_update(z, h, r)
         return True
+
+    def reinflate_mount(self, sigma_rad: float = MOUNT_KNOCK_RAD) -> None:
+        """Widen the mount block of `P` after a detected knock, so `R_sv` is re-estimated.
+
+        Call this when `detect_mount_disturbance` fires. Without it the filter carries a stale
+        rotation with a covariance that says the rotation is known -- and because `mount_rw` is
+        zero (D-048) nothing else will ever widen it again. A 5-degree knock costs ~87 m over a
+        60 s outage (docs/ERROR_BUDGET.md section 5) and **nothing else in the system reports it**:
+        the phone is still level, the IMU still reads plausibly, the trajectory still looks like a
+        drive, and only the mount angle is wrong.
+
+        Variances add: the block's existing uncertainty is kept and the knock's is added on top,
+        rather than the block being reset to a fixed value. A reset would *shrink* the covariance
+        of a filter that had already lost track, which is the direction that cannot recover.
+
+        The default is section 5's 5 degrees -- the same figure `initial_covariance` uses and the
+        magnitude `mount_disturbance_gyro_thresh` is there to catch. It is a stated number, not a
+        measured one; a bump's actual angle is not observable from the gyro energy that detected
+        it, which is exactly why the covariance is widened rather than the rotation corrected.
+
+        The state is untouched. A knock is news about *uncertainty*, not a measurement of a new
+        angle: NHC re-estimates `R_sv` from the widened prior, with gain equal to forward speed
+        (section 7.2), so the re-estimation happens on a motorway and barely at all in a car park.
+        """
+        if sigma_rad <= 0:
+            raise ValueError(f"re-inflation sigma must be positive, got {sigma_rad}")
+        idx = np.arange(ERROR_STATE_DIM)[IDX_MOUNT]
+        self.P[idx, idx] += float(sigma_rad) ** 2
 
     def update_speed(self, speed_mps: float, variance: float) -> None:
         """Learned forward-speed pseudo-measurement with its predicted variance.
