@@ -51,8 +51,14 @@ from eval.outages.inject import (
     generate_sweep,
     mask_gnss,
 )
-from eval.splits import LONG_OUTAGE, assert_split_disjoint, assert_split_is_loadable, test_sequences
-from idr.geo import geodetic_to_ned
+from eval.splits import (
+    LONG_OUTAGE,
+    MANDATORY_PLOT_SEQUENCES,
+    assert_split_disjoint,
+    assert_split_is_loadable,
+    test_sequences,
+)
+from idr.geo import geodetic_to_ned, wrap_to_pi
 from idr.stamp import Stamp, seed_everything
 
 DEFAULT_SEED = 0
@@ -344,13 +350,29 @@ class WindowResult:
 
 
 def evaluate_sequence(
-    seq: Sequence, truth, lengths: list[int], *, cfg: FilterConfig | None = None
+    seq: Sequence,
+    truth,
+    lengths: list[int],
+    *,
+    cfg: FilterConfig | None = None,
+    replay: dict | None = None,
+    stamp: Stamp | None = None,
 ) -> list[WindowResult]:
     """Every window of every length for one sequence, all three methods.
 
     One filter pass **per outage length**, because the GNSS mask differs between lengths and a
     single pass cannot have GNSS both open and closed at the same sample.
+
+    If `replay` is a dict and this sequence is in `MANDATORY_PLOT_SEQUENCES`, the first
+    `REPLAY_LENGTH_S` window is recorded into it for the renderer, stamped with `stamp`. First
+    rather than a chosen one: picking the window that plots best is the same error as picking the
+    sequence that scores best.
     """
+    if replay is not None and stamp is None:
+        raise ValueError(
+            "a replay record must carry the run's stamp; an artefact whose provenance came from a "
+            "placeholder is one nobody can regenerate (H-5)"
+        )
     cfg = cfg or FilterConfig()
     report = align_to_sequence(seq, truth)
     if not report.is_usable:
@@ -398,7 +420,51 @@ def evaluate_sequence(
                         metrics=score(traj, truth, outage, t0_s=t0),
                     )
                 )
+
+            if (
+                replay is not None
+                and seq.name in MANDATORY_PLOT_SEQUENCES
+                and length_s == REPLAY_LENGTH_S
+                and seq.name not in replay
+            ):
+                replay[seq.name] = _replay_record(
+                    seq, truth, outage, t0, run, trajectories, gyro, accel, stamp=stamp
+                )
     return out
+
+
+def _cumulative(trajectory) -> np.ndarray:
+    """Displacements -> positions relative to the window start, with the leading zero."""
+    disp = np.asarray(trajectory.displacements_ned, dtype=float)
+    return np.vstack([np.zeros((1, 2)), np.cumsum(disp, axis=0)])
+
+
+def _replay_record(seq, truth, outage, t0, run, trajectories, gyro, accel, *, stamp):
+    """Assemble one window's trajectory record for the renderer."""
+    from eval.baselines import epoch_times
+
+    times = epoch_times(t0, outage.length_s)
+    true_disp = truth.displacements_ned(times)
+    truth_ned = np.vstack([np.zeros((1, 2)), np.cumsum(true_disp, axis=0)])
+    idx = np.arange(outage.start_idx, outage.end_idx + 1, EPOCH_STRIDE)
+    gnss = trajectories["gnss_available"]
+    return trajectory_record(
+        sequence=seq.name,
+        outage=outage,
+        stamp=stamp,
+        truth_ned=truth_ned,
+        filter_ned=_cumulative(trajectories["filter"]),
+        strapdown_ned=_cumulative(trajectories["strapdown"]),
+        gnss_ned=None if gnss is None else _cumulative(gnss),
+        position_sigma_m=np.sqrt(run.position_var[idx]),
+        filter_yaw_rad=run.yaw_rad[idx],
+        truth_yaw_rad=np.concatenate(
+            [[course_over_ground(true_disp)[0]], course_over_ground(true_disp)]
+        ),
+        accel=accel[outage.start_idx : outage.end_idx],
+        gyro=gyro[outage.start_idx : outage.end_idx],
+        distance_m=truth.distance_m(times[0], times[-1]),
+    )
 
 
 def _strapdown_for(gyro, accel, dt, outage: Outage, truth, t0_s: float):
@@ -428,6 +494,77 @@ def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, offset: float, t0_s: 
     if not usable.any() or t_fix[usable][0] > times[0]:
         return None
     return gnss_available(t_fix[usable], fix_ned[usable][:, :2], times)
+
+
+#: Outage length, in seconds, of the window written out for the replay renderer. 60 s is the
+#: reference case the whole error budget is sized against (docs/ERROR_BUDGET.md section 1).
+REPLAY_LENGTH_S = 60
+
+#: Schema version of a trajectory record. The renderer refuses a record it does not recognise
+#: rather than drawing an older layout's fields in the wrong places.
+TRAJECTORY_SCHEMA = "idr-trajectory/1"
+
+
+def trajectory_record(
+    *,
+    sequence: str,
+    outage: Outage,
+    stamp: Stamp,
+    truth_ned: np.ndarray,
+    filter_ned: np.ndarray,
+    strapdown_ned: np.ndarray,
+    gnss_ned: np.ndarray | None,
+    position_sigma_m: np.ndarray,
+    filter_yaw_rad: np.ndarray,
+    truth_yaw_rad: np.ndarray,
+    accel: np.ndarray,
+    gyro: np.ndarray,
+    distance_m: float,
+) -> dict:
+    """One outage window, in the form the replay renderer reads. **Every field is measured here.**
+
+    The renderer contains no physics and no simulation, so anything it can display has to be
+    produced by this function -- which is why the per-epoch drift-% and yaw error are computed on
+    this side rather than left for the page to work out. A renderer that computes a displayed
+    number is a renderer that can display a number the evaluation never produced.
+
+    Positions are cumulative NED metres relative to the outage's first truth position, one per 1 s
+    epoch boundary. `position_sigma_m` is the filter's own `sqrt(diag(P))` on north and east at the
+    same boundaries -- the ellipse that grows through the outage and collapses at re-acquisition.
+    The sensor traces are the raw `S-` stream at 10 Hz, so there are `10 x length_s` of them
+    against `length_s + 1` positions; the renderer captions the rate and must not imply 200 Hz.
+    """
+    truth_ned = np.asarray(truth_ned, dtype=float)
+    n = truth_ned.shape[0]
+    drift = [
+        float(100.0 * np.linalg.norm(filter_ned[k] - truth_ned[k]) / distance_m)
+        if distance_m > 0 else 0.0
+        for k in range(n)
+    ]
+    yaw_err_deg = [
+        float(np.degrees(wrap_to_pi(filter_yaw_rad[k] - truth_yaw_rad[k]))) for k in range(n)
+    ]
+    return {
+        "schema": TRAJECTORY_SCHEMA,
+        "stamp": stamp.caption(),
+        "reproducible": stamp.is_reproducible(),
+        "sequence": sequence,
+        "stream": "S-",
+        "imu_rate_hz": SAMPLE_RATE_HZ,
+        "length_s": outage.length_s,
+        "start_idx": outage.start_idx,
+        "distance_m": float(distance_m),
+        "epoch_s": list(range(n)),
+        "truth_ned": truth_ned.tolist(),
+        "filter_ned": np.asarray(filter_ned, dtype=float).tolist(),
+        "strapdown_ned": np.asarray(strapdown_ned, dtype=float).tolist(),
+        "gnss_ned": None if gnss_ned is None else np.asarray(gnss_ned, dtype=float).tolist(),
+        "position_sigma_m": np.asarray(position_sigma_m, dtype=float).tolist(),
+        "drift_pct": drift,
+        "yaw_error_deg": yaw_err_deg,
+        "accel_mps2": np.asarray(accel, dtype=float).tolist(),
+        "gyro_rps": np.asarray(gyro, dtype=float).tolist(),
+    }
 
 
 # --------------------------------------------------------------------------------------------
@@ -476,8 +613,11 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
     }
 
 
-def write_artefacts(out: Path, stamp: Stamp, results: list[WindowResult]) -> dict:
-    """Write `summary.json` and `windows.csv`, both carrying the stamp.
+def write_artefacts(
+    out: Path, stamp: Stamp, results: list[WindowResult], replay: dict[str, dict] | None = None
+) -> dict:
+    """Write `summary.json`, `windows.csv` and one `trajectory_<seq>.json` per plotted
+    sequence, all carrying the stamp.
 
     The stamp goes **inside** the artefact, never into a filename: a filename is renamed, copied
     and pasted into a slide, and the provenance is lost at the first of those (H-5).
@@ -491,8 +631,14 @@ def write_artefacts(out: Path, stamp: Stamp, results: list[WindowResult]) -> dic
         "n_windows": len(results),
         "by_method": by_method,
         "gate1": gate1_ratio(by_method),
+        "trajectories": sorted(replay or {}),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    for name, record in sorted((replay or {}).items()):
+        (out / f"trajectory_{name}.json").write_text(
+            json.dumps(record, indent=2), encoding="utf-8"
+        )
 
     rows = [r.as_row() for r in results]
     with (out / "windows.csv").open("w", encoding="utf-8", newline="") as fh:
@@ -577,11 +723,14 @@ def main(argv: list[str] | None = None) -> int:
 
     sequences = load_split(args.data, test_sequences())
     results: list[WindowResult] = []
+    replay: dict[str, dict] = {}
     skipped: list[str] = []
     for name, seq in sorted(sequences.items()):
         try:
             truth = load_truth(paired_truth_path(name, args.data), name)
-            results.extend(evaluate_sequence(seq, truth, args.lengths))
+            results.extend(
+                evaluate_sequence(seq, truth, args.lengths, replay=replay, stamp=stamp)
+            )
         except SequenceUnusable as exc:
             skipped.append(f"{name}: {exc}")
             print(f"[idr-eval] SKIPPED {exc}", file=sys.stderr)
@@ -596,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    summary = write_artefacts(args.out, stamp, results)
+    summary = write_artefacts(args.out, stamp, results, replay)
     if skipped:
         summary["skipped"] = skipped
         (args.out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
