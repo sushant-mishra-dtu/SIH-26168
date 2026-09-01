@@ -262,14 +262,24 @@ def initial_state_from_truth(truth, t_start_s: float) -> tuple[np.ndarray, np.nd
     return yaw_only_rotation(yaw), v0
 
 
-def score(trajectory: BaselineTrajectory, truth, outage: Outage) -> OutageMetrics:
+def score(
+    trajectory: BaselineTrajectory, truth, outage: Outage, *, t0_s: float | None = None
+) -> OutageMetrics:
     """Score any baseline against the paired `V-` truth over one window.
 
     Every number comes from `eval.metrics.core.evaluate_outage`; nothing is recomputed here. The
     truth heading is `course_over_ground` on the truth's own displacements -- the same function the
     baseline used -- because the truth track carries lat, lon and time of day and no heading.
+
+    `t0_s` is the window's start **on the truth track's clock**, which is seconds since midnight
+    (`eval.loaders.truth.load_truth`), while `outage.start_idx` counts samples on the `S-`
+    stream's own clock. The two are different clocks and only line up by accident, so the caller
+    computes the offset -- `eval.run.truth_clock_offset_s` does it from the `date` column the
+    fixes carry, and `eval.loaders.truth.align_to_sequence` is what says whether the pairing is
+    trustworthy at all. Omitting it falls back to treating sample index as seconds from the truth
+    track's own origin, which is right for a synthetic track and wrong for every real one.
     """
-    t0 = outage.start_idx / SAMPLE_RATE_HZ
+    t0 = outage.start_idx / SAMPLE_RATE_HZ if t0_s is None else float(t0_s)
     times = epoch_times(t0, outage.length_s)
     true_disp = truth.displacements_ned(times)
     return evaluate_outage(
