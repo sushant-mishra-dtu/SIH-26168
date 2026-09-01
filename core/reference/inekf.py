@@ -55,6 +55,15 @@ SMALL_ANGLE = 1e-3
 #: group is slow but not zero, and a non-orthonormal R makes R.T stop being R^-1 in every Jacobian.
 REORTHONORMALISE_EVERY = 1000
 
+#: Measured angular random walk, worst axis, from IO-VNBD's own stationary segments (D-045,
+#: docs/ERROR_BUDGET.md section 9.1). Named at module scope because two `FilterConfig` fields are
+#: derived from it and a copy-paste between them is exactly the drift a test cannot see.
+GYRO_ARW_MEASURED = 4.11e-4  # rad/s/sqrt(Hz) == 1.41 deg/sqrt(hr)
+
+#: `S-` stream rate, measured from the timestamps (D-047: median dt = 100.0 ms).
+IMU_RATE_HZ = 10.0
+_SQRT_IMU_RATE_HZ = float(np.sqrt(IMU_RATE_HZ))
+
 
 # --------------------------------------------------------------------------------------------
 # SE_2(3) group operations
@@ -215,7 +224,7 @@ class FilterConfig:
     """
 
     # Allan-variance-derived, per docs/ERROR_BUDGET.md section 9. Measured on IO-VNBD, not assumed.
-    gyro_arw: float = 4.11e-4  # rad/s/sqrt(Hz)  == 1.41 deg/sqrt(hr)
+    gyro_arw: float = GYRO_ARW_MEASURED  # rad/s/sqrt(Hz)  == 1.41 deg/sqrt(hr)
     accel_vrw: float = 7.46e-3  # m/s^2/sqrt(Hz) == 0.45 m/s/sqrt(hr)
 
     # Not measured: a 507 s record cannot resolve the +1/2 rate-random-walk slope (it reaches
@@ -240,7 +249,19 @@ class FilterConfig:
     nhc_sigma_vertical: float = 0.5  # m/s
 
     zupt_sigma: float = 0.02  # m/s
-    zaru_sigma: float = 1.0e-3  # rad/s
+
+    # ZARU's innovation is `z = w~ - b_g_hat` (SE23_PROPAGATION.md section 7.3), whose noise is
+    # the gyro *white* noise per sample -- so R is not a free parameter, it is the Allan run's
+    # own number at the stream's own rate: `gyro_arw / sqrt(dt) = gyro_arw * sqrt(rate)`
+    # (D-056). Derived here rather than typed, so it cannot drift away from `gyro_arw`; the
+    # relationship is pinned by a test. The 1.0e-3 it replaces predated the Allan run and was
+    # 1.3x understated in sigma, 1.7x in variance -- over-confident, the unsafe direction.
+    zaru_sigma: float = GYRO_ARW_MEASURED * _SQRT_IMU_RATE_HZ  # rad/s == 1.2997e-3 at 10 Hz
+
+    #: `S-` stream sample rate. Measured, not nominal: D-047 confirmed median dt = 100.0 ms from
+    #: the timestamps. Named here because `zaru_sigma` is rate-dependent and the 200 Hz FOG build
+    #: will need a different one.
+    imu_rate_hz: float = IMU_RATE_HZ
 
     # Stationary detection. Thresholds are conservative on purpose: a missed ZUPT costs a little
     # accuracy, a false ZUPT while rolling injects a hard error the filter believes.
@@ -258,6 +279,114 @@ class FilterConfig:
     nhc_min_speed: float = 1.0  # m/s -- below this, direction of travel is ill-defined
 
     mount_disturbance_gyro_thresh: float = 3.0  # rad/s of high-frequency energy
+
+    # ------------------------------------------------------------------------------------
+    # Initial covariance P0, per block. See `initial_covariance` for the derivation of each
+    # entry and docs/ERROR_BUDGET.md section 10 for the table. The flat `1e-3 * I` these replace
+    # (plan item R-3) was sigma = 0.0316 in every unit at once, and wrong in both directions:
+    # 95x too tight on position and 134x on velocity, 156x too *loose* on gyro bias. A P0 that
+    # is too tight makes the chi-squared gate reject good measurements, and that failure reads
+    # as a sensor fault rather than as tuning (D-055).
+    # ------------------------------------------------------------------------------------
+
+    #: 1-sigma horizontal GNSS position accuracy, docs/EVALUATION.md section 2 (+/- 3 m, VBOX).
+    #: The harness overrides it with the `S-` stream's own per-sample `gps_accuracy_m` where it
+    #: has one; this is the default for a filter constructed without a fix in hand.
+    gnss_sigma_m: float = 3.0
+
+    #: GNSS epoch used to turn a position accuracy into a velocity and a heading accuracy.
+    #: 1 Hz is the protocol's nominal rate (docs/DATASETS.md section 1); the measured `S-` GPS
+    #: cadence is longer, which would make both *tighter*, so 1 Hz is the conservative choice.
+    gnss_epoch_s: float = 1.0
+
+
+#: Reference cruise speed, docs/ERROR_BUDGET.md section 1 (60 km/h = 16.7 m/s). Used only to turn
+#: a GNSS position accuracy into a course-over-ground heading accuracy for `initial_covariance`.
+REFERENCE_SPEED_MPS = 16.7
+
+#: The mount angle the disturbance detector exists for: docs/ERROR_BUDGET.md section 5 costs a
+#: 5-degree knock at 87 m over a 60 s outage. It is the widest mount angle any document in this
+#: repo names, and `initial_covariance` uses it as the mount prior for the reason given there.
+MOUNT_KNOCK_RAD = float(np.deg2rad(5.0))
+
+
+def initial_covariance(cfg: FilterConfig | None = None) -> np.ndarray:
+    """`P0`, block by block, with every entry traceable to a section of docs/ERROR_BUDGET.md.
+
+    Replaces the flat `1e-3 * I` of plan item R-3 (D-055). One number, sigma = 0.0316, carried
+    in six different units -- so it was wrong in every block and wrong in both directions:
+
+        block          flat sigma      P0 sigma        flat was
+        position       3.2 cm          3 m             95x too tight
+        velocity       3.2 cm/s        4.24 m/s        134x too tight
+        yaw            1.81 deg        14.56 deg       8x too tight
+        roll, pitch    1.81 deg        1.31 deg        1.4x too loose
+        gyro bias      1810 deg/hr     42 deg/hr       43x too loose
+        accel bias     3.2 mm/s^2      3.3 mm/s^2      9.5x too loose
+        mount          1.81 deg        5 deg           2.8x too tight
+
+    A `P0` that is too tight makes the chi-squared gate reject good measurements, and that failure
+    presents as a sensor problem rather than as a tuning one, which is how it survives a debugging
+    session. (The plan's R-3 row calls the position block "too loose"; it is too *tight*, by 95x
+    in sigma. Flagged rather than silently corrected -- phases.md section 0.1.)
+
+    The initialisation model, stated because two blocks below depend on which epoch it is:
+
+    * **Roll and pitch** come from the gravity vector at a **detected stop**, so the levelling
+      error is bounded by the largest specific-force disturbance the stop detector still admits:
+      `sqrt(zupt_accel_var_thresh) / g` = 1.31 deg. The sensor *floor* is far tighter -- the
+      measured 0.34 mg accel bias instability is 0.019 deg -- but the floor is not what bounds a
+      real alignment, the detector's own admission threshold is.
+    * **Yaw** comes from GNSS course over ground, which needs motion, so it is not observable at
+      that same stationary epoch and the prior stands until the vehicle moves: differencing two
+      fixes gives `sqrt(2) * sigma_p / dt_gnss` of cross-track velocity error, and dividing by the
+      reference speed gives 14.6 deg.
+    * **Position** is the fix itself; **velocity** is that same differenced pair.
+    * **Both bias blocks** are the D-045 Allan run's measured bias instabilities.
+    * **The mount block** is the one entry with no measured source, and it is not invented. See
+      below.
+
+    Returns a diagonal matrix: `P0` is a *prior*, and the correlations between blocks are exactly
+    what the filter has not learned yet.
+    """
+    cfg = cfg or FilterConfig()
+    g = float(GRAVITY_NED[2])
+
+    # Levelling at a detected stop. The detector admits accelerometer variance up to
+    # `zupt_accel_var_thresh`, so that is the residual specific force the alignment must tolerate.
+    sigma_level = float(np.sqrt(cfg.zupt_accel_var_thresh)) / g
+
+    # Two GNSS fixes, differenced. Position noise sqrt(2)*sigma_p over one epoch.
+    sigma_v = float(np.sqrt(2.0) * cfg.gnss_sigma_m / cfg.gnss_epoch_s)
+
+    # Course over ground: cross-track velocity error over forward speed.
+    sigma_yaw = sigma_v / REFERENCE_SPEED_MPS
+
+    # Measured bias instabilities, docs/ERROR_BUDGET.md section 9.1 (D-045).
+    sigma_bg = 42.0 * (np.pi / 180.0) / 3600.0  # 42 deg/hr  -> rad/s
+    sigma_ba = 0.34e-3 * g  # 0.34 mg -> m/s^2
+
+    # The mount block. Nothing in this repo has estimated `R_sv`: the PCA initialiser is P-11 and
+    # `mount_rw` is zero (D-048), so the block neither starts from a measurement nor re-inflates.
+    # The prior therefore must not assert knowledge we do not have. The ~1.15 deg figure in
+    # docs/ERROR_BUDGET.md section 5 is a *requirement*, and using a requirement as a prior would
+    # have the filter begin by asserting that the budget is already met. The 5 deg knock in the
+    # same section is the widest mount angle the repo names and the magnitude the disturbance
+    # detector exists for, so it is used instead: wide enough that the NHC updates which would
+    # correct a real misalignment are not rejected at the gate. Same reasoning as D-048, opposite
+    # direction, because here zero is not available. P-11 replaces this with the initialiser's
+    # measured spread.
+    sigma_mount = MOUNT_KNOCK_RAD
+
+    sd = np.empty(ERROR_STATE_DIM)
+    sd[0:2] = sigma_level  # roll, pitch
+    sd[2] = sigma_yaw
+    sd[IDX_VELOCITY] = sigma_v
+    sd[IDX_POSITION] = cfg.gnss_sigma_m
+    sd[IDX_GYRO_BIAS] = sigma_bg
+    sd[IDX_ACCEL_BIAS] = sigma_ba
+    sd[IDX_MOUNT] = sigma_mount
+    return np.diag(sd**2)
 
 
 @dataclass
@@ -453,7 +582,7 @@ class InEKF:
     def __init__(self, cfg: FilterConfig | None = None) -> None:
         self.cfg = cfg or FilterConfig()
         self.state = NavState()
-        self.P = np.eye(ERROR_STATE_DIM) * 1e-3
+        self.P = initial_covariance(self.cfg)
         #: Steps since the last re-projection of R onto SO(3). See REORTHONORMALISE_EVERY.
         self.steps = 0
 
@@ -650,24 +779,54 @@ class InEKF:
             np.eye(3) * self.cfg.zupt_sigma**2,
         )
 
-    def update_zaru(self, gyro: np.ndarray) -> None:
-        """Zero-angular-rate update. Observes gyro bias -- the dominant error term.
+    def update_zaru(self, gyro: np.ndarray) -> bool:
+        """Zero-angular-rate update, chi-squared gated. Returns whether it was applied.
 
-        Apply at *every* detected stop. This is the cheapest yaw-drift mitigation available and
-        the error budget assumes it is running (docs/ERROR_BUDGET.md section 3.2).
+        Observes gyro bias -- the dominant error term. Offered at *every* detected stop; the
+        error budget assumes it is running (docs/ERROR_BUDGET.md section 3.2).
 
         `gyro` is the **raw** sample for this step, not a bias-corrected one (D-052). Section 7.3
         asserts the true rate is zero, so the raw reading *is* the bias: `z = w~ - b_g_hat`, which
         expands to `-db_g` and gives `H_zaru = [0, 0, 0, -I, 0, 0]`. A **direct** observation of
         `b_g` -- no coupling, no integration, no waiting. Compare section 7.1, where yaw is only
         reachable through a second-order path; this is why ZARU matters more for yaw than NHC.
+
+        **The gate is the fix for D-053** (superseded by D-057), and it is not defensive
+        programming -- it was measured. `is_stationary` averages over a 0.5 s window, so at the
+        step where the vehicle pulls away the window still holds four stopped samples and one
+        moving one and the detector still says "stopped". ZARU then fires against a true yaw rate
+        of 0.05 rad/s and injects ~7.5e-4 rad/s of pure error into a bias estimate whose sigma is
+        1.6e-4 -- and that single sample is the whole of the filter's over-confidence. Measured
+        gyro-bias-block NEES over the 60 s reference scenario, 100 runs, 3.0 expected:
+
+            ungated, sigma 1.0e-3   13.14        <- D-053's number
+            ungated, sigma measured  9.32
+            gated,   sigma measured  3.05        <- in band
+
+        The rejected sample carried a chi-squared distance of **1456** against the repo's own
+        3-dof 99% threshold of 11.345, so nothing subtle is being discriminated here. Measured
+        rejection rate is 2.0% of offered updates, which is the one transition sample per stop
+        plus the ~1% tail the threshold is defined to reject.
+
+        **ZUPT is deliberately *not* gated** (D-057). The same experiment says gating it makes it
+        worse, not better: ZUPT-only NEES goes 18.93 -> 44.74, because `zupt_sigma` = 0.02 m/s
+        collapses the velocity block until legitimate innovations fall outside the gate and are
+        locked out permanently. The asymmetry is physical, not incidental: at the first moving
+        sample the vehicle's *speed* is necessarily near zero, so a false ZUPT is nearly harmless,
+        whereas its *yaw rate* can be anything a driver turning the wheel while pulling away
+        chooses, so a false ZARU is not bounded at all.
         """
         gyro = np.asarray(gyro, dtype=float).ravel()
         if gyro.shape != (3,):
             raise ValueError(f"expected a 3-vector gyro sample, got {gyro.shape}")
         h = np.zeros((3, ERROR_STATE_DIM))
         h[:, IDX_GYRO_BIAS] = -np.eye(3)
-        self._apply_update(gyro - self.state.b_g, h, np.eye(3) * self.cfg.zaru_sigma**2)
+        z = gyro - self.state.b_g
+        r = np.eye(3) * self.cfg.zaru_sigma**2
+        if not chi2_gate(z, h @ self.P @ h.T + r, self.cfg.chi2_gate_3dof):
+            return False
+        self._apply_update(z, h, r)
+        return True
 
     def update_speed(self, speed_mps: float, variance: float) -> None:
         """Learned forward-speed pseudo-measurement with its predicted variance.

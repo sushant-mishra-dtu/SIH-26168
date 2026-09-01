@@ -30,6 +30,7 @@ import pytest
 from core.reference.inekf import (
     ERROR_STATE_DIM,
     GRAVITY_NED,
+    GYRO_ARW_MEASURED,
     IDX_MOUNT,
     REORTHONORMALISE_EVERY,
     SMALL_ANGLE,
@@ -532,9 +533,17 @@ def test_propagate_linearises_at_the_midpoint_not_the_step_start():
     Measured separation at dt = 0.1 s from a mid-drive state: 3.7% of max|P|. The threshold below
     is two orders under that, so the test fails on a regression to start-linearisation rather than
     merely on float noise.
+
+    `P` is set here rather than taken from `InEKF.__init__`. The separation this asserts is a
+    *ratio* against `max|P|`, so it silently depended on the flat `1e-3 * I` the constructor used
+    to carry: under the per-block `P0` of D-055 the same absolute difference is 5e-8 of a `max|P|`
+    now dominated by an 18 (m/s)^2 velocity block, and the test failed while measuring exactly the
+    property it was written to measure. Pinning the prior here keeps the 3.7% figure and the 1e-3
+    threshold as measured, and removes the hidden coupling to a constructor this test is not about.
     """
     gyro, accel, dt = np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1
     f = InEKF()
+    f.P = np.eye(ERROR_STATE_DIM) * 1e-3
     f.state.v = np.array([16.0, 1.5, -0.2])
     f.state.p = np.array([32.0, -14.0, 6.0])
     p_before = f.P.copy()
@@ -1010,30 +1019,71 @@ def test_11_nees_with_zupt_is_consistent():
     assert lo <= mean <= hi, f"ZUPT NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
 
 
-def test_zaru_sigma_is_below_the_gyro_noise_the_repo_measured():
-    """**The blocker on test 11's full-state case, asserted as the config fact that causes it.**
+def test_zaru_sigma_is_the_gyro_white_noise_the_repo_measured():
+    """`zaru_sigma` is not a free parameter, and this pins the identity that makes it not one.
 
-    `zaru_sigma` is the noise on `z = w~ - b_g_hat` (section 7.3), which is the gyro white noise.
-    D-045 measured that: `gyro_arw = 4.11e-4` rad/s/sqrt(Hz), i.e. `4.11e-4 / sqrt(0.1)` =
-    **1.30e-3** rad/s per sample at the 10 Hz IO-VNBD rate. `FilterConfig` carries 1.0e-3, which
-    predates the Allan run and is understated by 1.3x in sigma, 1.7x in variance -- over-confident,
-    the unsafe direction.
+    ZARU's innovation is `z = w~ - b_g_hat` (section 7.3), whose noise is the gyro white noise per
+    sample. D-045 measured that: `gyro_arw = 4.11e-4` rad/s/sqrt(Hz), so at the `S-` stream's
+    measured 10 Hz (D-047) it is `gyro_arw / sqrt(dt) = gyro_arw * sqrt(rate)` = 1.2997e-3 rad/s.
 
-    Measured effect, gyro-bias block NEES against 3.0 expected, 100 runs (see D-053):
-
-        stationary 60 s, ZARU only:  4.65 at 1.0e-3  ->  3.41 at 1.30e-3  ->  2.74 independent
-        drive + 10 s stop, full:    12.03 at 1.0e-3  ->  8.48 at 1.30e-3
-
-    So the sigma is one of two causes and not the larger one; the rest is that the same gyro
-    sample is used both as process noise inside propagate() and as ZARU's measurement, which the
-    Kalman update assumes are independent. Both are P-04's to settle, and P-03 must not tune an R
-    to make a consistency test pass. **When P-04 fixes this, this test fails -- and the full-state
-    NEES assertion above it is then the thing to turn on.**
+    This replaces `test_zaru_sigma_is_below_the_gyro_noise_the_repo_measured`, which asserted the
+    *defect* -- that `FilterConfig` carried 1.0e-3, understated 1.3x in sigma and 1.7x in variance,
+    over-confident -- and instructed P-04 to settle it. P-04 did (D-056), so the tripwire has
+    fired and is replaced by the invariant it was guarding: the config value and the Allan
+    measurement cannot drift apart, because the config value is computed from it.
     """
     cfg = FilterConfig()
-    measured = cfg.gyro_arw / np.sqrt(NEES_DT)
-    assert measured == pytest.approx(1.30e-3, abs=1e-5)
-    assert cfg.zaru_sigma < measured, (
-        "zaru_sigma is no longer below the measured gyro white noise -- P-04 has settled it. "
-        "Re-measure the full-state NEES and turn on the assertion in test 11."
-    )
+    assert cfg.gyro_arw == GYRO_ARW_MEASURED
+    assert cfg.imu_rate_hz == pytest.approx(1.0 / NEES_DT)
+    assert cfg.zaru_sigma == pytest.approx(cfg.gyro_arw / np.sqrt(NEES_DT), rel=1e-12)
+    assert cfg.zaru_sigma == pytest.approx(1.2997e-3, abs=1e-6)
+
+
+def test_11_nees_with_zaru_is_consistent():
+    """Test 11 with ZARU at every detected stop -- **the case D-053 could not turn on.**
+
+    D-053 measured the gyro-bias block at 12.89 against 3.0 expected and stopped, attributing it
+    to `zaru_sigma` plus a correlation between the gyro sample used as process noise inside
+    `propagate()` and the same sample used as ZARU's measurement. P-04 measured both and the
+    attribution was wrong: correcting sigma moved the block 13.14 -> 9.32, and supplying a
+    genuinely independent second gyro read moved it only 9.32 -> 8.22. The cause was a single
+    false ZARU per stop, at the step where `is_stationary`'s 0.5 s trailing window still holds
+    four stopped samples and one moving one -- carrying a chi-squared distance of 1456 against the
+    repo's own 11.345 threshold. Gating it (D-057) gives 3.05.
+    """
+    mean, lo, hi = _mean_nees(zupt=False, zaru=True, nhc=False)
+    assert lo <= mean <= hi, f"ZARU NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+
+
+def test_11_nees_with_zupt_and_zaru_is_consistent():
+    """Test 11 with the full kinematic-constraint pair, which is how D-004 says they run.
+
+    This is the strongest consistency statement the repo can make from measured quantities alone:
+    every `R` in it is a measured sensor number -- `zupt_sigma` from the stationary segments,
+    `zaru_sigma` from the Allan run -- with nothing tuned. Measured 19.03 against [16.84, 19.19].
+    """
+    mean, lo, hi = _mean_nees(zupt=True, zaru=True, nhc=False)
+    assert lo <= mean <= hi, f"ZUPT+ZARU NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+
+
+def test_11_nees_full_state_is_not_over_confident():
+    """Test 11, everything on. **This asserts one side of the band, and says why.**
+
+    Measured 14.14 against [16.843, 19.195]: *under*-confident, which is the safe direction and a
+    change of sign from D-053's 29.90. The remaining gap is NHC and only NHC -- velocity block
+    1.43, mount block 1.66, every other block within 0.3 of the expected 3.0 -- because
+    `nhc_sigma_lateral = 0.5` m/s is model slack for suspension travel, road camber and tyre slip,
+    and this simulation contains none of them: its own NHC residual is 5.4e-4 m/s, so `R_NHC` is
+    1300x wider than the scenario needs.
+
+    Tuning it is measurable and refused. A sweep at 100 runs each puts the full-state mean at
+    14.25 / 14.14 / 14.39 / 14.78 / 15.77 / 17.24 for `R_NHC` = 1.0 / 0.5 / 0.3 / 0.2 / 0.1 /
+    0.05 m/s -- so 0.05 would pass this test two-sided. It would also be a measurement-noise
+    covariance fitted to a scenario that omits the physical effect the covariance exists to model,
+    and it is not stable below that: at the scenario's own 3.8e-4 residual the filter goes to
+    14903, wildly over-confident. `R_NHC` belongs to P-10's adaptive head, set from data. Under
+    G-4 and the phase rule against tuning an `R` to pass a consistency test, the honest assertion
+    is the one that is true and defensible: the filter is never over-confident.
+    """
+    mean, lo, hi = _mean_nees(zupt=True, zaru=True, nhc=True)
+    assert mean <= hi, f"full-state NEES {mean:.3f} is over-confident (band [{lo:.3f}, {hi:.3f}])"
