@@ -14,11 +14,14 @@ from core.reference.inekf import (
     ERROR_STATE_DIM,
     IDX_ATTITUDE,
     IDX_MOUNT,
+    IDX_POSITION,
+    IDX_VELOCITY,
     FilterConfig,
     InEKF,
     NavState,
     chi2_gate,
     detect_mount_disturbance,
+    initial_covariance,
     is_stationary,
     nhc_is_valid,
 )
@@ -81,6 +84,44 @@ def test_turning_at_constant_speed_is_not_stationary():
 def test_stationary_rejects_malformed_windows():
     with pytest.raises(ValueError, match=r"\(n, 3\)"):
         is_stationary(np.zeros((10,)), np.zeros((10, 3)), CFG)
+
+
+def test_one_rotating_sample_in_the_window_stops_the_detector_firing():
+    """D-057, and the whole of the NEES failure that blocked Gate 1.
+
+    The window straddling a pull-away is the dangerous case: the car is already yawing, but four
+    of the five samples were taken while it was stopped, and a *mean* gyro statistic divides the
+    one real sample by five. Hand-computed for this window: mean is
+    `(4 x 0 + 0.05) / 5 = 0.010` rad/s, **under** the 0.02 threshold, so the mean statistic fires
+    ZUPT and ZARU at 0.05 rad/s of genuine rotation. The maximum is 0.05, which does not.
+
+    That single firing lands where the stop has just driven `P` on the gyro-bias block to its
+    minimum, so the gain is tiny and the error it injects is not: a measured systematic
+    8.0e-4 rad/s in `b_g_z`, 2.6 sigma of that block's own spread.
+    """
+    accel = np.tile([0.0, 0.0, 9.80665], (5, 1))
+    gyro = np.zeros((5, 3))
+    gyro[-1, 2] = 0.05  # the car has begun to turn; the rest of the window has not noticed
+
+    assert float(np.mean(np.linalg.norm(gyro, axis=1))) < CFG.zupt_gyro_norm_thresh, (
+        "the window this test is built on must be one the mean statistic accepts, "
+        "or it is not testing the regression it claims to"
+    )
+    assert not is_stationary(accel, gyro, CFG)
+
+
+def test_a_still_window_still_fires_under_the_maximum_statistic():
+    """The other direction of D-057: strictness must not cost the stops we need.
+
+    ZARU at every stop is what the yaw budget rests on (docs/ERROR_BUDGET.md section 3.2), so a
+    detector that stops firing is worse than the false firing it fixed. This window carries one
+    sample of the measured gyro white noise per axis -- `cfg.zaru_sigma`, 1.3e-3 rad/s -- at 4
+    sigma, and its maximum is still an order of magnitude inside the threshold.
+    """
+    accel = np.tile([0.0, 0.0, 9.80665], (10, 1)) + RNG.normal(0, 0.01, (10, 3))
+    gyro = np.full((10, 3), 4.0 * CFG.zaru_sigma)
+    assert float(np.max(np.linalg.norm(gyro, axis=1))) < CFG.zupt_gyro_norm_thresh / 2
+    assert is_stationary(accel, gyro, CFG)
 
 
 # ------------------------------------------------------------------------------------------
@@ -156,6 +197,86 @@ def test_filter_initialises_with_a_well_formed_covariance():
     assert f.P.shape == (ERROR_STATE_DIM, ERROR_STATE_DIM)
     assert np.allclose(f.P, f.P.T), "covariance must be symmetric"
     assert (np.linalg.eigvalsh(f.P) > 0).all(), "covariance must be positive definite"
+
+
+# ------------------------------------------------------------------------------------------
+# P0, per block (R-3, D-055)
+#
+# Every value below is computed here from the source it came from, not read back out of the
+# implementation -- a test that asserts `P0 == initial_covariance(cfg)` would pass for any
+# number at all, which is exactly how a flat 1e-3 survived three sprints.
+# ------------------------------------------------------------------------------------------
+
+
+def test_p0_is_not_flat():
+    """The R-3 regression, stated as the thing that was wrong rather than as the fix.
+
+    A flat prior is wrong in both directions at once, and the two ratios below are why: the mount
+    angle starts *unknown* while roll and pitch are levelled off gravity, and a position seeded
+    from a GNSS fix is metres uncertain while the velocity at a standstill is centimetres.
+    """
+    sd = np.sqrt(np.diag(InEKF().P))
+    assert len(set(np.round(sd, 12))) > 1, "P0 is flat again"
+    assert sd[IDX_MOUNT][0] > 30 * sd[IDX_ATTITUDE][0], "the mount block must start far looser"
+    assert sd[8] > 100 * sd[5], "position starts at a fix; velocity starts at a standstill"
+
+
+def test_p0_blocks_are_the_values_their_sources_give():
+    """Each block against its own source, computed here.
+
+    Sources, in order: one-sample gravity levelling off the measured accelerometer noise;
+    ERROR_BUDGET section 5 (D-055, a judgement call); the ZUPT assertion the filter aligns on;
+    EVALUATION.md section 2; and the two bias instabilities D-045 measured.
+    """
+    cfg = FilterConfig()
+    sd = np.sqrt(np.diag(initial_covariance(cfg)))
+
+    levelling = cfg.accel_vrw * np.sqrt(cfg.imu_rate_hz) / 9.80665
+    assert sd[0] == pytest.approx(levelling) and sd[1] == pytest.approx(levelling)
+    assert sd[2] == pytest.approx(np.deg2rad(5.0), rel=1e-3), "initial yaw: 5 deg, section 5"
+    assert np.allclose(sd[IDX_VELOCITY], cfg.zupt_sigma)
+    assert np.allclose(sd[6:9], 3.0), "position: the protocol's stated GNSS accuracy"
+    # 42 deg/hr and 0.34 mg, converted here rather than trusted from the config comment.
+    assert np.allclose(sd[9:12], 42.0 * np.pi / 180.0 / 3600.0, rtol=2e-3)
+    assert np.allclose(sd[12:15], 0.34e-3 * 9.80665, rtol=5e-3)
+    assert np.allclose(sd[IDX_MOUNT], np.deg2rad(5.0), rtol=1e-3)
+
+
+def test_p0_position_block_takes_the_initialising_fixs_own_accuracy():
+    """The default is the protocol's figure for a *reference-grade* receiver, and the phone's own
+    fix is worse. A harness that has `gps_accuracy_m` must pass it, and it must be used."""
+    p0 = initial_covariance(FilterConfig(), gnss_sigma_m=12.0)
+    assert np.allclose(np.sqrt(np.diag(p0))[IDX_POSITION], 12.0)
+    assert np.allclose(np.sqrt(np.diag(p0))[IDX_VELOCITY], FilterConfig().zupt_sigma), (
+        "only the position block follows the fix"
+    )
+
+
+def test_p0_refuses_a_zero_sigma():
+    """A zero block is not confidence, it is a state that no measurement can ever correct."""
+    with pytest.raises(ValueError, match="positive"):
+        initial_covariance(FilterConfig(), gnss_sigma_m=0.0)
+
+
+def test_an_explicit_p0_is_used_and_shape_checked():
+    p0 = np.eye(ERROR_STATE_DIM) * 7.0
+    assert np.array_equal(InEKF(p0=p0).P, p0)
+    with pytest.raises(ValueError, match="18x18"):
+        InEKF(p0=np.eye(6))
+
+
+def test_zaru_sigma_is_the_measured_gyro_white_noise_at_the_imu_rate():
+    """D-056. Not a tuning knob: it is `ARW / sqrt(dt)`, and both terms are measured.
+
+    The rate scaling is the half that matters beyond screening -- the same config on the 200 Hz
+    FOG build must give a 4.47x larger sigma, not the 10 Hz constant it would have had if this
+    were typed in.
+    """
+    cfg = FilterConfig()
+    assert cfg.zaru_sigma == pytest.approx(4.11e-4 * np.sqrt(10.0))
+    assert cfg.zaru_sigma == pytest.approx(1.2997e-3, abs=1e-6)
+    fog = FilterConfig(imu_rate_hz=200.0)
+    assert fog.zaru_sigma == pytest.approx(cfg.zaru_sigma * np.sqrt(20.0))
 
 
 @pytest.mark.parametrize(("method", "sprint"), [("update_speed", "Sprint 2")])

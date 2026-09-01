@@ -6,8 +6,9 @@ Smart India Hackathon 2026 · Problem Statement **26168** · AI-based intelligen
 > **Screening submission:** **Tue 8 Sep 2026**
 > **Status:** Sprint 1, 1 Sep. CI green. InEKF propagate and the full update family are wired.
 > **Gate 0 is not closed** — the protocol is still DRAFT: CRSE is pinned (D-054), the split re-pick
-> and the GNSS cadence are open. **Gate 1 is blocked** on filter consistency — full-state NEES is
-> 29.90 against a [16.84, 19.20] band, and ZARU is the cause (D-053).
+> and the GNSS cadence are open. **Gate 1's consistency blocker is closed** — ZUPT+ZARU NEES is
+> 18.996 against a [16.84, 19.20] band, and the 29.90 of D-053 was a stationary-detector bug, not
+> a covariance one (D-057). Gate 1 still needs the baselines, `eval/run.py` wired, and R-8.
 > **Plan of record:** [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) *(27 Aug — supersedes
 > the sprint calendars in AGENTS.md and SPRINT_BOARD.md)*
 
@@ -190,7 +191,8 @@ python -m eval.cadence --data-root data
 | Provenance stamping, seeding | **working** | D |
 | Constraint gating, χ² gate, stop detection | **working** | S |
 | InEKF `propagate()` on SE₂(3) | **working**, against the derivation | S |
-| InEKF update family — ZUPT, ZARU, NHC, GNSS | **working but not yet consistent** — over-confident, ZARU is the cause (D-053). P-04 owns it | S |
+| InEKF update family — ZUPT, ZARU, NHC, GNSS | **working**, and consistent: ZUPT+ZARU NEES 18.996 in a [16.84, 19.20] band (D-057) | S |
+| `P₀` per block, every entry sourced | **working** — three of seven entries are a judgement call or assumption and are labelled so (D-055) | S |
 | Ground truth from the paired `V-` VBOX GPS | **built, not yet verified against real bytes** — run `python -m eval.cadence` | D |
 | Speed pseudo-measurement | `NotImplementedError` — Sprint 2 | S+M |
 | Speed head, Onyekpe baseline | architecture defined, untrained | M |

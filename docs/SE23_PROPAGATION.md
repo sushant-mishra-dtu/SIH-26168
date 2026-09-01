@@ -477,8 +477,11 @@ transcribed wrong and every downstream number is decoration.
       it is an internal inconsistency a judge could find. Either correct the placeholder to ~1e-3
       or say in the budget why 10 °/√hr is the realistic figure for a phone in a car. The Allan run
       settles it; a test guards the discrepancy until then.
-- [ ] Initial `P₀`: currently a flat `1e-3·I`, which is wrong in both directions — far too tight on
-      the mount block, too loose on position. Set per-block from the error budget.
+- [x] **[done, P-04]** Initial `P₀`: was a flat `1e-3·I`, wrong in both directions — far too tight
+      on the mount block, 155× too loose on gyro bias. Now per block from the error budget, built
+      by `core.reference.inekf.initial_covariance()` and tabulated with its sources in
+      [ERROR_BUDGET.md](ERROR_BUDGET.md) §10 (D-055). Three of the seven entries are a judgement
+      call or an assumption rather than a measurement, and are marked as such there.
 - [ ] Van Loan is a 36×36 `expm` per step. Fine in the Python reference; benchmark before the
       October C++ port and validate any cheaper closed form against it.
 - [ ] Confirm IO-VNBD's accelerometer sign convention against a stationary segment **before**

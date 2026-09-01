@@ -293,3 +293,104 @@ A separate several-hour, multi-temperature run on our own handset — logged at 
 `HIGH_SAMPLING_RATE_SENSORS` — remains worth doing for the demo and edge story, and would bound
 thermal drift and resolve limits 2 and 3 above. It is explicitly **not** on the Gate 1 critical
 path (D-038): it characterises a device that produced none of the graded data.
+
+---
+
+## 10. Initial covariance `P₀` — per block, with sources
+
+`P₀` was a flat `1e-3·I` until 1 Sep (plan item R-3). That is wrong in all six blocks and wrong in
+both directions at once: 3.2 cm on position, 1.81 °/s on gyro bias — **155× looser** than the
+42 °/hr §9.1 measured — and 1.8° on a mount angle that starts unknown. It is not a cosmetic
+setting: `P` is what the χ² gate reads, so a too-tight `P₀` rejects good fixes, and that failure
+presents as a sensor fault rather than as a tuning error.
+
+Built by `core.reference.inekf.initial_covariance()`; D-055.
+
+| Block | σ | Source | Kind |
+|---|---|---|---|
+| Attitude — roll, pitch | 2.41e-3 rad (0.138°) | one-sample gravity levelling, `σ_a/g`, off §9.1's measured accelerometer noise | derived |
+| Attitude — yaw | 0.0873 rad (5°) | §5 — the heading error this budget sizes at 87 m over the reference outage | **judgement call** |
+| Velocity | 0.02 m/s | `zupt_sigma`: the filter aligns at a detected standstill, and that is what ZUPT asserts there | repo constant |
+| Position | 3.0 m, or the fix's own accuracy | [EVALUATION.md](EVALUATION.md) §2 | **assumption** |
+| Gyro bias | 2.04e-4 rad/s (42 °/hr) | §9.1, measured (D-045) | measured |
+| Accel bias | 3.32e-3 m/s² (0.34 mg) | §9.1, measured (D-045) | measured |
+| Mount `ξ_sv` | 0.0873 rad (5°) | §5 — the knock the mount-disturbance detector exists to catch | **judgement call** |
+
+**Three rows are not measurements, and are marked so on purpose.**
+
+*Position* is the protocol's stated GNSS accuracy, which is the **VBOX reference receiver's** — the
+`S-` phone fix the filter actually initialises on is worse, so the default is optimistic in exactly
+the direction R-3 warns about. The fix carries its own `gps_accuracy_m` (allowlisted), so the
+harness must pass it: `initial_covariance(cfg, gnss_sigma_m=…)`. P-07 owns that wiring.
+
+*Initial yaw* has no source in this repo at all — nothing here initialises heading, so there is no
+initialiser spread to quote. 5° is §5's magnitude for a plausible-but-costly heading error, and an
+initial NED-yaw error costs exactly what a mount error of the same size costs: §5's `e_lat ≈ v·t·δ`
+is the same equation for both.
+
+*Mount* starts **unknown**. D-006 makes the PCA fit an initialiser rather than a calibration, and
+its spread has never been measured; §5's 5° knock is the magnitude this document already treats as
+plausible. The block must start loose enough for NHC to do the work, and SE₂(3) test 9 measures
+that it can — 0.660° / 0.220° / 0.132° residual after 300 NHC updates at 5 / 15 / 25 m/s. P-11
+replaces this with the initialiser's own measured spread.
+
+Both judgement calls are deliberately on the **loose** side. Loose costs convergence time, which
+NHC and GNSS buy back; tight costs rejected measurements, which nothing buys back. D-048's mount
+process noise stays zero, so the mount block cannot re-inflate on its own — one more reason not to
+start it tight.
+
+### 10.1 ZARU's `R` is not in this table, and not a free parameter either
+
+`zaru_sigma` is the white noise on **one** gyro sample, because §7.3's innovation `z = ω̃ − b̂_g` is
+exactly that at a true standstill: `ARW/√Δt` = **1.30e-3 rad/s** at the 10 Hz `S-` rate. It is now
+derived from `gyro_arw` and `imu_rate_hz` rather than typed in (D-056), which also makes the 200 Hz
+FOG build get 5.81e-3 instead of silently keeping a 10 Hz constant. The 1.0e-3 it replaces predated
+the Allan run and was 1.3× under the measured noise in σ, 1.7× in variance — over-confident.
+
+---
+
+## 11. Filter consistency — the measured envelope
+
+A covariance nobody has checked is a number the χ² gate, the uncertainty ellipse and the map
+matcher's emission σ all read anyway. This section is the check: NEES over the 60 s reference
+scenario, 100 Monte-Carlo runs, the error drawn from the same prior the filter is given.
+Full state expects **18**, band **[16.843, 19.195]**; each 3-vector block expects **3**.
+Produced by `tests/test_se23_derivation.py` (SE₂(3) test 11), which asserts the rows marked ✅.
+
+| Configuration | Full | attitude | velocity | position | `b_g` | mount | |
+|---|---|---|---|---|---|---|---|
+| Propagation only | 18.287 | 2.80 | 2.86 | 2.92 | 2.94 | 2.64 | ✅ in band |
+| \+ ZUPT | 18.827 | 3.00 | 3.16 | 2.63 | 2.85 | 2.64 | ✅ in band |
+| \+ ZARU | 17.008 | 2.87 | 2.95 | 2.83 | 3.09 | 2.64 | in band |
+| **ZUPT + ZARU** | **18.996** | 3.31 | 3.37 | 2.80 | **3.20** | 2.64 | ✅ in band |
+| NHC only | 13.750 | 2.31 | 1.51 | 1.74 | 2.49 | 1.73 | under-confident |
+| Full — ZUPT+ZARU+NHC | 14.141 | 2.69 | 1.38 | 2.20 | 2.74 | 1.66 | ✅ not over-confident |
+
+**How it got here.** P-03 measured 29.90 and stopped rather than declare Gate 1 (D-053). Two
+things were wrong and neither was the covariance:
+
+| Fix | Full-state NEES | `b_g` block |
+|---|---|---|
+| As P-03 left it | 29.90 | 12.03 |
+| `zaru_sigma` → the measured gyro noise (D-056) | 23.71 | 8.62 |
+| ZARU given an *independently drawn* gyro sample | 24.66 | 9.15 ← **not the cause** |
+| `is_stationary` on the window max (D-057) | **18.996** without NHC | **3.20** |
+
+D-053's second hypothesis — the same gyro sample serving as process noise and as ZARU's
+measurement — is measurably not the cause: making the two independent moves the block the wrong
+way. The cause was a **detector** defect (D-057): one false stop per pull-away, firing ZUPT and
+ZARU at 0.05 rad/s of real yaw, putting a systematic 8.0e-4 rad/s into `b_g_z`. It is worth
+knowing what that looked like — the block's *variance about the ensemble mean* was correct to
+within 20%, so every scale check passed; only the NEES, which does not subtract the mean, saw the
+2.6σ offset sitting in it.
+
+**The remaining under-confidence is the scenario, not the filter** (D-058). `R_NHC = 0.5` m/s is
+slack for a constraint real vehicles break; the simulation's truth satisfies NHC to 5.49e-4 m/s
+RMS because it is generated from a coordinated-turn model. Matching `R_NHC` to that residual sends
+the full state to **6216** — a deterministic model error is not white noise, and treating it as one
+lets the filter accumulate certainty it has not earned. **P-10 should read that number before
+training a head that predicts `R_NHC`.** The honest value is a Gate 1 measurement on real data.
+
+**Not yet measured, and Gate 1 owns them:** the in-cabin vibration inflation §9.2 defers into Q, the
+real `R_NHC`, and the accelerometer sign convention (R-8) — which needs IO-VNBD bytes and is still
+open, so SE₂(3) test 2 remains a gravity-sign check under an *assumed* input convention.

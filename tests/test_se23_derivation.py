@@ -22,6 +22,7 @@ Numbers that came out of writing this, now recorded in the document:
 
 from __future__ import annotations
 
+import functools
 import math
 
 import numpy as np
@@ -30,7 +31,11 @@ import pytest
 from core.reference.inekf import (
     ERROR_STATE_DIM,
     GRAVITY_NED,
+    IDX_ATTITUDE,
+    IDX_GYRO_BIAS,
     IDX_MOUNT,
+    IDX_POSITION,
+    IDX_VELOCITY,
     REORTHONORMALISE_EVERY,
     SMALL_ANGLE,
     FilterConfig,
@@ -532,9 +537,16 @@ def test_propagate_linearises_at_the_midpoint_not_the_step_start():
     Measured separation at dt = 0.1 s from a mid-drive state: 3.7% of max|P|. The threshold below
     is two orders under that, so the test fails on a regression to start-linearisation rather than
     merely on float noise.
+
+    `P0` is pinned here rather than inherited from the config default (D-055 replaced that
+    default). The separation this measures runs through `A`'s state-dependent columns, which are
+    the *bias* columns, so it scales with the prior's bias blocks: under the per-block `P0` the
+    same step separates by 9.2e-7 absolute, and the ratio to a max|P| now dominated by a 9 m^2
+    position block is 1e-7. That is the normaliser moving, not the midpoint evaluation going away
+    -- so the experiment keeps the flat prior it was calibrated against, and says so.
     """
     gyro, accel, dt = np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1
-    f = InEKF()
+    f = InEKF(p0=np.eye(ERROR_STATE_DIM) * 1e-3)
     f.state.v = np.array([16.0, 1.5, -0.2])
     f.state.p = np.array([32.0, -14.0, 6.0])
     p_before = f.P.copy()
@@ -921,8 +933,13 @@ def _nees_inputs(k: int) -> tuple[np.ndarray, np.ndarray, bool]:
     return np.array([0.0, 0.0, r]), np.array([u_dot, u * r, -9.80665]), stopped
 
 
-def _nees_run(seed: int, *, zupt: bool, zaru: bool, nhc: bool) -> float:
-    """One Monte-Carlo run. Returns NEES at the final step."""
+def _nees_run(seed: int, *, zupt: bool, zaru: bool, nhc: bool) -> tuple[float, np.ndarray]:
+    """One Monte-Carlo run: NEES at the final step, over the full state and over each block.
+
+    The per-block marginals cost nothing once the error and `P` are in hand, and they are what
+    localised D-053's failure to `b_g` -- 18 degrees of freedom hide one bad 3-vector until it is
+    off by a factor.
+    """
     cfg = FilterConfig()
     rng = np.random.default_rng(seed)
     p0 = _nees_p0()
@@ -974,18 +991,48 @@ def _nees_run(seed: int, *, zupt: bool, zaru: bool, nhc: bool) -> float:
     err = np.concatenate(
         [se23_log(eta), f.state.b_g - b_g_t, f.state.b_a - b_a_t, log_so3(f.state.R_sv @ r_sv_t.T)]
     )
-    return float(err @ np.linalg.solve(f.P, err))
+    full = float(err @ np.linalg.solve(f.P, err))
+    blocks = np.array(
+        [
+            float(err[b] @ np.linalg.solve(f.P[b, b], err[b]))
+            for b in (IDX_ATTITUDE, IDX_VELOCITY, IDX_POSITION, IDX_GYRO_BIAS, IDX_MOUNT)
+        ]
+    )
+    return full, blocks
+
+
+#: Order of the marginals `_nees_run` returns. `b_a` is left out only because nothing asserts on
+#: it; add it here and to the tuple above together if that changes.
+NEES_BLOCKS = ("attitude", "velocity", "position", "gyro_bias", "mount")
+
+
+@functools.cache
+def _nees_sweep(*, zupt: bool, zaru: bool, nhc: bool) -> dict[str, tuple[float, float, float]]:
+    """`{"full": (mean, lo, hi), "gyro_bias": (...), ...}` over NEES_RUNS deterministic seeds.
+
+    Cached, and returning every marginal from one pass: a sweep is 100 x 600 propagate steps, and
+    re-running it per assertion would put minutes into CI to compute a different quadratic form
+    over the same errors.
+    """
+    runs = [_nees_run(s, zupt=zupt, zaru=zaru, nhc=nhc) for s in range(NEES_RUNS)]
+
+    def band(dim: int, mean: float) -> tuple[float, float, float]:
+        dof = dim * NEES_RUNS
+        return (
+            mean,
+            chi2_quantile(0.025, dof) / NEES_RUNS,
+            chi2_quantile(0.975, dof) / NEES_RUNS,
+        )
+
+    out = {"full": band(ERROR_STATE_DIM, float(np.mean([r[0] for r in runs])))}
+    per = np.array([r[1] for r in runs]).mean(axis=0)
+    out.update({name: band(3, float(per[i])) for i, name in enumerate(NEES_BLOCKS)})
+    return out
 
 
 def _mean_nees(**kw: bool) -> tuple[float, float, float]:
-    """(mean NEES, band low, band high) over NEES_RUNS deterministic seeds."""
-    vals = np.array([_nees_run(s, **kw) for s in range(NEES_RUNS)])
-    dof = ERROR_STATE_DIM * NEES_RUNS
-    return (
-        float(vals.mean()),
-        chi2_quantile(0.025, dof) / NEES_RUNS,
-        chi2_quantile(0.975, dof) / NEES_RUNS,
-    )
+    """(mean NEES, band low, band high) for the full state."""
+    return _nees_sweep(**kw)["full"]
 
 
 def test_11_nees_propagation_only_is_consistent():
@@ -1001,39 +1048,72 @@ def test_11_nees_propagation_only_is_consistent():
 
 
 def test_11_nees_with_zupt_is_consistent():
-    """Test 11 with ZUPT applied at every detected stop. Measured 18.929, band [16.843, 19.195].
+    """Test 11 with ZUPT applied at every detected stop. Measured 18.827, band [16.843, 19.195].
 
     ZUPT is the update that shrinks `P` the hardest, so it is the one most able to make the filter
     over-confident. It does not: the covariance still tracks the error it actually makes.
+
+    (18.929 before D-057; the strict gyro statistic drops two firings of the 98, at the window
+    that straddles the pull-away.)
     """
     mean, lo, hi = _mean_nees(zupt=True, zaru=False, nhc=False)
     assert lo <= mean <= hi, f"ZUPT NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
 
 
-def test_zaru_sigma_is_below_the_gyro_noise_the_repo_measured():
-    """**The blocker on test 11's full-state case, asserted as the config fact that causes it.**
+def test_11_nees_with_zupt_and_zaru_is_consistent():
+    """**The assertion D-053 could not commit, and the one that reopens Gate 1.**
 
-    `zaru_sigma` is the noise on `z = w~ - b_g_hat` (section 7.3), which is the gyro white noise.
-    D-045 measured that: `gyro_arw = 4.11e-4` rad/s/sqrt(Hz), i.e. `4.11e-4 / sqrt(0.1)` =
-    **1.30e-3** rad/s per sample at the 10 Hz IO-VNBD rate. `FilterConfig` carries 1.0e-3, which
-    predates the Allan run and is understated by 1.3x in sigma, 1.7x in variance -- over-confident,
-    the unsafe direction.
+    ZUPT and ZARU fire together at every detected stop (D-004), so this is the constraint pair the
+    error budget actually assumes. Measured 18.996, band [16.843, 19.195].
 
-    Measured effect, gyro-bias block NEES against 3.0 expected, 100 runs (see D-053):
+    It read 29.90 when P-03 measured it, and the diagnosis in D-053 -- `zaru_sigma` under the
+    measured gyro noise, plus the same gyro sample serving as process noise and measurement --
+    turned out to name a real error and a red herring. The 1.3x sigma was real and worth 6 points
+    of the total (D-056). The sample reuse was not: giving ZARU an independently-drawn gyro read
+    moved the gyro-bias block by 0.17, from 8.98 to 9.15, in the wrong direction to be the cause.
 
-        stationary 60 s, ZARU only:  4.65 at 1.0e-3  ->  3.41 at 1.30e-3  ->  2.74 independent
-        drive + 10 s stop, full:    12.03 at 1.0e-3  ->  8.48 at 1.30e-3
-
-    So the sigma is one of two causes and not the larger one; the rest is that the same gyro
-    sample is used both as process noise inside propagate() and as ZARU's measurement, which the
-    Kalman update assumes are independent. Both are P-04's to settle, and P-03 must not tune an R
-    to make a consistency test pass. **When P-04 fixes this, this test fails -- and the full-state
-    NEES assertion above it is then the thing to turn on.**
+    What was left was a **detector** bug, not a covariance one (D-057): one false firing per
+    pull-away, injecting a stationarity claim at 0.05 rad/s of real yaw, at the moment `P` on the
+    gyro-bias block was at its minimum and the innovation therefore least questioned. It put a
+    systematic 8.0e-4 rad/s -- 2.6 sigma -- into `b_g_z`, which is invisible in a variance
+    (measured against the ensemble *mean*, the block looked fine) and unmissable in a NEES.
     """
-    cfg = FilterConfig()
-    measured = cfg.gyro_arw / np.sqrt(NEES_DT)
-    assert measured == pytest.approx(1.30e-3, abs=1e-5)
-    assert cfg.zaru_sigma < measured, (
-        "zaru_sigma is no longer below the measured gyro white noise -- P-04 has settled it. "
-        "Re-measure the full-state NEES and turn on the assertion in test 11."
-    )
+    mean, lo, hi = _mean_nees(zupt=True, zaru=True, nhc=False)
+    assert lo <= mean <= hi, f"ZUPT+ZARU NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+
+
+def test_11_nees_gyro_bias_block_is_consistent_under_zaru():
+    """The block that failed, asserted on its own. Measured 3.20 against 3.0 expected.
+
+    The total is a poor instrument for this: 18 degrees of freedom hide a single bad block until
+    it is off by a factor. This is the marginal that read 12.03 at the start of P-04, and it is
+    the one to re-read first if the total ever moves again.
+    """
+    mean, lo, hi = _nees_sweep(zupt=True, zaru=True, nhc=False)["gyro_bias"]
+    assert lo <= mean <= hi, f"gyro-bias NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+
+
+def test_11_nees_with_every_update_is_not_over_confident():
+    """Full state -- ZUPT, ZARU and NHC. Measured 14.141 against a band of [16.843, 19.195].
+
+    **Asserted one-sided, and the reason is the scenario rather than the filter.** `R_NHC` is
+    0.5 m/s of deliberate model slack for a constraint that real vehicles break -- side-slip,
+    banking, a phone that shifts. This scenario breaks it by **5.49e-4 m/s RMS**, three orders
+    smaller, because the truth is generated from a coordinated-turn model that satisfies NHC by
+    construction. A filter told a measurement is 900x noisier than it is extracts less information
+    from it than it could, and its `P` is then larger than the error it makes: under-confident,
+    which is the safe direction and is what 14.141 says. NHC alone reads 13.750.
+
+    Matching `R_NHC` to the scenario is not the fix and was measured rather than assumed: at
+    5.49e-4 the full state goes to **6216**, because that residual is a deterministic model error,
+    not white noise, and treating a systematic 5e-4 as if it were independent every step lets the
+    filter accumulate certainty it has not earned. Worth knowing before P-10 trains a head that
+    predicts `R_NHC`: driving that output toward the apparent residual is not conservative, it is
+    the failure mode Gate 2 exists to catch.
+
+    So the two-sided band belongs to the NHC-free cases above, where the simulation and the filter
+    model the same thing, and this case asserts what it can honestly assert: adding NHC does not
+    make the filter over-confident. The real `R_NHC` is a Gate 1 measurement on real data.
+    """
+    mean, _, hi = _mean_nees(zupt=True, zaru=True, nhc=True)
+    assert mean <= hi, f"full-state NEES {mean:.3f} is over-confident against the band top {hi:.3f}"

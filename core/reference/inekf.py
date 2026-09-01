@@ -240,7 +240,44 @@ class FilterConfig:
     nhc_sigma_vertical: float = 0.5  # m/s
 
     zupt_sigma: float = 0.02  # m/s
-    zaru_sigma: float = 1.0e-3  # rad/s
+
+    #: Nominal IMU sample rate. Measured, not nominal-by-assumption: the `S-` stream's median
+    #: sample interval is 100.0 ms (docs/ERROR_BUDGET.md section 9.1, the same timestamps the Allan
+    #: run was computed on). The 200 Hz FOG edge build sets this and every rate-dependent quantity
+    #: below follows -- which is the reason they are derived here rather than typed in.
+    imu_rate_hz: float = 10.0
+
+    # ---- P0, per block. Every entry names its source; see initial_covariance() and D-055. ----
+
+    #: Horizontal and vertical position sigma at initialisation, metres. The protocol's stated
+    #: GNSS accuracy (docs/EVALUATION.md section 2, +-3 m). **That figure is the VBOX reference
+    #: receiver's, and the `S-` phone fix the filter actually initialises on is worse** -- which is
+    #: the over-tight direction R-3 warns about. The fix carries its own `gps_accuracy_m`, which is
+    #: on the loader's allowlist, so pass it: `initial_covariance(cfg, gnss_sigma_m=...)`. This
+    #: default is the value in force when nobody does, and it is an assumption, not a measurement.
+    init_position_sigma: float = 3.0  # m
+
+    #: Initial heading sigma. **Not measured anywhere in this repo** (D-055): no code here
+    #: initialises yaw, so there is no initialiser spread to quote. 5 degrees is the magnitude
+    #: docs/ERROR_BUDGET.md section 5 sizes as a plausible-but-costly heading error (87 m over the
+    #: 60 s reference outage), and an initial NED-yaw error costs exactly what a mount error of the
+    #: same size costs -- section 5's `e_lat = v t delta` is the same equation. A judgement call,
+    #: logged as one, and deliberately on the loose side: too tight here rejects the GNSS fixes
+    #: that would have corrected it.
+    init_yaw_sigma: float = np.deg2rad(5.0)  # rad
+
+    #: Initial mount-angle sigma, all three axes. Same source and same 5 degrees
+    #: (docs/ERROR_BUDGET.md section 5, the knock the mount-disturbance detector exists to catch).
+    #: R_sv starts *unknown* -- D-006 makes the PCA fit an initialiser, not a calibration, and its
+    #: spread has never been measured -- so this block must start loose enough for NHC to do the
+    #: work. SE_2(3) test 9 measures that it can: 0.660 / 0.220 / 0.132 degrees residual after
+    #: 300 NHC updates at 5 / 15 / 25 m/s. P-11 replaces this with the initialiser's own spread.
+    init_mount_sigma: float = np.deg2rad(5.0)  # rad
+
+    #: Bias instabilities, measured on IO-VNBD (D-045, docs/ERROR_BUDGET.md section 9.1). Used for
+    #: the two bias blocks of P0: at a cold start the bias is unknown to its own stability.
+    gyro_bias_instability: float = 2.04e-4  # rad/s   == 42 deg/hr, gyro_yaw, S-T7
+    accel_bias_instability: float = 3.32e-3  # m/s^2  == 0.34 mg,   accel_x, S-T7
 
     # Stationary detection. Thresholds are conservative on purpose: a missed ZUPT costs a little
     # accuracy, a false ZUPT while rolling injects a hard error the filter believes.
@@ -258,6 +295,42 @@ class FilterConfig:
     nhc_min_speed: float = 1.0  # m/s -- below this, direction of travel is ill-defined
 
     mount_disturbance_gyro_thresh: float = 3.0  # rad/s of high-frequency energy
+
+    # ---- Derived, not free. Each one below is a measured quantity re-expressed, and none of
+    # them is a knob: changing a value here means changing `gyro_arw`, `accel_vrw` or
+    # `imu_rate_hz`, which are what the Allan run and the timestamps measured. That is deliberate.
+    # D-053's failure mode was an `R` that had been typed in and then read as if it were measured.
+
+    @property
+    def gyro_noise_sigma(self) -> float:
+        """White noise on **one** gyro sample, rad/s. `ARW / sqrt(dt)` at the nominal rate."""
+        return self.gyro_arw * np.sqrt(self.imu_rate_hz)
+
+    @property
+    def accel_noise_sigma(self) -> float:
+        """White noise on one accelerometer sample, m/s^2."""
+        return self.accel_vrw * np.sqrt(self.imu_rate_hz)
+
+    @property
+    def zaru_sigma(self) -> float:
+        """ZARU measurement noise, rad/s. **Exactly the gyro white noise, and not a free choice.**
+
+        Section 7.3's innovation is `z = w~ - b_g_hat`: at a true standstill the raw sample *is*
+        the bias plus one sample of white noise, so this `R` is that noise and nothing else.
+        1.30e-3 rad/s at 10 Hz. It replaces a hand-set 1.0e-3 that predated the Allan run and was
+        1.3x under it in sigma, 1.7x in variance -- over-confident, the unsafe direction (D-056).
+        """
+        return self.gyro_noise_sigma
+
+    @property
+    def init_tilt_sigma(self) -> float:
+        """Initial roll/pitch sigma, rad. Derived: one-sample gravity levelling, `sigma_a / g`.
+
+        2.41e-3 rad (0.138 deg) at 10 Hz. Levelling is only valid at a standstill, which is where
+        the filter aligns; it is also the case where the accelerometer reads gravity and nothing
+        else. Conservative in that it uses a single sample rather than the ZUPT window's average.
+        """
+        return self.accel_noise_sigma / float(GRAVITY_NED[2])
 
 
 @dataclass
@@ -373,6 +446,21 @@ def is_stationary(accel_window: np.ndarray, gyro_window: np.ndarray, cfg: Filter
     Both conditions must hold: low accelerometer variance *and* low gyro magnitude. Variance
     rather than magnitude on the accelerometer because gravity dominates its magnitude at all
     times; a stationary phone still reads ~9.8 m/s^2.
+
+    The gyro condition is the window's **maximum** sample magnitude, not its mean (D-057). A mean
+    lets one sample of real rotation be diluted by the rest of the window: at 10 Hz with the 0.5 s
+    window, a car pulling away at 0.05 rad/s reads as `(4 x 0.0015 + 0.05) / 5 = 0.011` rad/s,
+    under the 0.02 threshold, and fires ZUPT *and* ZARU while the vehicle is turning. Measured, in
+    the reference scenario: exactly one such firing per pull-away, and because it lands where the
+    stop has just driven `P` on the gyro-bias block to its minimum, it puts a **systematic
+    8.0e-4 rad/s** into `b_g_z` -- 2.6 sigma of the block's own spread, and the whole of the
+    29.90 NEES that blocked Gate 1 (D-053, D-057). The accelerometer half does not catch it: a
+    smooth pull-away has no acceleration step to see.
+
+    The asymmetry this file already states is the reason to prefer the strict statistic: a missed
+    stop costs a little accuracy, a false one injects a confident wrong measurement that the
+    filter believes. Both D-045 segments sit an order of magnitude inside these thresholds
+    (docs/ERROR_BUDGET.md section 9.2), so the margin is there to spend.
     """
     accel_window = np.asarray(accel_window, dtype=float)
     gyro_window = np.asarray(gyro_window, dtype=float)
@@ -380,7 +468,7 @@ def is_stationary(accel_window: np.ndarray, gyro_window: np.ndarray, cfg: Filter
         raise ValueError(f"expected (n, 3) accel window, got {accel_window.shape}")
 
     accel_var = float(np.mean(np.var(accel_window, axis=0)))
-    gyro_norm = float(np.mean(np.linalg.norm(gyro_window, axis=1)))
+    gyro_norm = float(np.max(np.linalg.norm(gyro_window, axis=1)))
     return accel_var < cfg.zupt_accel_var_thresh and gyro_norm < cfg.zupt_gyro_norm_thresh
 
 
@@ -432,6 +520,56 @@ def detect_mount_disturbance(gyro_window: np.ndarray, cfg: FilterConfig) -> bool
 
 
 # --------------------------------------------------------------------------------------------
+# Initial covariance
+# --------------------------------------------------------------------------------------------
+
+
+def initial_covariance(cfg: FilterConfig, *, gnss_sigma_m: float | None = None) -> np.ndarray:
+    """`P0`, per block, with every entry traceable to a source (R-3, D-055).
+
+    The flat `1e-3 I` this replaces was wrong in all six blocks and wrong in *both* directions at
+    once -- 3.2 cm on position, 1.8 deg/s on gyro bias (155x looser than the 42 deg/hr the Allan
+    run measured), 1.8 deg on a mount angle that starts unknown. A wrong `P0` is not a cosmetic
+    problem: it is read by the chi-squared gate, so a too-tight one makes the filter reject good
+    fixes, and that failure presents as a sensor fault rather than as a tuning error.
+
+    ==============  ==========================  =============================================
+    Block           sigma                       Source
+    ==============  ==========================  =============================================
+    attitude r/p    `cfg.init_tilt_sigma`       derived: one-sample levelling, `sigma_a / g`
+    attitude yaw    `cfg.init_yaw_sigma`        ERROR_BUDGET section 5 -- judgement call, D-055
+    velocity        `cfg.zupt_sigma`            the filter aligns at a detected standstill, and
+                                                that is exactly what ZUPT asserts there
+    position        `gnss_sigma_m` or the       EVALUATION.md section 2 -- assumption, D-055
+                    `cfg.init_position_sigma`
+    gyro bias       `cfg.gyro_bias_instability` D-045, measured: 42 deg/hr
+    accel bias      `cfg.accel_bias_instability` D-045, measured: 0.34 mg
+    mount           `cfg.init_mount_sigma`      ERROR_BUDGET section 5 -- judgement call, D-055
+    ==============  ==========================  =============================================
+
+    `gnss_sigma_m` is the initialising fix's own reported accuracy (`gps_accuracy_m`, on the
+    loader's allowlist). **Pass it.** The config default is the protocol's GNSS figure, which is
+    the VBOX reference receiver's rather than the phone's, and is therefore optimistic.
+
+    Two entries above are judgement calls rather than measurements, and both are on the loose
+    side by choice: nothing in this repo initialises heading, and D-006 makes the PCA fit an
+    initialiser whose spread nobody has measured. Loose costs convergence time, which NHC and
+    GNSS buy back; tight costs rejected measurements, which nothing buys back.
+    """
+    sd = np.zeros(ERROR_STATE_DIM)
+    sd[0:2] = cfg.init_tilt_sigma  # roll, pitch -- observable from gravity at a standstill
+    sd[2] = cfg.init_yaw_sigma  # yaw -- not observable from the IMU at all
+    sd[IDX_VELOCITY] = cfg.zupt_sigma
+    sd[IDX_POSITION] = cfg.init_position_sigma if gnss_sigma_m is None else float(gnss_sigma_m)
+    sd[IDX_GYRO_BIAS] = cfg.gyro_bias_instability
+    sd[IDX_ACCEL_BIAS] = cfg.accel_bias_instability
+    sd[IDX_MOUNT] = cfg.init_mount_sigma
+    if (sd <= 0).any():
+        raise ValueError("every P0 sigma must be positive; a zero block cannot be corrected")
+    return np.diag(sd**2)
+
+
+# --------------------------------------------------------------------------------------------
 # Filter -- Sprint 1
 # --------------------------------------------------------------------------------------------
 
@@ -450,10 +588,15 @@ class InEKF:
     stop: a stop where only one runs is a bug, not a tuning choice.
     """
 
-    def __init__(self, cfg: FilterConfig | None = None) -> None:
+    def __init__(self, cfg: FilterConfig | None = None, p0: np.ndarray | None = None) -> None:
         self.cfg = cfg or FilterConfig()
         self.state = NavState()
-        self.P = np.eye(ERROR_STATE_DIM) * 1e-3
+        #: `P0` per block (D-055). `p0` overrides it for a caller that knows better -- the harness
+        #: initialising on a fix whose reported accuracy it has, or a Monte-Carlo drawing its own
+        #: prior. See `initial_covariance`.
+        self.P = initial_covariance(self.cfg) if p0 is None else np.asarray(p0, dtype=float)
+        if self.P.shape != (ERROR_STATE_DIM, ERROR_STATE_DIM):
+            raise ValueError(f"P0 must be {ERROR_STATE_DIM}x{ERROR_STATE_DIM}, got {self.P.shape}")
         #: Steps since the last re-projection of R onto SO(3). See REORTHONORMALISE_EVERY.
         self.steps = 0
 
