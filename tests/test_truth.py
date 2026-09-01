@@ -219,8 +219,32 @@ def test_time_of_day_unwraps_across_midnight():
 
 
 def test_seconds_of_day_parses_the_shipped_date_format():
+    """The spelling the `S-` header advertises. Kept: it is what the format string promises."""
     parsed = seconds_of_day(["2019-03-14 15-22-31_500"])[0]
     assert parsed == pytest.approx(15 * 3600 + 22 * 60 + 31.5)
+
+
+def test_seconds_of_day_parses_the_bytes_the_files_actually_ship():
+    """The spelling every real `S-` file carries, which the header's format string contradicts.
+
+    Copied verbatim from the first data row of
+    `Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S3a/S-S3a.csv`,
+    single quotes and colon sub-seconds included. Before this parsed, `eval.run` raised on the
+    first held-out sequence it reached, so Gate 1 could not be measured at all.
+    """
+    parsed = seconds_of_day(["'2019-09-04 19:21:51:494'"])[0]
+    assert parsed == pytest.approx(19 * 3600 + 21 * 60 + 51.494)
+
+
+def test_seconds_of_day_does_not_mistake_the_calendar_date_for_a_time():
+    r"""`2019-09-04` is three `\d{1,2}[-:]\d{2}[-:]\d{2}` fields too, so the anchor has to hold.
+
+    Widening the sub-second separator to include `:` is what makes this worth asserting: the
+    date and the time are now the same shape, and only the end-anchor separates them.
+    """
+    parsed = seconds_of_day(["'2019-09-04 19:21:51:494'"])[0]
+    assert parsed != pytest.approx(20 * 3600 + 19 * 60 + 9)
+    assert parsed == pytest.approx(19 * 3600 + 21 * 60 + 51.494)
 
 
 def test_seconds_of_day_refuses_a_column_it_cannot_parse():

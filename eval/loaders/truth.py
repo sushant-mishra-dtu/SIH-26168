@@ -73,8 +73,16 @@ SECONDS_PER_DAY = 86_400.0
 
 #: `S-` date format, per the shipped header `DATE (YYYY-MO-DD HH-MI-SS_SSS)`. Some files truncate
 #: the millisecond group, so the fractional part is optional.
+#: The `S-` `date` value, as the files actually ship it.
+#:
+#: The header advertises `YYYY-MO-DD HH-MI-SS_SSS`, and this pattern was originally written from
+#: that string rather than from the bytes. The bytes disagree in two ways, and every real `S-`
+#: file fails on both: the sub-second separator is a colon, not `_` or `.`
+#: (`19:21:51:494`), and each value is wrapped in literal single quotes that the `$`
+#: anchor then refuses. The trailing-quote class and the `:` in the sub-second group are what
+#: make the shipped spelling parse; the advertised spelling still parses unchanged.
 _S_DATE = re.compile(
-    r"(?P<h>\d{1,2})[-:](?P<m>\d{2})[-:](?P<s>\d{2})(?:[._](?P<ms>\d{1,3}))?\s*$"
+    r"(?P<h>\d{1,2})[-:](?P<m>\d{2})[-:](?P<s>\d{2})(?:[._:](?P<ms>\d{1,3}))?['\"\s]*$"
 )
 
 
@@ -452,6 +460,9 @@ def seconds_of_day(dates: Iterable[object]) -> np.ndarray:
     The shipped header is `DATE (YYYY-MO-DD HH-MI-SS_SSS)`, so the time of day is in the string
     and no timezone question arises: both streams were logged on the same vehicle on the same
     clock, and we only ever difference the two.
+
+    The header's format string is not what the column contains -- see `_S_DATE`. Both the
+    advertised and the shipped spellings parse.
     """
     values = list(dates)
     out = np.full(len(values), np.nan)
@@ -472,7 +483,8 @@ def seconds_of_day(dates: Iterable[object]) -> np.ndarray:
         sample = next((d for d in values if isinstance(d, str)), None)
         raise ValueError(
             "no value in the 'date' column parses as a time of day; first string seen: "
-            f"{sample!r}. Expected the shipped 'YYYY-MO-DD HH-MI-SS_SSS' form."
+            f"{sample!r}. Expected the header's 'YYYY-MO-DD HH-MI-SS_SSS' form or the "
+            "'YYYY-MO-DD HH:MI:SS:SSS' form the files actually ship."
         )
     return unwrap_time_of_day(out)
 
