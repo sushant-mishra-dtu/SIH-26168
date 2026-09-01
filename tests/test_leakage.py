@@ -94,3 +94,75 @@ def test_guard_is_not_catchable_as_a_normal_error():
     """LeakageError subclasses AssertionError so a bare `except Exception` does not swallow it
     silently in a training loop."""
     assert issubclass(LeakageError, AssertionError)
+
+
+# --------------------------------------------------------------------------------------------
+# The ground-truth path into the "V-" stream
+#
+# EVALUATION.md section 1.2 permits the paired "V-" GPS as ground truth, and eval/loaders/truth.py
+# is the one module that uses that permission. It is therefore the one place a wheel-speed column
+# could enter this repo, so the audit job -- not only the truth module's own tests -- checks that
+# it stays shut.
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_truth_allowlist_is_a_strict_subset_of_position_and_time():
+    """Whatever else changes, this module may never read a vehicle-dynamics channel."""
+    from eval.loaders.truth import TRUTH_COLUMNS
+
+    assert TRUTH_COLUMNS == {"gps_lat", "gps_lon", "time_of_day_s"}
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        " Wheel Speed Front Left (rad/sec)",
+        " Wheel Speed Rear Right (rad/sec)",
+        " Steering Angle (degrees)",
+        " Engine Speed (rev/min)",
+        " Brake Pressure (psi)",
+        " Indicated Vehicle Speed (Kmh)",
+        " GPS Velocity (Kmh)",
+    ],
+)
+def test_the_truth_guard_rejects_every_other_vehicle_channel(column):
+    """Including `GPS Velocity`, which is neither wheel-derived nor banned by name. Truth is a
+    position at a time; a velocity is a speed label, and the speed head is the part of this
+    system whose honesty matters most."""
+    from eval.loaders.truth import assert_truth_only
+
+    with pytest.raises(LeakageError):
+        assert_truth_only([column])
+
+
+def test_truth_columns_can_never_become_model_features():
+    """The two guards have to disagree in the right direction: the truth loader may read lat/lon,
+    and the feature guard must still refuse them. Otherwise ground truth becomes an input and the
+    model learns from information it will not have inside a tunnel."""
+    from eval.loaders.truth import TRUTH_COLUMNS
+
+    for column in sorted(TRUTH_COLUMNS):
+        with pytest.raises(LeakageError):
+            assert_feature_safe([column])
+
+
+def test_the_smartphone_loader_still_refuses_a_vehicle_file():
+    """The truth path is a separate module on purpose. `load_sequence` must not have acquired a
+    way into the `V-` stream as a side effect of one existing elsewhere."""
+    from eval.loaders.io_vnbd import load_sequence
+
+    with pytest.raises(LeakageError, match="disallowed by PS 26168"):
+        load_sequence("nonexistent/V-S3a.csv", name="V-S3a")
+
+
+def test_the_truth_track_carries_no_inertial_channel():
+    """Structural, not procedural. `TruthTrack` holds four fields and none of them is a sensor,
+    so there is no call that hands ground truth to a filter or a model."""
+    import inspect
+
+    from eval.loaders.truth import TruthTrack
+
+    fields = set(TruthTrack.__dataclass_fields__)
+    assert fields == {"name", "t_s", "lat", "lon", "source"}
+    assert not any(f in FEATURE_COLUMNS for f in fields)
+    assert "features" not in dict(inspect.getmembers(TruthTrack))
