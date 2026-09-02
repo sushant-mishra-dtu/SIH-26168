@@ -29,16 +29,20 @@ import numpy as np
 from core.reference.inekf import (
     FilterConfig,
     InEKF,
+    initial_covariance,
     is_stationary,
     nhc_is_valid,
+    pca_mount_yaw,
 )
 from eval.baselines import (
+    MIN_HEADING_DISPLACEMENT_M,
     BaselineTrajectory,
     course_over_ground,
     gnss_available,
     initial_state_from_truth,
     naive_strapdown,
     score,
+    yaw_only_rotation,
 )
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence, load_split
 from eval.loaders.truth import (
@@ -238,6 +242,9 @@ class FilterRun:
     n_zaru_applied: int
     n_zaru_rejected: int
     n_nhc: int
+    #: How the filter was started (D-094), or None when `run_filter` was called without a
+    #: `Sequence` -- which only the unit tests do, on fixtures where `R_sv = I` is correct.
+    init: FilterInit | None = None
 
 
 def run_filter(
@@ -250,6 +257,7 @@ def run_filter(
     gnss_open: np.ndarray,
     *,
     cfg: FilterConfig | None = None,
+    seq: Sequence | None = None,
 ) -> FilterRun:
     """Drive the InEKF across one whole sequence, applying GNSS only where `gnss_open` is True.
 
@@ -267,6 +275,10 @@ def run_filter(
     cfg = cfg or FilterConfig()
     f = InEKF(cfg)
     n = gyro.shape[0]
+
+    # **Before the first propagate, not after it.** See `initialise_filter`: starting from
+    # R = R_sv = I integrates gravity into the horizontal axes and the run diverges (D-094).
+    init = None if seq is None else initialise_filter(f, seq, accel, fix_idx, fix_ned)
 
     fix_at = {int(i): k for k, i in enumerate(fix_idx)}
     window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
@@ -310,6 +322,7 @@ def run_filter(
         pvar[k] = np.diag(f.P)[6:8]
 
     return FilterRun(
+        init=init,
         position_ned=pos,
         yaw_rad=yaw,
         position_var=pvar,
@@ -319,6 +332,151 @@ def run_filter(
         n_zaru_applied=counts["zaru_ok"],
         n_zaru_rejected=counts["zaru_no"],
         n_nhc=counts["nhc"],
+    )
+
+
+#: The GNSS-available run-up `generate_outages` leaves before the first window. The initialiser
+#: may read this and nothing after it: every outage starts later, so using a sample from beyond it
+#: would be initialising a window with its own future.
+WARMUP_S = 30
+
+
+@dataclass(frozen=True)
+class FilterInit:
+    """What the filter was started from, so a run can be read for whether it was started well."""
+
+    yaw_rad: float
+    speed_mps: float
+    mount_yaw_rad: float
+    mount_spread_rad: float
+    mount_sign_resolved: bool
+    n_warmup_fixes: int
+
+
+def _forward_reference(seq: Sequence, n: int) -> np.ndarray | None:
+    """A per-sample signed scalar that grows with forward acceleration, from `gps_speed_kmh`.
+
+    `pca_mount_yaw` returns an *axis*, and forward and backward share it. This resolves the sign,
+    and it has to be resolved rather than assumed: a 180-degree mount error is a vehicle driving
+    backwards and NHC will not converge it out.
+
+    The fixes are ~9 s apart, so this is a step function -- the mean forward acceleration across
+    each fix interval, held over that interval's samples. That is coarse for a magnitude and
+    entirely adequate for a sign, which is all `pca_mount_yaw` uses it for.
+    """
+    gnss = seq.gnss
+    if "gps_speed_kmh" not in gnss.columns:
+        return None
+    idx = gnss["sample_idx"].to_numpy(dtype=int)
+    speed = gnss["gps_speed_kmh"].to_numpy(dtype=float) / 3.6
+    ok = np.isfinite(speed) & (idx >= 0) & (idx < n)
+    idx, speed = idx[ok], speed[ok]
+    if idx.size < 2:
+        return None
+
+    out = np.zeros(n)
+    dt_s = np.diff(idx) / SAMPLE_RATE_HZ
+    accel_fwd = np.divide(
+        np.diff(speed), dt_s, out=np.zeros(dt_s.shape), where=dt_s > 0
+    )
+    for a, lo, hi in zip(accel_fwd, idx[:-1], idx[1:], strict=True):
+        out[lo:hi] = a
+    return out
+
+
+def initialise_filter(
+    f: InEKF,
+    seq: Sequence,
+    accel: np.ndarray,
+    fix_idx: np.ndarray,
+    fix_ned: np.ndarray,
+    *,
+    warmup_s: int = WARMUP_S,
+) -> FilterInit:
+    """Start the filter from the `S-` stream's own GNSS and gravity, never from truth.
+
+    **Without this the filter does not converge, it diverges.** `run_filter` used to construct
+    `InEKF(cfg)` and propagate from `R = I`, `R_sv = I`, `v = 0`, `p = 0`. A phone in a cradle is
+    not aligned with the vehicle and the vehicle is not aligned with north, so gravity leaks into
+    the horizontal axes and is integrated twice: measured on S3a, `norm(v)` reached **1223 m/s at
+    100 s** -- a sustained 12.2 m/s^2, about 1 g -- and the state then sat so far from every fix
+    that the chi-squared gate rejected **59 of 60** of them, locking out the only correction until
+    `P` ran away to 1e70 and `np.linalg.inv` raised. See D-094.
+
+    Truth is not read here and must not be. `eval.baselines.initial_state_from_truth` exists for
+    the *strapdown baseline*, which is deliberately handed truth (D-064) because it is a floor
+    rather than a system; the filter is the system, and it gets what a phone would have.
+
+    Four things, all from inside the warmup window:
+
+    * **Position** -- the first fix. It is the measurement, not an estimate of one.
+    * **Velocity and yaw** -- the first and last warmup fixes, differenced. Course over ground
+      needs motion, so if the vehicle has not moved far enough to have a heading the yaw prior
+      stands at zero and `initial_covariance`'s 14.56-degree block carries it.
+    * **`R_sv`** -- `pca_mount_yaw` over the warmup accelerometer and the stream's own `GRAVITY`
+      channel, which D-085 established points up. This is D-073's initialiser, which until now was
+      called from `tests/test_mount.py` and nowhere else.
+    * **`P0`** -- `initial_covariance` with the PCA's measured `spread_rad` in the mount block,
+      instead of the stated 5-degree fallback it uses when nobody has measured one.
+    """
+    n_warm = min(int(warmup_s * SAMPLE_RATE_HZ), accel.shape[0])
+    in_warmup = np.flatnonzero((fix_idx >= 0) & (fix_idx < n_warm))
+
+    # The mount comes first, because the attitude is expressed through it -- see below.
+    mount_spread: float | None = None
+    mount_yaw = 0.0
+    resolved = False
+    gravity_cols = ["gravity_x", "gravity_y", "gravity_z"]
+    if all(c in seq.imu.columns for c in gravity_cols) and n_warm >= 3:
+        gravity = seq.imu[gravity_cols].to_numpy(dtype=float)[:n_warm]
+        finite = np.isfinite(gravity).all(axis=1)
+        if finite.sum() >= 3:
+            reference = _forward_reference(seq, accel.shape[0])
+            mount = pca_mount_yaw(
+                accel[:n_warm][finite],
+                gravity[finite].mean(axis=0),
+                forward_reference=None if reference is None else reference[:n_warm][finite],
+            )
+            # An unresolved sign is reported, never guessed -- see `pca_mount_yaw`. The rotation
+            # is still applied: PCA has found the mount *axis*, which is most of the answer, and
+            # `mount_sign_resolved` travels to `summary.json` so a run made on an unresolved stem
+            # can be read as one.
+            f.state.R_sv = mount.r_sv
+            mount_spread = mount.spread_rad
+            mount_yaw = mount.yaw_rad
+            resolved = mount.sign_resolved
+
+    yaw = 0.0
+    speed = 0.0
+    if in_warmup.size:
+        f.state.p = np.asarray(fix_ned[in_warmup[0]], dtype=float).copy()
+    if in_warmup.size >= 2:
+        first, last = in_warmup[0], in_warmup[-1]
+        step = np.asarray(fix_ned[last], dtype=float) - np.asarray(fix_ned[first], dtype=float)
+        span_s = float(fix_idx[last] - fix_idx[first]) / SAMPLE_RATE_HZ
+        if span_s > 0 and float(np.linalg.norm(step[:2])) >= MIN_HEADING_DISPLACEMENT_M:
+            yaw = float(np.arctan2(step[1], step[0]))
+            f.state.v = np.array([step[0] / span_s, step[1] / span_s, 0.0])
+            speed = float(np.linalg.norm(f.state.v[:2]))
+
+    # **`state.R` is phone->NED, not vehicle->NED**, and getting that wrong is a 1 g error rather
+    # than a small one. `_h_vehicle_velocity` computes `v_veh = R_sv @ R.T @ v`, so `R.T` takes NED
+    # into the *phone* frame and `R_sv` takes phone into the vehicle; and `propagate` applies `R`
+    # to the raw accelerometer, which is a phone-frame quantity. Course over ground measures the
+    # **vehicle's** heading, so the phone's attitude is that composed with the mount:
+    # `v_ned = R_vn @ R_sv @ v_phone`, hence `R = R_vn @ R_sv`. Setting `R = R_vn` alone leaves the
+    # mount rotation out of the gravity cancellation, and the leaked component is integrated twice
+    # -- measured at 12.2 m/s^2 on S3a, which is what D-094 is about.
+    f.state.R = yaw_only_rotation(yaw) @ f.state.R_sv
+
+    f.P = initial_covariance(f.cfg, mount_sigma_rad=mount_spread)
+    return FilterInit(
+        yaw_rad=yaw,
+        speed_mps=speed,
+        mount_yaw_rad=mount_yaw,
+        mount_spread_rad=float("nan") if mount_spread is None else mount_spread,
+        mount_sign_resolved=resolved,
+        n_warmup_fixes=int(in_warmup.size),
     )
 
 
@@ -453,7 +611,7 @@ def evaluate_sequence(
         assert_non_overlapping(windows)
         run = run_filter(
             gyro, accel, dt, fix_idx, fix_ned, fix_sigma,
-            mask_gnss(n, windows), cfg=cfg,
+            mask_gnss(n, windows), cfg=cfg, seq=seq,
         )
         for outage in windows:
             t0 = float(t_abs_s[outage.start_idx])

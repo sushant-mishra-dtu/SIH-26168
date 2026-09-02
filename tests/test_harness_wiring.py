@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from core.reference.inekf import FilterConfig, InEKF
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence
 from eval.loaders.truth import TruthTrack, align_to_sequence
 from eval.outages.inject import Outage
@@ -33,6 +34,7 @@ from eval.run import (
     fix_arrays,
     gate1_ratio,
     imu_stream,
+    initialise_filter,
     summarise_by_method_and_length,
     truth_clock_offset_s,
     window_trajectory,
@@ -105,6 +107,10 @@ def synthetic_drive(
         {
             "accel_x": accel[:, 0], "accel_y": accel[:, 1], "accel_z": accel[:, 2],
             "gyro_yaw": gyro[:, 0], "gyro_pitch": gyro[:, 1], "gyro_roll": gyro[:, 2],
+            # The `GRAVITY` channel every real `S-` file ships, pointing **up** (D-085). Without
+            # it the mount initialiser has no vertical and is skipped, which is what this fixture
+            # used to do -- silently, and so it could not exercise D-094's PCA path at all.
+            "gravity_x": np.zeros(n), "gravity_y": np.zeros(n), "gravity_z": np.full(n, G),
             "time_since_start_ms": t_rel * 1000.0,
         }
     )
@@ -547,3 +553,69 @@ def test_a_real_metric_defect_is_not_swallowed_as_a_dropped_window():
     assert not isinstance(exc.value, ZeroDistanceOutage), (
         "a shape mismatch must not be catchable as a dropped window"
     )
+
+
+# ------------------------------------------------------------------------------------------
+# Filter initialisation (D-094)
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_filter_is_started_from_the_gnss_fixes_and_not_from_identity():
+    """`run_filter` used to construct `InEKF(cfg)` and propagate from R = R_sv = I, v = 0, p = 0.
+
+    On real data that integrates gravity into the horizontal axes and the run diverges. This
+    fixture cannot show the divergence -- `synthetic_drive` builds a level phone driving due
+    north, which is the one case where identity is correct -- so what it checks is that the
+    initialiser reads the fixes at all and agrees with them.
+    """
+    seq, truth = synthetic_drive(seconds=200.0, mps=15.0)
+    _, accel, _ = imu_stream(seq)
+    fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+
+    f = InEKF(FilterConfig())
+    init = initialise_filter(f, seq, accel, fix_idx, fix_ned)
+
+    assert init.n_warmup_fixes >= 2
+    assert init.speed_mps == pytest.approx(15.0, rel=0.02), "speed from the differenced fixes"
+    assert init.yaw_rad == pytest.approx(0.0, abs=1e-6), "driving due north"
+    assert f.state.p[:2] == pytest.approx(fix_ned[0][:2], abs=1e-6), "position is the first fix"
+
+
+def test_initialisation_reads_only_the_warmup_and_never_the_truth_track():
+    """Two properties that are easy to lose and invisible once lost.
+
+    The initialiser must not see a sample from beyond the warmup, because every outage starts
+    later and that would initialise a window with its own future. And it must not touch truth:
+    `initial_state_from_truth` exists for the strapdown *baseline* (D-064), which is handed truth
+    deliberately because it is a floor rather than a system.
+    """
+    import inspect
+
+    import eval.run as run_mod
+
+    params = set(inspect.signature(run_mod.initialise_filter).parameters)
+    assert not params & {"truth", "truth_track"}, (
+        "the filter must be initialised from the `S-` stream, never from ground truth -- "
+        "`initial_state_from_truth` is the strapdown baseline's, and only its (D-064)"
+    )
+
+    seq, truth = synthetic_drive(seconds=400.0, mps=15.0)
+    _, accel, _ = imu_stream(seq)
+    fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    f = InEKF(FilterConfig())
+    init = initialise_filter(f, seq, accel, fix_idx, fix_ned, warmup_s=run_mod.WARMUP_S)
+    # 30 s of warmup at a 9 s fix interval: fixes at 0, 9, 18, 27 s and no more.
+    assert init.n_warmup_fixes == 4
+
+
+def test_the_mount_block_of_p0_carries_the_measured_spread_not_the_fallback():
+    """D-073 returns a spread precisely so `P0` does not have to fall back to a stated 5 degrees,
+    and until now nothing outside `tests/test_mount.py` ever called it."""
+    seq, truth = synthetic_drive(seconds=200.0, mps=15.0, accel_bias_x=0.4)
+    _, accel, _ = imu_stream(seq)
+    fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    f = InEKF(FilterConfig())
+    init = initialise_filter(f, seq, accel, fix_idx, fix_ned)
+
+    assert np.isfinite(init.mount_spread_rad), "the PCA initialiser must have run"
+    assert f.P[15, 15] == pytest.approx(init.mount_spread_rad**2, rel=1e-9)
