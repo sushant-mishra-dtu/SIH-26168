@@ -19,10 +19,14 @@ from eval.splits import (
     CHALLENGING,
     LONG_OUTAGE,
     MANDATORY_PLOT_SEQUENCES,
+    REFUSED_TRUTH_PAIRING,
+    TOO_SHORT_FOR_ANY_OUTAGE,
     TRAIN,
+    assert_no_family_straddles_the_split,
     assert_split_disjoint,
     assert_split_is_loadable,
     split_of,
+    stem_family,
 )
 from eval.splits import test_sequences as held_out_sequences  # aliased: pytest collects `test_*`
 from idr.stamp import make_stamp, seed_everything
@@ -56,9 +60,59 @@ def test_mandatory_plot_sequences_are_held_out():
 
 
 def test_long_outage_set_matches_the_documented_protocol():
-    for seq in ("S3a", "Vtb3", "Vta1a"):
-        assert seq in LONG_OUTAGE
+    """Pins `LONG_OUTAGE` against EVALUATION.md section 3 as re-picked by D-092.
+
+    The previous form pinned `S3a, Vtb3, Vta1a`. It changed because the split changed, and the
+    DECISION_LOG row came first: `Vtb3` is refused by truth pairing at a -2.70 s lag, `S3a` was
+    recovered by D-091's BST fix, and `S3c`, `Vta1b`, `Vta16`, `Vw2` and `Vw4` were promoted on
+    measured evidence. This is not a loosened assertion -- it names seven stems where it named
+    three, and adds the two checks below that the old one did not make.
+    """
+    assert LONG_OUTAGE == ("S3a", "S3c", "Vta1a", "Vta1b", "Vta16", "Vw2", "Vw4")
     assert not set(LONG_OUTAGE) & set(TRAIN)
+    assert not set(LONG_OUTAGE) & REFUSED_TRUTH_PAIRING
+    assert not set(LONG_OUTAGE) & TOO_SHORT_FOR_ANY_OUTAGE
+
+
+def test_no_parent_recording_is_split_across_train_and_test():
+    """Lettered stems are segments of one drive. `Vw14b` held out while `Vw14a` and `Vw14c` train
+    is the same road minutes apart, and `assert_split_disjoint` cannot see it."""
+    assert_no_family_straddles_the_split()
+
+
+def test_the_family_check_actually_detects_a_straddle():
+    """A guard never observed to fire is not known to work. This one caught `Vw16a`/`Vw16b` the
+    moment it was written, which is why it exists rather than being assumed."""
+    import eval.splits as splits
+
+    original = splits.TRAIN
+    try:
+        splits.TRAIN = original + ("Vta1c",)  # sibling of the held-out Vta1a/Vta1b
+        with pytest.raises(AssertionError, match="split across train and test"):
+            assert_no_family_straddles_the_split()
+    finally:
+        splits.TRAIN = original
+
+
+def test_stem_family_groups_lettered_segments_and_leaves_others_alone():
+    assert stem_family("Vw14a") == "Vw14"
+    assert stem_family("S3a") == "S3"
+    assert stem_family("Vw4") == "Vw4"      # trailing digit: its own family
+    assert stem_family("M") == "M"          # single character, unchanged
+
+
+def test_no_held_out_sequence_is_one_the_pairing_refused():
+    """The whole point of the re-pick: a stem with no usable truth must not be in the split."""
+    held = set(held_out_sequences())
+    assert not held & REFUSED_TRUTH_PAIRING
+    assert not held & TOO_SHORT_FOR_ANY_OUTAGE
+    assert not set(TRAIN) & REFUSED_TRUTH_PAIRING
+
+
+def test_the_wet_road_group_is_empty_and_kept_rather_than_deleted():
+    """Both wet stems are refused and nothing in the dataset is documented as wet, so the scenario
+    cannot be reported. Keeping the key empty makes that visible in code, not just in the doc."""
+    assert CHALLENGING["wet_road"] == ()
 
 
 def test_split_of_reports_unassigned_rather_than_guessing():

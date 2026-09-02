@@ -23,6 +23,18 @@ Run::
 
     python -m eval.cadence --data-root data --out-dir eval/figures
 
+The default set is the frozen split. **The D-044 split re-pick needs the whole candidate pool**,
+which is every stem shipping both an `S-` and a `V-` file in the synchronised folder -- 72 of
+them, of which 53 have never been through `align_to_sequence` (D-090)::
+
+    python -m eval.cadence --all-paired --data-root data --out-dir scratchpad/split
+
+That sweep is what says which stems may replace `S3a` and `Vtb3` in `LONG_OUTAGE`, and every
+column the choice turns on is already here: `is_usable` with its residual and best-fit lag,
+`s_time_is_monotonic` (the mid-file clock reset that disqualifies `S3b` and `Y1`),
+`imu_duration_s` (a stem shorter than the outage grades nothing -- Vta9 at 15.5 s, Vw17 at
+32.8 s) and `meets_1hz` (what makes Vta1a unrepresentative of a 9 s dataset).
+
 Protocol: `docs/EVALUATION.md` §1.2, §2. Truth loader: `eval/loaders/truth.py`.
 """
 
@@ -31,6 +43,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -47,6 +60,7 @@ from eval.loaders.truth import (
     divergent_copies,
     load_truth,
     manifest_path_for,
+    paired_stems,
     paired_truth_path,
 )
 from eval.splits import TRAIN, test_sequences
@@ -201,6 +215,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="stems to measure (default: the frozen split -- held-out plus train)",
     )
     p.add_argument(
+        "--all-paired",
+        action="store_true",
+        help=(
+            "measure every stem shipping both an 'S-' and a 'V-' file in the synchronised folder "
+            "-- the candidate pool for the D-044 split re-pick, not just the frozen split"
+        ),
+    )
+    p.add_argument(
         "--skip-truth",
         action="store_true",
         help="measure 'S-' cadence only, without opening the paired 'V-' files",
@@ -211,7 +233,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     stamp = seed_everything(args.seed)
-    names = tuple(args.sequences) if args.sequences else tuple(test_sequences()) + tuple(TRAIN)
+    if args.sequences and args.all_paired:
+        print(
+            "--sequences and --all-paired both name the set to measure; pass one. "
+            "Choosing for you is how a sweep comes to cover something other than it says.",
+            file=sys.stderr,
+        )
+        return 2
+    # The frozen split is the default because it is what the protocol grades. `--all-paired` is
+    # the D-044 re-pick's sweep: the 72-stem pool, of which 14 are the held-out stems D-088
+    # measured, 5 are TRAIN and barred from promotion by `assert_split_disjoint`, and 53 have
+    # never been through `align_to_sequence` at all (D-090).
+    if args.all_paired:
+        names = tuple(paired_stems(manifest=args.manifest))
+    elif args.sequences:
+        names = tuple(args.sequences)
+    else:
+        names = tuple(test_sequences()) + tuple(TRAIN)
 
     cadence, alignment, problems = run(
         names, args.data_root, args.manifest, skip_truth=args.skip_truth
