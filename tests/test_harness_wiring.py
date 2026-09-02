@@ -46,15 +46,28 @@ LAT0, LON0 = 51.5, -1.25
 START_OF_DAY_S = 9 * 3600 + 30 * 60  # 09:30:00, arbitrary but not midnight
 
 
-def _date_strings(seconds_of_day: np.ndarray) -> list[str]:
-    """The shipped `DATE (YYYY-MO-DD HH-MI-SS_SSS)` spelling, which `seconds_of_day` parses."""
+#: The fixture's calendar date. 2019-10-11 is inside British Summer Time (2019's transition is
+#: 27 October), so the `S-` side must be written in **local** time to be the file it imitates --
+#: which is what makes this fixture exercise D-091's conversion rather than sidestep it.
+FIXTURE_DATE = "2019-10-11"
+FIXTURE_UTC_OFFSET_S = 3600.0
+
+
+def _date_strings(utc_seconds_of_day: np.ndarray) -> list[str]:
+    """The shipped `DATE (YYYY-MO-DD HH-MI-SS_SSS)` spelling, in UK local time.
+
+    Takes UTC and adds the offset, because that is the direction the real files are written in:
+    AndroSensor stamps civil time while the paired VBOX stamps UTC (D-091). Passing UTC straight
+    through would make the fixture the one file in the dataset whose `date` column is UTC, and
+    every clock assertion built on it would be testing a case that does not ship.
+    """
     out = []
-    for s in seconds_of_day:
+    for s in np.asarray(utc_seconds_of_day, dtype=float) + FIXTURE_UTC_OFFSET_S:
         h, rem = divmod(float(s), 3600.0)
         m, sec = divmod(rem, 60.0)
         whole = int(sec)
         ms = int(round((sec - whole) * 1000))
-        out.append(f"2019-10-11 {int(h):02d}-{int(m):02d}-{whole:02d}_{ms:03d}")
+        out.append(f"{FIXTURE_DATE} {int(h):02d}-{int(m):02d}-{whole:02d}_{ms:03d}")
     return out
 
 

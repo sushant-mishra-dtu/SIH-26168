@@ -164,7 +164,7 @@ def truth_clock_offset_s(seq: Sequence) -> float:
     offset is theirs to supply. The **median** over all fixes rather than the first one: a single
     anchor makes the whole sequence's alignment depend on one row's timestamp.
     """
-    from eval.loaders.truth import seconds_of_day
+    from eval.loaders.truth import seconds_of_day_utc
 
     gnss = seq.gnss
     if "date" not in gnss.columns or "time_since_start_ms" not in gnss.columns:
@@ -172,7 +172,7 @@ def truth_clock_offset_s(seq: Sequence) -> float:
             f"{seq.name}: fixes carry no 'date'/'time_since_start_ms' pair, so the `S-` clock "
             "cannot be placed against the `V-` truth clock."
         )
-    tod = seconds_of_day(gnss["date"].tolist())
+    tod = seconds_of_day_utc(gnss["date"].tolist())
     rel = gnss["time_since_start_ms"].to_numpy(dtype=float) / 1000.0
     finite = np.isfinite(tod) & np.isfinite(rel)
     if not finite.any():
