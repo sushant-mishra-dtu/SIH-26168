@@ -12,8 +12,6 @@ precisely so this module is testable in a CI job that has no `ml` extra.
 
 from __future__ import annotations
 
-import pytest
-
 from models.train_baseline_rnn import HYPERPARAMETERS, audit_table, main
 
 
@@ -56,12 +54,36 @@ def test_the_audit_prints_the_table_and_trains_nothing():
     assert main(["--audit"]) == 0
 
 
-def test_running_without_audit_refuses_rather_than_training_on_unresolved_choices(monkeypatch):
-    """A stub that returned an untrained model's loss would produce a plausible number, which is
-    worse than nothing."""
-    monkeypatch.setitem(__import__("sys").modules, "torch", object())
-    with pytest.raises(NotImplementedError, match="P-06 training"):
-        main([])
+def test_running_without_torch_refuses_rather_than_producing_a_number(monkeypatch):
+    """**Superseded in substance by D-100: training *is* implemented now**, so this no longer
+    asserts that `main` raises. What it still asserts is the property that mattered underneath —
+    that the entry point never returns a plausible-looking number it did not earn.
+
+    D-072 made `main` raise because the nine hyperparameters were unresolved and the dataset was
+    unreachable. Both are now false (D-098, D-100). The remaining way to reach a fabricated result
+    is an environment without `torch`, and the contract there is an explicit non-zero exit and an
+    instruction, not a traceback and not a score.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_torch(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise ImportError("no torch in this environment")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_torch)
+    assert main([]) == 4
+
+
+def test_audit_trains_nothing(capsys):
+    """`--audit` is the phase's "show me the list before you train anything" gate, and it has to
+    stay cheap: no data is read and no model is fitted, so it runs in CI with neither."""
+    assert main(["--audit"]) == 0
+    out = capsys.readouterr().out
+    assert "stated" in out and "ours" in out
+    assert "loading TRAIN windows" not in out
 
 
 def test_the_table_states_how_many_settings_are_ours():

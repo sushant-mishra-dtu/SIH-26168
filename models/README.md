@@ -39,6 +39,14 @@ world-frame). Window ~1–2 s.
 
 ## Status
 
-Scaffold only. Sprint 0: extract every stated hyperparameter from the Onyekpe INS paper, list the
-ones it omits as choices we must make and log, pick the backbone, build the reproduction skeleton.
-**No training until the harness exists.**
+**Onyekpe INS baseline (P-06): trained.** `python -m models.train_baseline_rnn --data data` fits
+it and scores it over the frozen outage sweep; `--audit` prints the stated-versus-omitted
+hyperparameter table and trains nothing. Nine of the nineteen settings are ours rather than the
+papers' (D-098), the regression target is a tenth (D-099), and the result is reported as an
+improvement over raw INS because that is the shape the published claim takes (D-100).
+
+Needs the `ml` extra and the dataset: `pip install -e ".[ml]"` then
+`python -m eval.fetch --sync-only`. `torch` is imported inside the functions that need it, so the
+audit and its tests still run in the CI job that has neither.
+
+**The speed+variance head (P-08) is still untrained** — that is Sprint 2, and Gate 1 comes first.
