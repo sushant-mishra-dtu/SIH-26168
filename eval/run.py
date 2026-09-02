@@ -47,7 +47,12 @@ from eval.loaders.truth import (
     load_truth,
     paired_truth_path,
 )
-from eval.metrics.core import CRSE_CONVENTION, OutageMetrics, summarise
+from eval.metrics.core import (
+    CRSE_CONVENTION,
+    OutageMetrics,
+    ZeroDistanceOutage,
+    summarise,
+)
 from eval.outages.inject import (
     OUTAGE_LENGTHS_S,
     PREDICTION_CADENCE_S,
@@ -368,6 +373,10 @@ class DroppedWindow:
     sequence: str
     length_s: int
     start_idx: int
+    #: "no_truth_coverage" (D-089) or "zero_distance" (D-093). Broken out so the summary says
+    #: *why* a window went: a gap in the truth track and a parked vehicle are different findings
+    #: and a single total would conflate a pairing problem with an ordinary traffic light.
+    kind: str
     reason: str
 
     def as_row(self) -> dict[str, object]:
@@ -375,6 +384,7 @@ class DroppedWindow:
             "sequence": self.sequence,
             "length_s": self.length_s,
             "start_idx": self.start_idx,
+            "kind": self.kind,
             "reason": self.reason,
         }
 
@@ -461,7 +471,11 @@ def evaluate_sequence(
             # per-method window counts in `summary.json` would stop matching while every
             # individual number stayed correct -- a summary that misreports without a wrong
             # number in it. (`_gnss_for` reads the fix arrays and never touches truth, so it is
-            # not a fourth path.)
+            # not a fourth path.) `score` can also raise `ZeroDistanceOutage` when the vehicle
+            # did not move at all over the window, which is a real and ordinary condition -- a
+            # traffic light -- and leaves drift-% with no value to report (D-093). Both are
+            # dropped the same way; nothing broader is caught, because `evaluate_outage`'s other
+            # `ValueError`s are real defects.
             try:
                 trajectories = {
                     "filter": window_trajectory(run.position_ned, outage),
@@ -486,7 +500,7 @@ def evaluate_sequence(
                     if want_replay
                     else None
                 )
-            except TruthPairingError as exc:
+            except (TruthPairingError, ZeroDistanceOutage) as exc:
                 # D-089. The error's own instruction, which until now nothing implemented: drop
                 # the window rather than interpolate across the gap -- and drop it rather than
                 # lose the stem's other windows, or, as before, the whole run's.
@@ -506,6 +520,11 @@ def evaluate_sequence(
                             sequence=seq.name,
                             length_s=length_s,
                             start_idx=outage.start_idx,
+                            kind=(
+                                "no_truth_coverage"
+                                if isinstance(exc, TruthPairingError)
+                                else "zero_distance"
+                            ),
                             reason=str(exc),
                         )
                     )
@@ -722,6 +741,10 @@ def write_artefacts(
         "crse_convention": CRSE_CONVENTION.value,
         "n_windows": len(results),
         "n_dropped_windows": len(dropped),
+        "n_dropped_by_kind": {
+            kind: sum(d.kind == kind for d in dropped)
+            for kind in sorted({d.kind for d in dropped})
+        },
         "by_method": by_method,
         "gate1": gate1_ratio(by_method),
         "trajectories": sorted(replay or {}),

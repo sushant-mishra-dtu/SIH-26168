@@ -489,3 +489,61 @@ def test_a_dropped_window_is_announced_even_when_no_sink_collects_it(capsys):
     holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
     evaluate_sequence(seq, holed, [60])
     assert "DROPPED WINDOW" in capsys.readouterr().err
+
+
+def test_a_window_the_vehicle_never_moved_over_is_dropped_not_divided_by(capsys):
+    """D-093. `drift_pct` is `error / distance`, and a parked vehicle has no distance.
+
+    Found on the first sweep of the re-picked split: S3c has one 10 s window whose eleven truth
+    epochs all carry the identical fix, and the bare `ValueError` it raised escaped
+    `evaluate_sequence` and killed the run after S3a had already produced 1191 results -- D-089's
+    failure from a second cause. The stationary window here is built the same way: the truth track
+    holds one position for the whole window while the `S-` clock keeps running.
+    """
+    seq, truth = synthetic_drive(seconds=400.0)
+    frozen_from, frozen_to = 90.0, 152.0  # covers the second 60 s window end to end
+    hold = (truth.t_s >= START_OF_DAY_S + frozen_from) & (truth.t_s <= START_OF_DAY_S + frozen_to)
+    lat = truth.lat.copy()
+    lat[hold] = lat[hold][0]
+    parked = TruthTrack(
+        name=truth.name, t_s=truth.t_s, lat=lat, lon=truth.lon, source=truth.source
+    )
+
+    dropped: list = []
+    results = evaluate_sequence(seq, parked, [60], dropped=dropped)
+
+    assert [d.start_idx for d in dropped] == [900]
+    assert dropped[0].kind == "zero_distance"
+    assert "must be excluded from the sweep" in dropped[0].reason
+    assert "DROPPED WINDOW" in capsys.readouterr().err
+
+    assert results, "the windows either side of the stop must still grade"
+    assert 900 not in {r.start_idx for r in results}
+    per_method = {m: sorted(r.start_idx for r in results if r.method == m) for m in METHODS}
+    assert len(set(map(tuple, per_method.values()))) == 1, "a dropped window must take all methods"
+
+
+def test_a_real_metric_defect_is_not_swallowed_as_a_dropped_window():
+    """The reason `ZeroDistanceOutage` is a named subclass rather than a bare `ValueError`.
+
+    `evaluate_outage` also raises plain `ValueError` for a shape mismatch, an empty yaw sequence
+    and an unhandled CRSE convention -- all real defects. If the per-window catch took the base
+    class, every one of them would become a silently smaller result set.
+    """
+    import numpy as np
+
+    from eval.metrics.core import ZeroDistanceOutage, evaluate_outage
+
+    assert issubclass(ZeroDistanceOutage, ValueError)
+    with pytest.raises(ValueError) as exc:
+        evaluate_outage(
+            est_disp=np.zeros((3, 2)),
+            true_disp=np.zeros((4, 2)),  # deliberate shape mismatch
+            est_yaw=np.zeros(3),
+            true_yaw=np.zeros(3),
+            distance_m=100.0,
+            duration_s=3.0,
+        )
+    assert not isinstance(exc.value, ZeroDistanceOutage), (
+        "a shape mismatch must not be catchable as a dropped window"
+    )

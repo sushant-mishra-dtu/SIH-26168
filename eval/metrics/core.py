@@ -158,6 +158,17 @@ def crse(
     raise ValueError(f"unhandled CRSE convention {conv!r} -- add a branch, do not fall through")
 
 
+class ZeroDistanceOutage(ValueError):
+    """The vehicle did not move over this window, so drift-% has no value (D-093).
+
+    A named subclass so `eval.run.evaluate_sequence` can drop exactly this window and nothing
+    else. `evaluate_outage` also reaches `crse`, `yaw_error` and `_validate`, and every one of
+    those raises a plain `ValueError` for a real defect -- a shape mismatch, an empty yaw
+    sequence, an unhandled CRSE convention. Catching the base class there would turn any of them
+    into a silently smaller result set, which is the failure D-067 exists to prevent.
+    """
+
+
 def drift_percent(final_error_m: float, distance_m: float) -> float:
     """Final position error as a percentage of ground-truth distance travelled.
 
@@ -167,7 +178,7 @@ def drift_percent(final_error_m: float, distance_m: float) -> float:
     this is computed by us and must be defined unambiguously in the write-up.
     """
     if distance_m <= 0:
-        raise ValueError(
+        raise ZeroDistanceOutage(
             f"distance travelled must be positive, got {distance_m}. A zero-distance outage has "
             "no meaningful drift percentage and must be excluded from the sweep, not divided by."
         )
