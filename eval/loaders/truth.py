@@ -392,6 +392,49 @@ def divergent_copies(*, manifest: str | Path = DEFAULT_MANIFEST) -> list[CopyDiv
     return out
 
 
+def paired_stems(*, manifest: str | Path = DEFAULT_MANIFEST) -> list[str]:
+    """Every stem shipping **both** an `S-` and a `V-` file in the synchronised folder.
+
+    This is the candidate pool for the D-044 split re-pick, and it is the pool because those two
+    conditions are exactly what a held-out sequence needs: an `S-` smartphone stream to consume
+    (H-1 bars the `V-` side from the feature path) and a paired `V-` VBOX track to be graded
+    against (EVALUATION.md section 1.2). Synchronised only, for the reason `_SYNCHRONISED` gives
+    -- the argument for `V-` GPS as truth rests on the two streams sharing a clock.
+
+    **Membership of the pool is not fitness for the split.** It says the two files exist, which is
+    what a file listing can establish and the limit of what it can: D-044 was drafted from a
+    listing and the first contact with real bytes refused 6 of its 14 stems. Whether a stem may be
+    graded is `align_to_sequence`, and `python -m eval.cadence --all-paired` is what runs it over
+    this pool (D-090).
+
+    Read from the manifest rather than the tree so the pool is the same on a machine that has not
+    downloaded the dataset -- which is the machine the enumeration was needed on -- and so it
+    sidesteps the case difference between `V-vta9.csv` and `V-Vta9.csv` that `manifest_path_for`
+    documents. Returned in the manifest's own spelling of the `S-` file, sorted case-insensitively.
+    """
+    manifest_path = Path(manifest)
+    if not manifest_path.exists():
+        raise TruthPairingError(
+            f"manifest not found at {manifest_path}. The candidate pool is read from the manifest "
+            "rather than from the dataset tree; see docs/DATASETS.md."
+        )
+
+    seen: dict[str, dict[str, str]] = {}
+    with manifest_path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            stream = row.get("stream", "")
+            if stream not in ("S-", "V-") or _SYNCHRONISED not in row["path"]:
+                continue
+            name = Path(row["path"]).name
+            stem = name[len(stream) : -len(".csv")]
+            seen.setdefault(stem.lower(), {})[stream] = stem
+
+    return sorted(
+        (spellings["S-"] for spellings in seen.values() if "S-" in spellings and "V-" in spellings),
+        key=str.lower,
+    )
+
+
 # --------------------------------------------------------------------------------------------
 # Loading
 # --------------------------------------------------------------------------------------------

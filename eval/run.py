@@ -41,7 +41,12 @@ from eval.baselines import (
     score,
 )
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence, load_split
-from eval.loaders.truth import align_to_sequence, load_truth, paired_truth_path
+from eval.loaders.truth import (
+    TruthPairingError,
+    align_to_sequence,
+    load_truth,
+    paired_truth_path,
+)
 from eval.metrics.core import CRSE_CONVENTION, OutageMetrics, summarise
 from eval.outages.inject import (
     OUTAGE_LENGTHS_S,
@@ -349,6 +354,31 @@ class WindowResult:
         }
 
 
+@dataclass(frozen=True)
+class DroppedWindow:
+    """One outage window the paired `V-` track does not cover, and why (D-089).
+
+    A dropped window is **not** a failed sequence. `align_to_sequence` refusing a stem says the
+    two files do not describe the same drive, and the whole stem goes. A `TruthPairingError` here
+    says a handful of epochs inside one window have no truth sample within
+    `eval.loaders.truth.MAX_EPOCH_OFFSET_S`, which is a statement about those epochs only -- so
+    the window goes and the rest of the stem still grades.
+    """
+
+    sequence: str
+    length_s: int
+    start_idx: int
+    reason: str
+
+    def as_row(self) -> dict[str, object]:
+        return {
+            "sequence": self.sequence,
+            "length_s": self.length_s,
+            "start_idx": self.start_idx,
+            "reason": self.reason,
+        }
+
+
 def evaluate_sequence(
     seq: Sequence,
     truth,
@@ -357,6 +387,7 @@ def evaluate_sequence(
     cfg: FilterConfig | None = None,
     replay: dict | None = None,
     stamp: Stamp | None = None,
+    dropped: list[DroppedWindow] | None = None,
 ) -> list[WindowResult]:
     """Every window of every length for one sequence, all three methods.
 
@@ -367,6 +398,12 @@ def evaluate_sequence(
     `REPLAY_LENGTH_S` window is recorded into it for the renderer, stamped with `stamp`. First
     rather than a chosen one: picking the window that plots best is the same error as picking the
     sequence that scores best.
+
+    If `dropped` is a list, any window the truth track does not cover is appended to it as a
+    `DroppedWindow` and contributes nothing to the results (D-089). An out-parameter rather than a
+    second return value for the same reason `replay` is one: every existing caller stays a call
+    that returns `list[WindowResult]`, and a caller that does not pass a sink is not silently
+    handed a count it will not report.
     """
     if replay is not None and stamp is None:
         raise ValueError(
@@ -410,15 +447,28 @@ def evaluate_sequence(
         )
         for outage in windows:
             t0 = float(t_abs_s[outage.start_idx])
-            trajectories = {
-                "filter": window_trajectory(run.position_ned, outage),
-                "strapdown": _strapdown_for(gyro, accel, dt, outage, truth, t0),
-                "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, t_abs_s, t0),
-            }
-            for method, traj in trajectories.items():
-                if traj is None:
-                    continue
-                out.append(
+            want_replay = (
+                replay is not None
+                and seq.name in MANDATORY_PLOT_SEQUENCES
+                and length_s == REPLAY_LENGTH_S
+                and seq.name not in replay
+            )
+            # **The whole window is built before any of it is kept.** Three paths below reach the
+            # truth track and each can raise `TruthPairingError` for the same window:
+            # `_strapdown_for` -> `initial_state_from_truth` -> `truth.ned_at`, `score` ->
+            # `truth.displacements_ned`/`distance_m`, and `_replay_record` -> the same. Catching
+            # around any one of them would leave `filter` appended and `strapdown` not, and the
+            # per-method window counts in `summary.json` would stop matching while every
+            # individual number stayed correct -- a summary that misreports without a wrong
+            # number in it. (`_gnss_for` reads the fix arrays and never touches truth, so it is
+            # not a fourth path.)
+            try:
+                trajectories = {
+                    "filter": window_trajectory(run.position_ned, outage),
+                    "strapdown": _strapdown_for(gyro, accel, dt, outage, truth, t0),
+                    "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, t_abs_s, t0),
+                }
+                window_results = [
                     WindowResult(
                         method=method,
                         sequence=seq.name,
@@ -426,17 +476,44 @@ def evaluate_sequence(
                         start_idx=outage.start_idx,
                         metrics=score(traj, truth, outage, t0_s=t0),
                     )
+                    for method, traj in trajectories.items()
+                    if traj is not None
+                ]
+                record = (
+                    _replay_record(
+                        seq, truth, outage, t0, run, trajectories, gyro, accel, stamp=stamp
+                    )
+                    if want_replay
+                    else None
                 )
+            except TruthPairingError as exc:
+                # D-089. The error's own instruction, which until now nothing implemented: drop
+                # the window rather than interpolate across the gap -- and drop it rather than
+                # lose the stem's other windows, or, as before, the whole run's.
+                #
+                # Printed whether or not a sink was passed. A caller that forgets the sink would
+                # otherwise get a quietly smaller result set, which is the one failure D-067
+                # rules out by name -- "under-reporting the count is a far worse failure than a
+                # small count" -- and it would look exactly like a stem that simply had fewer
+                # windows.
+                print(
+                    f"[idr-eval] DROPPED WINDOW {seq.name} {length_s}s @{outage.start_idx}: {exc}",
+                    file=sys.stderr,
+                )
+                if dropped is not None:
+                    dropped.append(
+                        DroppedWindow(
+                            sequence=seq.name,
+                            length_s=length_s,
+                            start_idx=outage.start_idx,
+                            reason=str(exc),
+                        )
+                    )
+                continue
 
-            if (
-                replay is not None
-                and seq.name in MANDATORY_PLOT_SEQUENCES
-                and length_s == REPLAY_LENGTH_S
-                and seq.name not in replay
-            ):
-                replay[seq.name] = _replay_record(
-                    seq, truth, outage, t0, run, trajectories, gyro, accel, stamp=stamp
-                )
+            out.extend(window_results)
+            if record is not None:
+                replay[seq.name] = record
     return out
 
 
@@ -621,7 +698,11 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
 
 
 def write_artefacts(
-    out: Path, stamp: Stamp, results: list[WindowResult], replay: dict[str, dict] | None = None
+    out: Path,
+    stamp: Stamp,
+    results: list[WindowResult],
+    replay: dict[str, dict] | None = None,
+    dropped: list[DroppedWindow] | None = None,
 ) -> dict:
     """Write `summary.json`, `windows.csv` and one `trajectory_<seq>.json` per plotted
     sequence, all carrying the stamp.
@@ -631,14 +712,20 @@ def write_artefacts(
     """
     out.mkdir(parents=True, exist_ok=True)
     by_method = summarise_by_method_and_length(results)
+    # D-089. Carried beside the results, never folded into them: a run that graded 1260 windows
+    # and dropped 3 is a different result from one that graded 1263, and the difference is
+    # invisible in every metric. D-067's rule is that the omission travels with the number.
+    dropped = list(dropped or [])
     summary = {
         "stamp": stamp.caption(),
         "reproducible": stamp.is_reproducible(),
         "crse_convention": CRSE_CONVENTION.value,
         "n_windows": len(results),
+        "n_dropped_windows": len(dropped),
         "by_method": by_method,
         "gate1": gate1_ratio(by_method),
         "trajectories": sorted(replay or {}),
+        "dropped_windows": [d.as_row() for d in dropped],
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -732,14 +819,19 @@ def main(argv: list[str] | None = None) -> int:
     results: list[WindowResult] = []
     replay: dict[str, dict] = {}
     skipped: list[str] = []
+    skipped_names: list[str] = []
+    dropped: list[DroppedWindow] = []
     for name, seq in sorted(sequences.items()):
         try:
             truth = load_truth(paired_truth_path(name, args.data), name)
             results.extend(
-                evaluate_sequence(seq, truth, args.lengths, replay=replay, stamp=stamp)
+                evaluate_sequence(
+                    seq, truth, args.lengths, replay=replay, stamp=stamp, dropped=dropped
+                )
             )
         except SequenceUnusable as exc:
             skipped.append(f"{name}: {exc}")
+            skipped_names.append(name)
             print(f"[idr-eval] SKIPPED {exc}", file=sys.stderr)
         else:
             print(f"[idr-eval] {name}: {sum(r.sequence == name for r in results)} window results")
@@ -752,13 +844,43 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    summary = write_artefacts(args.out, stamp, results, replay)
+    summary = write_artefacts(args.out, stamp, results, replay, dropped)
+
+    # A mandatory figure that is simply absent (D-089). Before dropped windows existed, a hole
+    # inside a `MANDATORY_PLOT_SEQUENCES` replay window aborted the run, so this could not happen
+    # quietly; now it can, and `eval/splits.py` says such a figure should "fail the run rather
+    # than being noticed the night before" while nothing in the code has ever enforced it. A stem
+    # that was skipped whole is already reported as skipped and is not counted twice here.
+    mandatory_missing = [
+        name
+        for name in MANDATORY_PLOT_SEQUENCES
+        if name not in replay and name not in skipped_names
+    ]
+
     if skipped:
         summary["skipped"] = skipped
+    if mandatory_missing:
+        summary["mandatory_plots_missing"] = mandatory_missing
+    if skipped or mandatory_missing:
         (args.out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if skipped:
         print(
             f"[idr-eval] {len(skipped)} sequence(s) skipped -- listed in summary.json. Report the "
             "count with every number from this run.",
+            file=sys.stderr,
+        )
+    if dropped:
+        print(
+            f"[idr-eval] {len(dropped)} window(s) dropped for want of truth coverage -- listed in "
+            "summary.json. Report the count with every number from this run (D-089).",
+            file=sys.stderr,
+        )
+    if mandatory_missing:
+        print(
+            f"[idr-eval] MANDATORY PLOT MISSING: {', '.join(mandatory_missing)} produced no "
+            f"{REPLAY_LENGTH_S} s replay window. eval/splits.MANDATORY_PLOT_SEQUENCES names these "
+            "so a missing figure is found now rather than the night before; the submission is "
+            "not complete without them.",
             file=sys.stderr,
         )
     print(json.dumps(summary["gate1"], indent=2))

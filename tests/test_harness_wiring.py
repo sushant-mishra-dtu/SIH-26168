@@ -26,6 +26,7 @@ from eval.outages.inject import Outage
 from eval.run import (
     EPOCH_STRIDE,
     GATE1_LENGTH_S,
+    METHODS,
     SequenceUnusable,
     assert_uniform_grid,
     evaluate_sequence,
@@ -352,3 +353,126 @@ def test_an_unusable_truth_pairing_stops_the_sequence_rather_than_grading_it():
     )
     with pytest.raises(SequenceUnusable, match="not usable as truth"):
         evaluate_sequence(seq, shifted, [60])
+
+
+# ------------------------------------------------------------------------------------------
+# Windows the truth track does not cover (D-089)
+# ------------------------------------------------------------------------------------------
+
+
+def _truth_with_hole(truth: TruthTrack, *, from_rel_s: float, to_rel_s: float) -> TruthTrack:
+    """The same track with its samples between two relative times deleted.
+
+    This is Vw12's failure built to order: `align_to_sequence` still passes -- the surviving
+    samples describe the same drive at the same time, and losing three seconds costs at most one
+    of the ~9 s-spaced `S-` fixes a match -- but the epochs inside the hole have no truth sample
+    within `MAX_EPOCH_OFFSET_S`, so `index_at` raises for the windows that span it and only those.
+    """
+    keep = ~(
+        (truth.t_s >= START_OF_DAY_S + from_rel_s) & (truth.t_s <= START_OF_DAY_S + to_rel_s)
+    )
+    return TruthTrack(
+        name=truth.name,
+        t_s=truth.t_s[keep],
+        lat=truth.lat[keep],
+        lon=truth.lon[keep],
+        source=truth.source,
+    )
+
+
+#: Relative seconds of the hole. Chosen to sit inside the second 60 s window (samples 900-1500,
+#: i.e. 90-150 s) so there are covered windows on both sides of it -- a hole in the first window
+#: would not distinguish "dropped the window" from "started grading late".
+HOLE_FROM_S, HOLE_TO_S = 120.0, 123.0
+
+
+def test_a_window_the_truth_does_not_cover_is_dropped_and_the_rest_still_grade():
+    """D-089. A 3 s hole leaves 4 of the window's 61 epochs uncovered -- Vw12's failure to scale
+    (3 of 11, worst gap 2.305 s) -- and that is not a reason to lose the other five windows.
+
+    Before this, `TruthPairingError` escaped `evaluate_sequence` entirely, passed straight through
+    `main()`'s `except SequenceUnusable`, and killed the sweep -- discarding, on the first real
+    run, the 1260 windows already computed for three earlier stems.
+    """
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    assert align_to_sequence(seq, holed).is_usable, "the hole must not refuse the whole stem"
+
+    intact = evaluate_sequence(seq, truth, [60])
+    dropped: list = []
+    results = evaluate_sequence(seq, holed, [60], dropped=dropped)
+
+    assert len(dropped) == 1, "exactly the window spanning the hole"
+    assert dropped[0].sequence == seq.name
+    assert dropped[0].length_s == 60
+    assert dropped[0].start_idx == 900
+    assert "no truth sample within" in dropped[0].reason
+
+    assert results, "the covered windows must still grade"
+    starts = {r.start_idx for r in results}
+    assert 900 not in starts, "the uncovered window must contribute no result"
+    assert starts == {r.start_idx for r in intact} - {900}
+
+    # Every surviving window scores exactly what it scored against the intact track: dropping one
+    # window must not perturb another, and the filter runs over the whole stream either way.
+    kept = {(r.method, r.start_idx): r.metrics.drift_pct for r in intact if r.start_idx != 900}
+    assert {(r.method, r.start_idx): r.metrics.drift_pct for r in results} == kept
+
+
+def test_a_dropped_window_never_leaves_a_partial_set_of_methods():
+    """The failure that would misreport without a wrong number anywhere in it.
+
+    Three paths inside one window reach the truth track, so a `try` around any single one of them
+    would append `filter` and not `strapdown`. Every count in `summary.json` is per method and per
+    length, and a window contributing two methods instead of three makes those counts disagree
+    while each individual metric stays correct.
+    """
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    dropped: list = []
+    results = evaluate_sequence(seq, holed, [60], dropped=dropped)
+
+    per_method = {m: sorted(r.start_idx for r in results if r.method == m) for m in METHODS}
+    assert len(set(map(tuple, per_method.values()))) == 1, (
+        f"methods graded different windows: {per_method}"
+    )
+    assert len(results) == len(METHODS) * len(per_method["filter"])
+
+
+def test_a_dropped_window_is_counted_in_the_summary_beside_the_results(tmp_path):
+    """D-067: the omission travels with the number. A run that graded five windows and dropped one
+    is a different result from one that graded five, and no metric shows the difference."""
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    dropped: list = []
+    results = evaluate_sequence(seq, holed, [60], dropped=dropped)
+
+    stamp = seed_everything(0)
+    write_artefacts(tmp_path, stamp, results, None, dropped)
+    written = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+
+    assert written["n_dropped_windows"] == 1
+    assert written["n_windows"] == len(results)
+    row = written["dropped_windows"][0]
+    assert (row["sequence"], row["length_s"], row["start_idx"]) == (seq.name, 60, 900)
+    assert "no truth sample within" in row["reason"]
+
+
+def test_a_run_with_no_gaps_reports_zero_dropped_rather_than_omitting_the_field(tmp_path):
+    """A count that is absent when it is zero cannot be distinguished from a count nobody wrote."""
+    seq, truth = synthetic_drive(seconds=200.0)
+    dropped: list = []
+    results = evaluate_sequence(seq, truth, [60], dropped=dropped)
+    assert dropped == []
+
+    written = write_artefacts(tmp_path, seed_everything(0), results, None, dropped)
+    assert written["n_dropped_windows"] == 0
+    assert written["dropped_windows"] == []
+
+
+def test_a_dropped_window_is_announced_even_when_no_sink_collects_it(capsys):
+    """A caller that omits the sink gets a smaller result set. It must not get a quiet one."""
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    evaluate_sequence(seq, holed, [60])
+    assert "DROPPED WINDOW" in capsys.readouterr().err

@@ -34,6 +34,7 @@ from eval.loaders.truth import (
     load_truth,
     manifest_path_for,
     normalise_truth_header,
+    paired_stems,
     paired_truth_path,
     seconds_of_day,
     unwrap_time_of_day,
@@ -505,3 +506,59 @@ def test_load_split_picks_between_divergent_copies_deterministically(tmp_path):
     unc = tmp_path / "Uncategorised IOVNB Dataset" / "S-Dataset" / "S-S3a.csv"
     assert _preferred_copy([unc, cat]) == cat
     assert _preferred_copy([cat, unc]) == cat
+
+
+# ------------------------------------------------------------------------------------------
+# The candidate pool for the D-044 split re-pick (D-090)
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_candidate_pool_is_every_synchronised_stem_shipping_both_streams():
+    """The pool is 72 stems, and it is 72 exactly rather than "roughly 72".
+
+    Read from the committed manifest, so this holds on a machine with no dataset bytes -- which is
+    the machine the enumeration was needed on. A held-out sequence needs both files: an `S-` side
+    to consume, because H-1 bars the `V-` side from the feature path, and a paired `V-` side to be
+    graded against (EVALUATION.md section 1.2).
+    """
+    pool = paired_stems()
+    assert len(pool) == 72
+    assert len(set(pool)) == len(pool), "a stem must not appear twice"
+    assert pool == sorted(pool, key=str.lower)
+
+
+def test_the_candidate_pool_contains_every_stem_the_split_already_names():
+    """If a split entry were outside the pool, the pool would be the wrong set to re-pick from."""
+    from eval.splits import TRAIN
+    from eval.splits import test_sequences as held_out
+
+    folded = {s.lower() for s in paired_stems()}
+    for name in tuple(held_out()) + tuple(TRAIN):
+        assert name.lower() in folded, f"{name} is in the split but not in the paired pool"
+
+
+def test_the_candidate_pool_excludes_the_stems_with_no_smartphone_stream():
+    """D-044's eleven ship on the `V-` ECU stream only. A pool that offered one as a replacement
+    would re-make the exact mistake the re-pick exists to correct."""
+    from eval.splits import UNAVAILABLE_S_STREAM
+
+    folded = {s.lower() for s in paired_stems()}
+    assert not folded & {s.lower() for s in UNAVAILABLE_S_STREAM}
+
+
+def test_the_untested_candidates_are_the_pool_less_the_split():
+    """The size of the outstanding measurement, as a number rather than an estimate (D-090)."""
+    from eval.splits import TRAIN
+    from eval.splits import test_sequences as held_out
+
+    folded = {s.lower() for s in paired_stems()}
+    known = {s.lower() for s in tuple(held_out()) + tuple(TRAIN)}
+    assert len(known) == 19, "14 held out (D-088 measured each) + 5 train"
+    assert len(folded - known) == 53, "stems never run through align_to_sequence"
+
+
+def test_a_missing_manifest_names_the_manifest_rather_than_returning_an_empty_pool():
+    """An empty pool would read as "no candidates exist", which is a different and much worse
+    answer than "the manifest is not where you said"."""
+    with pytest.raises(TruthPairingError, match="manifest not found"):
+        paired_stems(manifest="does/not/exist.csv")
