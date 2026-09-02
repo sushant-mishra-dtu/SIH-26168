@@ -72,29 +72,54 @@ rather than the reverse.
 
 ### Held-out scenario sets
 
-| Set | Sequences |
-|---|---|
-| **Long outage** (30/60/120/180 s) | V-St6, V-St7, V-S3a, Vtb3, Vfb01c, Vfb02a, Vta1a, Vfb02b, Vfb02g |
-| **Roundabout** (10 s) | Vta11, Vfb02d |
-| **Hard brake** (10 s) | Vw16b, Vw17, Vta9 |
-| **Accel change** (10 s) | Vfb02e, Vta12 |
-| **Sharp corner / SLR** (10 s) | Vw6, Vw7, Vw8 |
-| **Wet road** (10 s) | Vtb8, Vtb11, Vtb13 |
-| **Motorway (easy control)** (10 s) | Vw12 |
+**Re-picked 2026-09-02 against measured truth pairing — [DECISION_LOG.md](DECISION_LOG.md) D-092,
+executing the TODO D-044 opened.** `eval/splits.py` is the authority and this table follows it.
+Every stem below was run through `align_to_sequence` and through the harness's own uniform-grid
+check: `python -m eval.cadence --all-paired --data-root data`.
 
-Training sets (≈1,590 min / 1,165 km): V-S1, V-S2, V-S3c, V-S4, V-St1, V-M, V-Y2, plus Vta/Vtb/Vw/Vfa/Vfb
-subsets not listed above. **No sequence appears in both.** The split is fixed in code, not in a notebook.
+| Set | Sequences | 60 s windows |
+|---|---|---|
+| **Long outage** (30/60/120/180 s) | S3a, S3c, Vta1a, Vta1b, Vta16, Vw2, Vw4 | 459 |
+| **Roundabout** (10 s) | Vta11 | — |
+| **Hard brake** (10 s) | Vw16b | — |
+| **Accel change** (10 s) | Vta12 | — |
+| **Sharp corner / SLR** (10 s) | Vw6 | — |
+| **Wet road** (10 s) | *(none — see below)* | — |
+| **Motorway (easy control)** (10 s) | Vw12 | — |
 
-**Mandatory position plots for the submission:** V-St6, V-St7, V-S3a (long outage) and at least one
-roundabout scenario.
+**Training set — pinned to an explicit list of stems.** M, S1, S2, S4, Vw14a, Vw14b, Vw14c, Vta2,
+Vta4, Vta10, Vta14, Vta15, Vta19, Vw3, Vw5, Vw9, Vw10, Vw11, Vw13. This replaces the previous
+"plus Vta/Vtb/Vw/Vfa/Vfb subsets not listed above", which was an open-ended clause living only in
+this document: `assert_split_disjoint` compares two tuples, so a held-out stem drawn from that
+unnamed remainder would have overlapped training with no check able to see it. **No sequence
+appears in both**, and no *parent recording* straddles the split either — `Vw14a/b/c` are kept
+together in train, `Vta1a/Vta1b` and `S3a/S3c` together in test, and `Vw16a` is left unassigned
+because its sibling `Vw16b` is held out. That second rule is `assert_no_family_straddles_the_split`,
+and it caught a real leak the moment it was written. The split is fixed in code, not in a notebook.
 
-> ⚠️ **This table is the protocol as drafted from the paper, and it is not yet loadable.** The paper
-> is written against the `V-` vehicle stream; we consume `S-` only. Eleven of the stems above —
-> `St1`, `St6`, `St7`, `Y2`, `Vtb13`, `Vfb01c`, `Vfb02a`, `Vfb02b`, `Vfb02d`, `Vfb02e`, `Vfb02g` —
-> have **no `S-` smartphone file** in either IO-VNBD folder. `eval/splits.py` is the authority and
-> currently holds the loadable subset: long outage `S3a, Vtb3, Vta1a`; mandatory plots `S3a, Vta11`;
-> train `S1, S2, S3c, S4, M`. **Seat D re-picks replacements and rewrites this table before the
-> Gate 0 freeze** — see [DECISION_LOG.md](DECISION_LOG.md) D-044.
+**Mandatory position plots for the submission:** S3a and Vw4 (long outage).
+
+> ⚠️ **What this set cannot report, stated here rather than discovered later.**
+>
+> - **Wet road is empty.** `Vtb8` and `Vtb11` are refused by truth pairing at 33.7 m and 35.1 m
+>   median residual against a 10 m limit, and no other stem in the dataset is documented as wet.
+>   The scenario cannot be reported at all. The group is kept in `eval/splits.py` as an empty
+>   tuple rather than deleted, so the omission is visible in the code as well as here.
+> - **The roundabout plot cannot be produced.** This document requires "at least one roundabout
+>   scenario" plot; the only roundabout stem is `Vta11`, which is 51.0 s long and cannot host the
+>   60 s window `eval.run.REPLAY_LENGTH_S` plots. Open — it needs a scenario-length replay window
+>   or a longer recording, and both are protocol decisions.
+> - **Nothing was promoted into a scenario group.** Scenario labels are claims about what the
+>   vehicle was doing, and the only source is this table as drafted from the paper. The 53
+>   previously unallocated stems are undocumented, so thinned groups stay thin; promotion happened
+>   only into the long-outage set, where membership is a measurable property.
+> - **Eleven stems have no `S-` file at all** — `St1`, `St6`, `St7`, `Y2`, `Vtb13`, `Vfb01c`,
+>   `Vfb02a`, `Vfb02b`, `Vfb02d`, `Vfb02e`, `Vfb02g` — and remain out of reach under §1.2 (D-044).
+> - **Refused by truth pairing:** `Vtb3` (8.5 m but at a −2.70 s lag against a 0.5 s limit),
+>   `Vtb8`, `Vtb11`, `Vw7` and `Vw8` (zero fixes matched, ~−165 s, undiagnosed), `S3b`.
+>   **Too short for any outage:** `Vw17` (32.9 s), `Vta9` (15.6 s).
+> - **Driver diversity is thin.** 62 of the 72 paired stems are Driver E. `S3a`/`S3c` are the only
+>   Driver A sequences in the held-out set, and they are there only because D-091 recovered them.
 
 ---
 

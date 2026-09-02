@@ -549,15 +549,37 @@ def test_the_candidate_pool_excludes_the_stems_with_no_smartphone_stream():
     assert not folded & {s.lower() for s in UNAVAILABLE_S_STREAM}
 
 
-def test_the_untested_candidates_are_the_pool_less_the_split():
-    """The size of the outstanding measurement, as a number rather than an estimate (D-090)."""
+def test_the_split_is_drawn_from_the_pool_and_the_remainder_is_unassigned():
+    """Supersedes the "53 stems never aligned" form this test had before D-092.
+
+    That number was a snapshot of outstanding work, and the work is done: `--all-paired` swept all
+    72, so nothing is unaligned any more. What is worth pinning now is the allocation itself --
+    every stem the split names must come from the paired pool, and everything else is
+    `unassigned`, which `split_of` treats as ordinary rather than as an error.
+    """
     from eval.splits import TRAIN
     from eval.splits import test_sequences as held_out
 
-    folded = {s.lower() for s in paired_stems()}
-    known = {s.lower() for s in tuple(held_out()) + tuple(TRAIN)}
-    assert len(known) == 19, "14 held out (D-088 measured each) + 5 train"
-    assert len(folded - known) == 53, "stems never run through align_to_sequence"
+    pool = {s.lower() for s in paired_stems()}
+    held = {s.lower() for s in held_out()}
+    train = {s.lower() for s in TRAIN}
+
+    assert len(pool) == 72
+    assert not (held | train) - pool, "the split names a stem outside the paired pool"
+    assert len(held) == 12 and len(train) == 19
+    assert len(pool - held - train) == 41, "the rest of the pool is deliberately unassigned"
+
+
+def test_every_stem_the_split_dropped_is_recorded_with_a_reason():
+    """A stem that vanished from the split without a reason is indistinguishable from one nobody
+    noticed. D-092 removed six from CHALLENGING and one from LONG_OUTAGE; each is named."""
+    from eval.splits import REFUSED_TRUTH_PAIRING, TOO_SHORT_FOR_ANY_OUTAGE
+
+    dropped = {"Vtb3", "Vtb8", "Vtb11", "Vw7", "Vw8", "Vw17", "Vta9"}
+    assert dropped <= (REFUSED_TRUTH_PAIRING | TOO_SHORT_FOR_ANY_OUTAGE)
+    pool = {s.lower() for s in paired_stems()}
+    for stem in REFUSED_TRUTH_PAIRING | TOO_SHORT_FOR_ANY_OUTAGE:
+        assert stem.lower() in pool, f"{stem} is recorded as dropped but is not in the pool"
 
 
 def test_a_missing_manifest_names_the_manifest_rather_than_returning_an_empty_pool():
