@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IDR Logger</string>
+    <string name="channel_name">Recording</string>
+    <string name="channel_description">Shown while a drive is being recorded. Required: Android delivers no sensor events to a backgrounded app.</string>
+    <string name="start">Start recording</string>
+    <string name="stop">Stop recording</string>
+</resources>
