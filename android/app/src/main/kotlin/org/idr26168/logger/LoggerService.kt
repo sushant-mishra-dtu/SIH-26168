@@ -81,6 +81,10 @@ class LoggerService : Service() {
     private var nextTickUptimeMs = 0L
     private var running = false
 
+    private var ticksSinceSpaceCheck = 0
+    private var spaceWarningIssued = false
+    private var stoppingForSpace = false
+
     private val dateFormat = SessionClock.dateFormat()
     private val dateBuffer = Date()
 
@@ -113,11 +117,34 @@ class LoggerService : Service() {
 
     // ------------------------------------------------------------------------------------------
 
+    /**
+     * Start, and survive failing to start.
+     *
+     * Everything after `startForeground` can throw -- a SecurityException from a permission
+     * revoked while the app was backgrounded, an IOException opening a writer on a full volume --
+     * and the service is in the foreground holding a wake lock by then. Letting that propagate
+     * leaves the notification up with no recording behind it, and the exception that reaches the
+     * log is the crash rather than the cause.
+     */
     private fun startRecording() {
         if (running) return
         running = true
         warnings.clear()
+        ticksSinceSpaceCheck = 0
+        spaceWarningIssued = false
+        stoppingForSpace = false
 
+        try {
+            startRecordingOrThrow()
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "startRecording failed; stopping cleanly", e)
+            warnings += "recording failed to start: " + e
+            stopRecording()
+            stopSelf()
+        }
+    }
+
+    private fun startRecordingOrThrow() {
         startForegroundWithNotification()
         acquireWakeLock()
 
@@ -127,14 +154,34 @@ class LoggerService : Service() {
         session = sess
         clock = clk
 
-        sensorThread = HandlerThread("idr-sensor", android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+        // The identity of the recording goes to disk before a single sample does, so that a
+        // session killed by the OS at any point after this is still attributable to a device and
+        // a requested rate. See Session.writeProvisionalSidecar.
+        try {
+            sess.writeProvisionalSidecar(requestedImuHz, clk.tzOffsetMinutes())
+        } catch (e: Exception) {
+            // Not fatal. A recording without a sidecar is worth less than one with, and worth far
+            // more than no recording at all.
+            android.util.Log.e(TAG, "provisional sidecar write failed for " + sess.id, e)
+            warnings += "provisional sidecar could not be written: " + e
+        }
+
+        warnings += freeSpaceWarningAtStart(sess)
+
+        // Held as locals as well as fields: the fields are nullable so that stopRecording can run
+        // after a partial start, and dereferencing them here would otherwise need a null check per
+        // use for handles that cannot be null on this path.
+        val sensors = HandlerThread("idr-sensor", android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             .also { it.start() }
-        gnssThread = HandlerThread("idr-gnss").also { it.start() }
-        tickThread = HandlerThread("idr-tick", android.os.Process.THREAD_PRIORITY_FOREGROUND)
+        val gnssT = HandlerThread("idr-gnss").also { it.start() }
+        val ticks = HandlerThread("idr-tick", android.os.Process.THREAD_PRIORITY_FOREGROUND)
             .also { it.start() }
-        sensorHandler = Handler(sensorThread.looper)
-        gnssHandler = Handler(gnssThread.looper)
-        tickHandler = Handler(tickThread.looper)
+        sensorThread = sensors
+        gnssThread = gnssT
+        tickThread = ticks
+        val sensorH = Handler(sensors.looper).also { sensorHandler = it }
+        val gnssH = Handler(gnssT.looper).also { gnssHandler = it }
+        val tickH = Handler(ticks.looper).also { tickHandler = it }
 
         csvWriter = LineWriter(
             file = sess.csvFile,
@@ -164,7 +211,7 @@ class LoggerService : Service() {
             onRaw = { rawWriter?.offer(it) },
         )
         sensorHub = hub
-        warnings += hub.start(sensorHandler)
+        warnings += hub.start(sensorH)
 
         val gnss = GnssHub(
             locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager,
@@ -172,20 +219,20 @@ class LoggerService : Service() {
         )
         gnssHub = gnss
         try {
-            warnings += gnss.start(gnssHandler)
+            warnings += gnss.start(gnssH)
         } catch (e: SecurityException) {
             warnings += "location permission missing: no GNSS in this recording (" + e.message + ")"
         }
 
         nextTickUptimeMs = SystemClock.uptimeMillis() + Channels.CSV_ROW_PERIOD_MS
-        tickHandler.postAtTime(tickRunnable, nextTickUptimeMs)
+        tickH.postAtTime(tickRunnable, nextTickUptimeMs)
     }
 
     private fun stopRecording() {
         if (!running) return
         running = false
 
-        tickHandler.removeCallbacksAndMessages(null)
+        tickHandler?.removeCallbacksAndMessages(null)
         sensorHub?.stop()
         try {
             gnssHub?.stop()
@@ -201,9 +248,9 @@ class LoggerService : Service() {
 
         writeSidecar()
 
-        sensorThread.quitSafely()
-        gnssThread.quitSafely()
-        tickThread.quitSafely()
+        sensorThread?.quitSafely()
+        gnssThread?.quitSafely()
+        tickThread?.quitSafely()
 
         releaseWakeLock()
         stopForegroundCompat()
@@ -216,6 +263,12 @@ class LoggerService : Service() {
         csvWriter = null
         rawWriter = null
         satWriter = null
+        sensorThread = null
+        gnssThread = null
+        tickThread = null
+        sensorHandler = null
+        gnssHandler = null
+        tickHandler = null
     }
 
     // ------------------------------------------------------------------------------------------
@@ -225,6 +278,7 @@ class LoggerService : Service() {
             if (!running) return
             try {
                 writeRow()
+                enforceFreeSpace()
             } finally {
                 // Fixed-schedule, not fixed-delay: each tick is scheduled from the *previous
                 // target*, so a late tick does not push every later one later. The CSV cadence is
@@ -234,7 +288,10 @@ class LoggerService : Service() {
                 nextTickUptimeMs += Channels.CSV_ROW_PERIOD_MS
                 val now = SystemClock.uptimeMillis()
                 if (nextTickUptimeMs <= now) nextTickUptimeMs = now + Channels.CSV_ROW_PERIOD_MS
-                tickHandler.postAtTime(this, nextTickUptimeMs)
+                // Safe-called rather than asserted: stopRecording clears this field, and a tick
+                // already in flight when that happens must end the loop rather than crash the
+                // recording on its way out.
+                tickHandler?.postAtTime(this, nextTickUptimeMs)
             }
         }
     }
@@ -353,6 +410,86 @@ class LoggerService : Service() {
             out += accel.nonMonotonic.toString() + " non-monotonic accelerometer timestamps"
         }
         return out
+    }
+
+    /**
+     * Warn at start if the volume is already tight. Not a refusal: a short recording on a full
+     * phone is still a recording, and the person holding it is better placed to decide than this
+     * method is.
+     */
+    private fun freeSpaceWarningAtStart(sess: Session): List<String> {
+        val free = sess.usableSpaceBytes()
+        if (free >= FREE_SPACE_WARN_AT_START_BYTES) return emptyList()
+        return listOf(
+            String.format(
+                Locale.US,
+                "only %.0f MB free where this session is being written. The raw sidecar runs " +
+                    "several MB per minute at %.0f Hz, so a long drive will not fit; recording " +
+                    "stops cleanly at %.0f MB rather than truncating a row.",
+                free / BYTES_PER_MB, requestedImuHz, FREE_SPACE_STOP_BYTES / BYTES_PER_MB,
+            )
+        )
+    }
+
+    /**
+     * Stop before the volume fills rather than after.
+     *
+     * There is no size cap and no rotation, by design -- a rotated file is a drive split across
+     * files with a seam in the middle of it. What replaces them is this: watch the free space and
+     * stop cleanly while there is still room to flush the writers and rewrite the sidecar. A
+     * recording that ends early and says so in its own warnings is diagnosable; one that ran the
+     * volume to zero ends mid-row, and the trailing buffer is lost with no record that it existed.
+     *
+     * The projection is measured rather than assumed. Bytes per second depend on the requested IMU
+     * rate, on how many uncalibrated streams the device actually has and on the GNSS callback
+     * rate, so the only honest estimate is the one taken from this recording's own files -- the
+     * same reason [RateStats] exists at all.
+     */
+    private fun enforceFreeSpace() {
+        if (stoppingForSpace) return
+        // statfs is a syscall. At 10 Hz, every hundredth tick is once every ten seconds, which is
+        // far more often than a drive can fill a phone from the warning threshold.
+        if (++ticksSinceSpaceCheck < SPACE_CHECK_EVERY_TICKS) return
+        ticksSinceSpaceCheck = 0
+
+        val sess = session ?: return
+        val clk = clock ?: return
+        val free = sess.usableSpaceBytes()
+
+        if (free < FREE_SPACE_STOP_BYTES) {
+            stoppingForSpace = true
+            warnings += String.format(
+                Locale.US,
+                "stopped early: %.0f MB free at the recording location, under the %.0f MB floor. " +
+                    "Every row written before this point is complete and readable.",
+                free / BYTES_PER_MB, FREE_SPACE_STOP_BYTES / BYTES_PER_MB,
+            )
+            // stopSelf rather than stopRecording: this is the tick thread, and stopRecording quits
+            // it. Going through the service lifecycle puts the shutdown on the main thread, where
+            // onDestroy already runs it.
+            stopSelf()
+            return
+        }
+
+        if (spaceWarningIssued) return
+        val elapsedS = (SystemClock.elapsedRealtimeNanos() - clk.startedElapsedNs()) / 1e9
+        if (elapsedS < SPACE_ESTIMATE_MIN_S) return
+        val written = (csvWriter?.sizeBytes() ?: 0L) + (rawWriter?.sizeBytes() ?: 0L) +
+            (satWriter?.sizeBytes() ?: 0L)
+        if (written <= 0L) return
+
+        val bytesPerS = written / elapsedS
+        val minutesLeft = (free - FREE_SPACE_STOP_BYTES) / bytesPerS / 60.0
+        if (minutesLeft < FREE_SPACE_WARN_MINUTES) {
+            spaceWarningIssued = true
+            warnings += String.format(
+                Locale.US,
+                "about %.0f minutes of recording left: %.1f MB/min measured so far, %.0f MB free. " +
+                    "Recording stops cleanly at %.0f MB.",
+                minutesLeft, bytesPerS * 60.0 / BYTES_PER_MB, free / BYTES_PER_MB,
+                FREE_SPACE_STOP_BYTES / BYTES_PER_MB,
+            )
+        }
     }
 
     private fun writeSidecar() {
@@ -474,6 +611,29 @@ class LoggerService : Service() {
 
         /** Wake-lock ceiling. Four hours is longer than any drive we plan and short of forever. */
         private const val MAX_RECORDING_MS = 4L * 60L * 60L * 1000L
+
+        private const val BYTES_PER_MB = 1024.0 * 1024.0
+
+        /**
+         * Warn below a gigabyte at start. `android/HANDOVER.md` section 4 puts the raw sidecar at
+         * roughly 4 MB/minute at 100 Hz, so a two-hour drive is around half a gigabyte and a
+         * volume with less than one free is one to be told about before setting off.
+         */
+        private const val FREE_SPACE_WARN_AT_START_BYTES = 1024L * 1024L * 1024L
+
+        /**
+         * Stop below 128 MB. The floor is not "nearly zero" on purpose: stopping has to flush
+         * three writers and rewrite the sidecar, and it needs the room to do that.
+         */
+        private const val FREE_SPACE_STOP_BYTES = 128L * 1024L * 1024L
+
+        private const val FREE_SPACE_WARN_MINUTES = 10.0
+
+        /** Below this, the measured write rate is dominated by the header and the first flush. */
+        private const val SPACE_ESTIMATE_MIN_S = 30.0
+
+        /** 10 Hz ticks, so every hundredth is once every ten seconds. */
+        private const val SPACE_CHECK_EVERY_TICKS = 100
 
         private const val CSV_QUEUE = 4096
         private const val RAW_QUEUE = 16384

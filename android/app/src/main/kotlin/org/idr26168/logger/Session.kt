@@ -44,13 +44,21 @@ class Session(context: Context, val startedWallMs: Long) {
     val sidecarFile = File(dir, id + "_session.json")
 
     /**
-     * Write the session sidecar.
+     * Bytes still writable on the volume this session is being recorded to.
      *
-     * Called on stop, and again if the service is killed while recording -- a half-written
-     * recording with a sidecar is diagnosable; one without is a folder of numbers with no device
-     * attached to it.
+     * `usableSpace` rather than `freeSpace`: the two differ by whatever the filesystem holds back
+     * for root, and it is the usable figure that decides whether the next `write` actually
+     * succeeds.
      */
-    fun writeSidecar(summary: Summary) {
+    fun usableSpaceBytes(): Long = dir.usableSpace
+
+    /**
+     * Everything about a session that is knowable before a single sample arrives.
+     *
+     * Shared by both writes below, so the provisional sidecar and the final one cannot drift into
+     * describing the same recording differently.
+     */
+    private fun identityJson(requestedImuHz: Double): JSONObject {
         val root = JSONObject()
         root.put("schema", SCHEMA)
         root.put("session_id", id)
@@ -69,6 +77,70 @@ class Session(context: Context, val startedWallMs: Long) {
         )
 
         root.put(
+            "requested",
+            JSONObject()
+                .put("imu_hz", requestedImuHz)
+                .put("csv_row_hz", Channels.CSV_ROW_HZ)
+                .put("csv_row_hz_rationale", Channels.CSV_ROW_HZ_RATIONALE)
+                .put("max_report_latency_us", 0)
+                .put("high_sampling_rate_sensors_declared", true)
+        )
+
+        root.put("csv_columns", JSONArray(Channels.HEADER))
+        return root
+    }
+
+    /**
+     * Write a sidecar **at start**, before any data exists.
+     *
+     * The recording is only ever stopped in one place, and that place assumes it gets to run.
+     * `stopRecording()` writes the sidecar and `onDestroy` calls it -- but a low-memory kill from
+     * the OS runs neither, and what survives is three CSVs in a folder with no device, no
+     * requested rate and no start time attached to them. Those numbers came off *some* phone and
+     * afterwards there is no way to say which, so they cannot be reported and the drive is wasted.
+     *
+     * A drive is expensive and a few hundred bytes at start are not, so the identity goes down
+     * first and the measurements are added on top when the recording ends cleanly. Everything in
+     * here is knowable before the first sample: it does not wait on the sensors.
+     *
+     * `status` is how a reader tells the two apart, and it is the reason this file is not simply
+     * written twice. A sidecar that still says `recording` is a session that was killed, and it
+     * says so rather than looking like a complete recording whose statistics happen to be missing.
+     */
+    fun writeProvisionalSidecar(requestedImuHz: Double, tzOffsetMinutes: Int) {
+        val root = identityJson(requestedImuHz)
+        root.put("status", STATUS_RECORDING)
+        root.put(
+            "timing",
+            JSONObject()
+                .put("started_wall_ms", startedWallMs)
+                .put("started_wall_iso", ISO_FORMAT.format(Date(startedWallMs)))
+                .put("tz_offset_minutes", tzOffsetMinutes)
+        )
+        root.put("files", JSONObject().put("csv", JSONObject().put("name", csvFile.name)))
+        root.put(
+            "warnings",
+            JSONArray().put(
+                "provisional sidecar written at start; if status is still \"" + STATUS_RECORDING +
+                    "\" the recording did not stop cleanly and the measurements below are absent " +
+                    "rather than zero"
+            )
+        )
+        sidecarFile.writeText(root.toString(2), Charsets.UTF_8)
+    }
+
+    /**
+     * Rewrite the sidecar at stop, replacing the provisional one with the measurements.
+     *
+     * This is the file `docs/IMPLEMENTATION_PLAN.md` section 4 is actually asking for. It is only
+     * reached when the recording stopped in an orderly way; see [writeProvisionalSidecar] for what
+     * happens when it does not.
+     */
+    fun writeSidecar(summary: Summary) {
+        val root = identityJson(summary.requestedImuHz)
+        root.put("status", STATUS_COMPLETE)
+
+        root.put(
             "timing",
             JSONObject()
                 .put("started_wall_ms", startedWallMs)
@@ -78,16 +150,6 @@ class Session(context: Context, val startedWallMs: Long) {
                 .put("tz_offset_minutes", summary.tzOffsetMinutes)
                 .put("sensor_timebase", summary.timebase)
                 .put("sensor_arrival_offset_ns_median", summary.medianOffsetNs)
-        )
-
-        root.put(
-            "requested",
-            JSONObject()
-                .put("imu_hz", summary.requestedImuHz)
-                .put("csv_row_hz", Channels.CSV_ROW_HZ)
-                .put("csv_row_hz_rationale", Channels.CSV_ROW_HZ_RATIONALE)
-                .put("max_report_latency_us", 0)
-                .put("high_sampling_rate_sensors_declared", true)
         )
 
         val sensors = JSONArray()
@@ -154,8 +216,6 @@ class Session(context: Context, val startedWallMs: Long) {
                 .put("gnss_status", JSONObject().put("name", gnssStatusFile.name).put("rows", summary.satRows).put("dropped", summary.satDropped).put("bytes", gnssStatusFile.length()))
         )
 
-        root.put("csv_columns", JSONArray(Channels.HEADER))
-
         val warnings = JSONArray()
         summary.warnings.forEach { warnings.put(it) }
         root.put("warnings", warnings)
@@ -184,6 +244,15 @@ class Session(context: Context, val startedWallMs: Long) {
 
     companion object {
         const val SCHEMA = "idr-logger-session/1"
+
+        /**
+         * `status` in the sidecar. Two values, and the distinction is the point of having the
+         * field: `recording` means the file was written at start and never rewritten, so the
+         * session was killed; `complete` means it stopped in an orderly way and the measurements
+         * in the file are the whole recording rather than the part that happened to survive.
+         */
+        const val STATUS_RECORDING = "recording"
+        const val STATUS_COMPLETE = "complete"
 
         private val STEM_FORMAT = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
         private val ISO_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US)
