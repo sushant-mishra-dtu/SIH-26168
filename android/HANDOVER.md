@@ -15,12 +15,14 @@ Verifiable, not remembered:
 
 | Claim | How to check |
 |---|---|
-| The logger module exists — 11 Kotlin sources, 2,060 lines | `find android/app/src -name "*.kt" \| xargs wc -l` |
+| The logger module exists — 11 main sources, 2,296 lines | `find android/app/src -name "*.kt" \| xargs wc -l` |
 | It builds | `android/app/build/outputs/apk/debug/app-debug.apk` exists |
 | It has been seen **only in its idle state** | no session folder on any device |
 | **No drive has ever been recorded** | no `*_session.json` exists anywhere |
 | The CSV schema is pinned to the harness loader | `pytest tests/test_android_logger_schema.py` — 34 pass |
 | Full Python suite is green | `pytest -q` — 456 pass |
+| It has JVM unit tests | `cd android && ./gradlew :app:test` — 50 pass |
+| `./gradlew` exists at all | the wrapper was committed in `53e0053`; before that there was none |
 
 **The single most important sentence in this file:** the app's reason to exist — the achieved sample
 rate and timestamp jitter per team device, asked for in
@@ -53,8 +55,9 @@ Nothing in this file is on it. Confirm with seat D before spending days here.
 5. **No simulated fallback.** D-080: a missing artefact shows an empty state. No generator, no demo
    data, no `Math.random`. The one failure the frozen protocol exists to prevent is a cockpit fed by
    its own generator.
-6. **`org.gradle.java.home` is never committed.** It is an absolute path, true on one machine. It
-   was committed once, in the nested root that `d3d6df3` removed. See §6.
+6. **`org.gradle.java.home` is never committed.** It is an absolute path, true on one machine.
+   It was committed *twice* -- in the nested root that `d3d6df3` removed, and in the root that
+   survived it, where this file previously claimed it was gone. Removed in `53e0053`. See §6.
 
 ---
 
@@ -115,23 +118,27 @@ evidence: captioned as fixed geometry, never as a match, until a matcher exists 
 
 Not a vibe. This list is ordered so that each item is worth more than the one below it.
 
-1. **JVM unit tests. There are currently zero.** The three highest-value targets are pure functions
-   and need no device: `RateStats` percentile/Welford arithmetic (feed a known Δt sequence, assert
-   median/p95/stdev), `Records.formatCsvRow` (assert the 24-field shape, empty cells before the
-   first fix, the `%.6f` precision, no `NaN` text), `SessionClock` timebase classification. Add
-   `android/app/src/test/kotlin/`, wire `testImplementation` JUnit, exit criterion
-   `./gradlew :app:test`.
-2. **A recording must survive the process being killed.** `stopRecording()` writes the sidecar, and
-   `onDestroy` calls it — but a `SIGKILL` from the OS writes nothing, leaving three CSVs and no
-   device metadata. Write a provisional sidecar at *start* and rewrite it at stop, so a killed
-   session is still attributable.
-3. **Free-space and duration guards.** There is no size cap, no rotation, no free-space check. The
-   raw sidecar at 100 Hz is roughly 4 MB/minute; a two-hour drive fills half a gigabyte and a full
-   disk fails mid-drive with no warning. Check free space at start, warn at a threshold, stop
-   cleanly rather than truncating.
-4. **`startRecording` partial-failure path.** `sensorThread`/`gnssThread`/`tickThread` are
-   `lateinit`. If `startRecording` throws after `startForeground` but before they are assigned,
-   `stopRecording` dereferences them and crashes. Guard it, and add a test.
+**Items 1 to 4 are done** (`53e0053`, `b0aad0f`, `766f503`). None of them has run on a phone, for
+the reason at the top of this file: no drive has been recorded. They are correct by construction and
+by unit test, not by observation.
+
+1. ~~**JVM unit tests. There are currently zero.**~~ **Done** — 50 of them, over the three targets
+   named here: `RateStats` percentile/Welford arithmetic, `Records.formatCsvRow` shape and
+   precision, `SessionClock` timebase classification. `./gradlew :app:test` is the exit criterion
+   and it passes. Two of them deliberately pin the §5 quirks below so they do not get "fixed".
+2. ~~**A recording must survive the process being killed.**~~ **Done** — a provisional sidecar is
+   written at start and rewritten at stop, with a `status` field (`recording` / `complete`) so a
+   killed session is identifiable as killed rather than as one missing its statistics.
+3. ~~**Free-space and duration guards.**~~ **Done** — checked at start and every 10 s after;
+   recording stops cleanly at 128 MB with room left to flush and rewrite the sidecar. Still no size
+   cap and no rotation, on purpose. The minutes-remaining figure is measured from the recording's
+   own bytes rather than assumed, because the write rate depends on the requested rate, the number
+   of uncalibrated streams the device actually has, and the GNSS callback rate.
+4. ~~**`startRecording` partial-failure path.**~~ **Done** — the three `HandlerThread` fields are
+   nullable rather than `lateinit`, `startRecording` is wrapped, and a failed start shuts down
+   cleanly instead of leaving a foreground notification over no recording. Not unit-tested: the
+   failure needs a `Service` and a framework that misbehaves, which is Robolectric or an
+   instrumented test, and that is a dependency decision rather than an oversight.
 5. **Export.** Files land in app-specific external storage; today they come off the device by `adb`
    or a file manager. A share/export action (SAF, `ACTION_CREATE_DOCUMENT`) is what makes the app
    usable by a teammate who is not you.
@@ -142,9 +149,12 @@ Not a vibe. This list is ordered so that each item is worth more than the one be
    `HIGH_SAMPLING_RATE_SENSORS` requires a written justification at review, `foregroundServiceType`
    requires a declared use case on Android 14+, and a privacy policy is required for location. If it
    is only ever side-loaded to team devices, say so and skip this item rather than half-doing it.
-8. **CI.** The wrapper **jar** is not committed, so nothing can build this in CI today. A workflow
-   that runs `:app:assembleDebug` and `:app:test` is what stops the module silently rotting while
-   the Python suite stays green.
+8. **CI.** Now unblocked and still not done. The blocker was worse than stated: `gradlew`,
+   `gradlew.bat` **and** the wrapper jar were all missing, so `./gradlew` did not exist at either
+   old root. All three are committed as of `53e0053`. What remains is the workflow itself, running
+   `:app:assembleDebug` and `:app:test` — which is what stops the module silently rotting while the
+   Python suite stays green. Note that a CI runner will not hit the AF_UNIX problem in §6; that one
+   is specific to this machine.
 
 ---
 
@@ -168,16 +178,24 @@ Stated so you do not rediscover them as bugs:
 ## 6. Environment, so you do not lose a morning
 
 One Gradle root: **`android/`**. Open that in the IDE, never `android/app/`. Wrapper pins Gradle
-8.14.5, the version that actually built this.
+8.14.5, the version that actually built this, and as of `53e0053` the wrapper is actually committed.
 
-On the machine this was written on, Gradle **cannot start** under Microsoft JDK 17 (what `JAVA_HOME`
-points at) or Studio's bundled JBR 25: `java.nio.channels.Pipe.open()` fails with an AF_UNIX
-`EINVAL`, surfacing as `Unable to establish loopback connection`. **JBR 21 works.** Set the Gradle
-JDK per machine — Studio's *Gradle JDK* setting or your own `~/.gradle/gradle.properties` — and see
-`android/README.md` for what was ruled out by measurement.
+**The previous version of this paragraph was wrong and cost the morning it was written to save.**
+It said Gradle cannot start under Microsoft JDK 17 or Studio's JBR 25 but that "JBR 21 works". JBR 21
+fails too, the moment you invoke Gradle from a shell rather than from Studio. Re-measured: all three
+JDKs fail identically, and all three recover on one JVM property, so **the JDK is not the variable.**
 
-That machine's user-level `JAVA_HOME` also points at an Adoptium install containing only a `lib`
-folder. Unrelated to this module, but it will bite anything that reads `JAVA_HOME`.
+`Unable to establish loopback connection` comes from `Selector.open()`, which JDK 16+ backs with an
+AF_UNIX socketpair on Windows. On this machine `connect()` returns `EINVAL` for a socket created
+anywhere under `AppData\Local` — the default — and works under `~/.gradle`. The fix is
+`-Djdk.net.unixdomain.tmpdir`, in **both** `org.gradle.jvmargs` (for the daemon) and `GRADLE_OPTS`
+(for the client, which opens its socket before it reads any properties file). `android/README.md`
+carries the exact values, the 8.3-short-name trap, and the measurement behind all of it.
+
+That machine's user-level `JAVA_HOME` points at an Adoptium install containing only a `lib` folder —
+no `bin/java.exe`. Not unrelated after all: `gradlew` picks its launcher JVM from `JAVA_HOME` before
+Gradle reads anything, so it stops with "JAVA_HOME is set to an invalid directory". Repoint or unset
+it; `org.gradle.java.home` does not help, because that reaches only the daemon.
 
 ---
 
