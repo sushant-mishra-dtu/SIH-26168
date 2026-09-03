@@ -139,6 +139,42 @@ Gradle from `developer.android.com/studio`, and extract the first so that the pa
 it has to be renamed to `latest` or `sdkmanager` will not find its own packages. Then the command at
 the top of this section is finally the right one.
 
+### One Gradle root, at `android/`
+
+`android/app/` used to carry a **second** Gradle root — its own `settings.gradle.kts`,
+`gradle.properties`, wrapper and version catalogue — so the same module could be built two ways that
+shared no configuration. Removed. `android/settings.gradle.kts` is the only root; `app` is a
+subproject of it. Open **`android/`** in the IDE, not `android/app/`.
+
+Its `local.properties` was committed too, carrying one machine's absolute SDK path. That file is
+generated per machine and is now ignored at every depth.
+
+### The Gradle JVM is not a free choice on every machine
+
+On the Windows machine this was written on, **Gradle could not start at all** under two of the three
+JDKs present:
+
+| JVM | `java.nio.channels.Pipe.open()` |
+|---|---|
+| Microsoft JDK 17 (`JAVA_HOME`) | fails |
+| Android Studio's bundled JBR 25 | fails |
+| JetBrains Runtime 21 (`~/.jdks/jbr-21.0.11`) | **works** |
+
+The failure is `java.net.SocketException: Invalid argument: connect` from `UnixDomainSockets.connect0`
+inside `PipeImpl` — surfacing as `Unable to establish loopback connection`. Gradle's daemon needs
+that pipe before it runs a single task, so every build dies at startup. Plain TCP loopback works;
+it is specifically the AF_UNIX path JDK 16+ prefers for internal pipes. Not a firewall rule, not the
+temp directory, not a stale daemon — all four were ruled out by measurement.
+
+The build that produced the first APK worked because it ran on JBR 21.
+
+**Do not fix this by committing `org.gradle.java.home`.** It takes an absolute path and is therefore
+true on exactly one machine; the removed `android/app/gradle.properties` carried one, which is part
+of why it had to go. Set the JDK per machine instead — Studio's *Gradle JDK* setting, or a line in
+your own `~/.gradle/gradle.properties`, neither of which is in this repo.
+
+The wrapper pins Gradle **8.14.5**, which is the version that has actually built this module.
+
 ## First run, before any drive matters
 
 Record two minutes stationary on a desk and read the front screen. If `got Hz` is materially below

@@ -50,6 +50,7 @@ maps/extracts/
 # 49 files of Gradle cache -- lock files and compiled accessor classes -- were tracked before
 # this rule existed, which is why every `git status` showed them as modified.
 android/**/.gradle/
+android/**/.kotlin/
 android/**/local.properties
 android/**/build/
 *.apk
