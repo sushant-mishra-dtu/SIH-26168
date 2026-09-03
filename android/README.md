@@ -149,31 +149,70 @@ subproject of it. Open **`android/`** in the IDE, not `android/app/`.
 Its `local.properties` was committed too, carrying one machine's absolute SDK path. That file is
 generated per machine and is now ignored at every depth.
 
-### The Gradle JVM is not a free choice on every machine
+### `Unable to establish loopback connection` — it is not the JDK
 
-On the Windows machine this was written on, **Gradle could not start at all** under two of the three
-JDKs present:
+An earlier version of this section blamed the JVM and told you to switch to JBR 21. That was wrong,
+and it cost the next person a morning anyway, because JBR 21 fails too as soon as you invoke Gradle
+from a shell rather than from Studio. Re-measured, on the same machine, with the same test:
 
-| JVM | `java.nio.channels.Pipe.open()` |
-|---|---|
-| Microsoft JDK 17 (`JAVA_HOME`) | fails |
-| Android Studio's bundled JBR 25 | fails |
-| JetBrains Runtime 21 (`~/.jdks/jbr-21.0.11`) | **works** |
+| JVM | default | with `jdk.net.unixdomain.tmpdir` set |
+|---|---|---|
+| Microsoft JDK 17 (`JAVA_HOME`) | fails | **works** |
+| Android Studio's bundled JBR | fails | **works** |
+| JetBrains Runtime 21 (`~/.jdks/jbr-21.0.11`) | fails | **works** |
 
-The failure is `java.net.SocketException: Invalid argument: connect` from `UnixDomainSockets.connect0`
-inside `PipeImpl` — surfacing as `Unable to establish loopback connection`. Gradle's daemon needs
-that pipe before it runs a single task, so every build dies at startup. Plain TCP loopback works;
-it is specifically the AF_UNIX path JDK 16+ prefers for internal pipes. Not a firewall rule, not the
-temp directory, not a stale daemon — all four were ruled out by measurement.
+All three fail and all three recover on one property, so **the JDK is not the variable.**
 
-The build that produced the first APK worked because it ran on JBR 21.
+The failure is `java.net.SocketException: Invalid argument: connect` from `UnixDomainSockets.connect0`,
+reached through `PipeImpl` from **`Selector.open()`** — Gradle opens a selector in
+`SocketConnection` before it can talk to its own daemon, so the build dies before it runs a task.
+JDK 16+ backs that internal pipe with an AF_UNIX socketpair on Windows.
 
-**Do not fix this by committing `org.gradle.java.home`.** It takes an absolute path and is therefore
-true on exactly one machine; the removed `android/app/gradle.properties` carried one, which is part
-of why it had to go. Set the JDK per machine instead — Studio's *Gradle JDK* setting, or a line in
-your own `~/.gradle/gradle.properties`, neither of which is in this repo.
+What is actually wrong is **the directory the AF_UNIX socket is created in.** On this machine
+`connect()` returns `EINVAL` for a socket created anywhere under `C:\Users\<user>\AppData\Local` —
+both the long spelling and the `MANISH~1` 8.3 one, so it is not a path-length or short-name problem.
+A socket under `~/.gradle` works. Something is blocking AF_UNIX under `AppData\Local`, and a
+security product or Controlled Folder Access is by far the likeliest candidate.
+
+The previous note that "the temp directory was ruled out" was half right and worth keeping straight:
+overriding **`java.io.tmpdir` changes nothing**, because `UnixDomainSockets` does not read it. It
+reads `jdk.net.unixdomain.tmpdir`, falling back to the `TEMP` environment variable. So the earlier
+measurement was sound and only the conclusion drawn from it was too broad.
+
+**The fix**, per machine, in `~/.gradle/gradle.properties`, which is not in this repo:
+
+```properties
+org.gradle.java.home=C:/Users/<you>/.jdks/jbr-21.0.11
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 -Djdk.net.unixdomain.tmpdir=C:\\Users\\<8.3 name>\\.gradle\\afunix
+```
+
+Create that directory first. Three details that each cost a run to find:
+
+- **Use the 8.3 short name** (`MANISH~1`) in `org.gradle.jvmargs`. Gradle splits that value on
+  spaces, so a path containing `MANISH KUMAR` is parsed as two arguments and the JVM then fails
+  with `Could not find or load main class KUMAR.gradleafunix`.
+- `org.gradle.jvmargs` reaches **the daemon only.** The client JVM opens its socket before it reads
+  any of this, so it needs the same property from the environment:
+  `export GRADLE_OPTS='-Djdk.net.unixdomain.tmpdir=C:\Users\MANISH~1\.gradle\afunix'`
+- `org.gradle.java.home` reaches **the daemon only** as well. `gradlew` picks its own launcher JVM
+  from `JAVA_HOME` before Gradle starts, and this machine's user-level `JAVA_HOME` points at an
+  Adoptium install that contains only a `lib` folder — no `bin/java.exe` at all — so `gradlew`
+  stops with "JAVA_HOME is set to an invalid directory". Repoint or unset it.
+
+**Do not fix any of this by committing `org.gradle.java.home`.** It takes an absolute path and is
+therefore true on exactly one machine. It was committed twice — once in the nested
+`android/app/gradle.properties` that `d3d6df3` removed, and once in the root that survived it, which
+is where it was found. Set it per machine instead: Studio's *Gradle JDK* setting, or the file above.
 
 The wrapper pins Gradle **8.14.5**, which is the version that has actually built this module.
+
+### The wrapper is committed, and had to be regenerated
+
+`gradlew`, `gradlew.bat` and `gradle/wrapper/gradle-wrapper.jar` were **never** in this repo — only
+`gradle-wrapper.properties` was, at both of the two old roots. So nobody could run `./gradlew`
+anything, which is also why there was no CI. They were regenerated offline from the 8.14.5
+distribution already in the local wrapper cache; the `gradle-wrapper.properties` this produced is
+byte-identical to the one already committed, which is how we know the version matches.
 
 ## First run, before any drive matters
 

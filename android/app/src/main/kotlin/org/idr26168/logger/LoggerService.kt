@@ -51,12 +51,19 @@ import java.util.Locale
  */
 class LoggerService : Service() {
 
-    private lateinit var sensorThread: HandlerThread
-    private lateinit var gnssThread: HandlerThread
-    private lateinit var tickThread: HandlerThread
-    private lateinit var sensorHandler: Handler
-    private lateinit var gnssHandler: Handler
-    private lateinit var tickHandler: Handler
+    // Nullable rather than lateinit, and that is a crash fix rather than a style preference.
+    // `startRecording` assigns these *after* `startForeground`. If anything in between throws --
+    // a SecurityException from a permission revoked while the app was backgrounded, an IOException
+    // opening a writer on a full disk -- the service still has to shut down, and `stopRecording`
+    // would then dereference an unassigned `lateinit` and take the process down with an
+    // UninitializedPropertyAccessException. That second failure is the one that reaches the log,
+    // so the exception that actually caused it is the one you never see.
+    private var sensorThread: HandlerThread? = null
+    private var gnssThread: HandlerThread? = null
+    private var tickThread: HandlerThread? = null
+    private var sensorHandler: Handler? = null
+    private var gnssHandler: Handler? = null
+    private var tickHandler: Handler? = null
 
     private var wakeLock: PowerManager.WakeLock? = null
 
