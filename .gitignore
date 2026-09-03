@@ -44,8 +44,13 @@ maps/extracts/
 *.csr
 
 # --- android ---
-android/.gradle/
-android/local.properties
+# `**/` rather than a top-level match, because build state appears at two depths: `android/` is
+# the Gradle root this repo defines, and `android/app/` carries a second wrapper of its own. A
+# `a/**/b` pattern matches zero or more directories, so these still cover `android/.gradle/`.
+# 49 files of Gradle cache -- lock files and compiled accessor classes -- were tracked before
+# this rule existed, which is why every `git status` showed them as modified.
+android/**/.gradle/
+android/**/local.properties
 android/**/build/
 *.apk
 *.aab
