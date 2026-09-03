@@ -100,21 +100,44 @@ header out of `Channels.kt`. It runs in the normal `pytest` suite; no Android to
 
 ## Building it
 
-The repo has JDK 17 and `adb`, but **no Android SDK platform or build-tools**. One-time setup:
+A dev machine here started with JDK 17 and `adb` and **nothing else Android** — the SDK folder held
+only `licenses/` and `platform-tools/`. That is three things short of a build, and they are not
+independent:
+
+| Missing | Where it comes from |
+|---|---|
+| SDK platform `android-35`, build-tools | `sdkmanager` |
+| `sdkmanager` itself | the **cmdline-tools** package — it is not part of platform-tools |
+| Gradle ≥ 8.9 | a separate download; there is no `winget` package for it |
+
+So `sdkmanager --install ...` is not the first step. It is the second, and it fails with "not
+recognized" if run first. Neither cmdline-tools nor Gradle is available through `winget` on its own,
+which leaves one command that closes all three gaps:
 
 ```bash
-sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+winget install --id Google.AndroidStudio --exact
 ```
 
-Then either open `android/` in Android Studio (it supplies Gradle and will generate the wrapper
-jar), or with a system Gradle ≥ 8.9:
+Android Studio bundles the SDK manager, Gradle and a JDK, and generates the Gradle wrapper jar when
+it first opens `android/`. Open this directory as the project root — not the repository root, which
+has no Gradle build in it. It will offer to install `android-35` and the build-tools on first sync;
+accept.
+
+After that first open, the wrapper exists and the command line works:
 
 ```bash
-cd android && gradle wrapper && ./gradlew :app:assembleDebug
+cd android && ./gradlew :app:assembleDebug
 ```
 
 `gradle/wrapper/gradle-wrapper.properties` is committed; the wrapper **jar** is not, because it is a
-binary and `gradle wrapper` regenerates it in a second.
+binary that `gradle wrapper` regenerates in a second — which is why the first build has to go
+through the IDE, or through a Gradle you installed by hand.
+
+The headless route, if a build machine cannot have an IDE: download "Command line tools only" and
+Gradle from `developer.android.com/studio`, and extract the first so that the path is exactly
+`<sdk>/cmdline-tools/latest/bin/sdkmanager`. The zip's own inner folder is named `cmdline-tools`;
+it has to be renamed to `latest` or `sdkmanager` will not find its own packages. Then the command at
+the top of this section is finally the right one.
 
 ## First run, before any drive matters
 
