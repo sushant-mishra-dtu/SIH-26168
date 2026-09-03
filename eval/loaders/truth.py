@@ -328,6 +328,15 @@ def manifest_path_for(
     # Gate 0's "reproduces to the digit across two machines" criterion turns on.
     chosen = min(rows, key=lambda r: ("Uncategorised" in r["path"], r["path"]))
     resolved = Path(data_root) / chosen["path"]
+    if not resolved.exists() and len(Path(chosen["path"]).parts) > 1:
+        if Path(data_root).name == Path(chosen["path"]).parts[0]:
+            candidate = Path(data_root).parent / chosen["path"]
+            if candidate.exists():
+                resolved = candidate
+        if not resolved.exists():
+            candidate = Path(data_root) / Path(*Path(chosen["path"]).parts[1:])
+            if candidate.exists():
+                resolved = candidate
     if not resolved.exists():
         raise TruthPairingError(
             f"{stem}: manifest names {chosen['path']} but it is not under {data_root}. "
