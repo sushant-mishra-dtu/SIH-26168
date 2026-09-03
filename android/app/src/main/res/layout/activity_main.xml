@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Deliberately plain. This screen exists to show two numbers per stream -- achieved rate and
-  jitter -- while a drive is in progress, so that a bad recording is caught in the car park rather
+  Deliberately plain. This screen exists to show two numbers per stream - achieved rate and
+  jitter - while a drive is in progress, so that a bad recording is caught in the car park rather
   than found on a laptop afterwards. The map, the car icon and the covariance ellipse belong to the
   demo app, which is a different deliverable on a different date.
 -->

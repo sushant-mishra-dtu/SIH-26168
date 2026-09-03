@@ -3,7 +3,7 @@
 
     <!--
       HIGH_SAMPLING_RATE_SENSORS: since API 31, registerListener() silently caps at 200 Hz
-      without it. It is a normal (install-time) permission, so there is no runtime request -- but
+      without it. It is a normal (install-time) permission, so there is no runtime request - but
       Play Store review requires a written justification, which belongs in the listing, not here.
     -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
