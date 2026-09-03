@@ -49,6 +49,25 @@ android {
         getByName("main") {
             java.srcDirs("src/main/kotlin")
         }
+        getByName("test") {
+            java.srcDirs("src/test/kotlin")
+        }
+    }
+
+    testOptions {
+        unitTests {
+            // The three classes under test are pure arithmetic, but two of them touch android.jar
+            // for constants and for SystemClock. Without this, the stubbed android.jar throws
+            // "Method ... not mocked" and the arithmetic never gets exercised.
+            //
+            // Returning defaults is safe *here* and would not be elsewhere: SessionClock's only
+            // use of it is SystemClock.elapsedRealtimeNanos(), whose stubbed 0 makes the boot
+            // anchor exactly System.currentTimeMillis() -- which is a legitimate device state
+            // (a phone that has just booted) rather than an impossible one, so the mapping under
+            // test is the real mapping. Anything that needs a *behaving* framework belongs in
+            // androidTest on a device, not here.
+            isReturnDefaultValues = true
+        }
     }
 
     packaging {
@@ -60,4 +79,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity)
+
+    testImplementation(libs.junit)
 }
