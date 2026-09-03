@@ -252,10 +252,20 @@ document in its entirety.
 
 ---
 
+## Sprint 1 — Gate 1 Blocker Resolution & Gate 0 Freeze (3 Sep 2026)
+
+| ID | Date | Decision | Reason | Owner |
+|---|---|---|---|---|
+| D-101 | 2026-09-03 | **The gyroscope vertical axis is resolved as `gyro_pitch` with proper right-handed triad `(+gyro_yaw, -gyro_roll, +gyro_pitch)` in `eval/run.py::imu_stream`.** Supersedes D-047 and resolves D-095. `test_the_gyro_axis_mapping_is_the_one_d101_established` pins the mapping. | **Both sides of the conflict measured.** D-085 found correlation with `ω·ĝ` of -0.9860 on `S-T2` and -0.9902 on `S-T7`, where `gyro_roll` was the vertical axis; re-measured directly on `data/IO-VNBD-unsync/`, reproducing corr -0.9880 and -0.9910. However, `S-T2`/`S-T7` live exclusively in the unsynchronised folder. Across **17 of 17 loadable synchronised stems** (`S3a, S3c, Vta1a, Vta1b, Vta16, Vw2, Vw4, S1, Vw14a, Vw14b, Vw14c, Vta2, Vta4, Vta10, Vta14, Vw3, Vw11`), `eval/axis_check.py` measures `gyro_pitch` winning 17 of 17 on R² with unit slope (e.g. S3a slope -0.996, R² 0.994; S3c slope -0.996, R² 0.999). All evaluation protocol sequences are from the synchronised pool. **Triad selection.** Of the four proper right-handed triads, Candidate 1 `(+gyro_yaw, -gyro_roll, +gyro_pitch)` (spec `(0, 2, +1, -1)`) strictly dominates across stems: S3c fix-1 innovation is 17.0 m (chi² 0.6, accepted 2/6) vs 94.3 m for Cand 2, 28.3 m for Cand 3, 75.7 m for Cand 4; Vta1a fix-1 innovation is 5.7 m (chi² 1.3, accepted 6/6) vs 13.7–15.0 m for Cands 2 and 3; Vta1b fix-1 is 8.9 m (chi² 3.0, accepted 3/6); S3a fix-1 is 18.0 m (chi² 23.4). Zeroing the horizontals gave 88.4 m (chi² 552) on S3c and was rejected. **Before and after on S3a.** With `R` gyro-propagated under the shipped mapping, residual rms was 12.90 m/s², attitude wandered 87.0° in pitch, and ‖v‖ exploded 7.85 → 42.72 m/s in 9 s → 536 m/s by 45 s. Under Candidate 1, residual rms drops to 1.32 m/s² (against the 1.11 m/s² frozen-R baseline), attitude turns 87.0° around the vertical yaw axis (matching the true course change of 85.6° between fix 0 and fix 1), and ‖v‖ stays strictly within physical automobile bounds: min 0.01 m/s, max 30.27 m/s, ending at 6.22 m/s over 60 s. **Invalidates** any preliminary filter runs prior to this commit. | D |
+| D-102 | 2026-09-03 | **The canonical GNSS speed column is renamed to `gps_speed_mps`, and `/ 3.6` in `_forward_reference` is removed.** Touches `eval/loaders/columns.py` (G-6), `eval/run.py`, `eval/axis_check.py`, `tests/test_leakage.py`, and `docs/EVALUATION.md` §1.1. Resolves D-096. | Re-measured `median(chord speed between consecutive fixes ÷ column)` over intervals > 2 m/s: S3a **0.9958** (n=240), S3c **0.9977** (n=367), Vw2 **1.0024** (n=542), Vw4 **1.0003** (n=1270). The values are metres per second, contradicting the `GPS SPEED (Kmh)` header. The division by 3.6 in `_forward_reference` is removed. Protects Seat M's speed-head training (P-08 / Gate 2) from a 3.6× calibration scale defect. | D |
+| D-103 | 2026-09-03 | **`docs/EVALUATION.md` is frozen at Gate 0 status (03 Sep 2026).** Status flipped from DRAFT to FROZEN. Verified full agreement between `docs/EVALUATION.md` §3 and `eval/splits.py` across `LONG_OUTAGE`, `CHALLENGING`, `MANDATORY_PLOT_SEQUENCES`, and `UNAVAILABLE_S_STREAM`. Stale TODO in `eval/splits.py` replaced by record of D-092 re-pick. `tests/test_protocol.py` extended with `test_evaluation_doc_matches_splits_module`. | Formal Gate 0 closeout. Every held-out scenario group, long-outage member (7 stems, 459 60 s windows), mandatory plot sequence (S3a, Vw4), and unavailable stream exclusion in `docs/EVALUATION.md` §3 is now matched byte-for-byte with `eval/splits.py` and guarded by CI. Future protocol changes require a decision log row citing invalidated results. | D |
+
+---
+
 ## Seat A — the foreground logger (3 Sep 2026)
 
 > **Numbering note.** This section was written against D-089 while `main` still ended at D-084.
-> `main` has since taken D-085 through D-100, and the unmerged `d/gate1-sweep` holds D-101 through
+> `main` has since taken D-085 through D-100, and `d/gate1-sweep` holds D-101 through
 > D-103, so these five entries were renumbered to D-104..D-108 when the merge landed. The log is
 > append-only and resolved by highest number, so no branch may reuse an ID another has claimed.
 
