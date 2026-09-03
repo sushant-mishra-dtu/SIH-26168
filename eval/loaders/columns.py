@@ -36,7 +36,7 @@ TIME_CHANNELS: frozenset[str] = frozenset({"time_since_start_ms", "date"})
 #: GNSS is reference + gated update only. It is never a network input feature.
 GNSS_CHANNELS: frozenset[str] = frozenset(
     {
-        "gps_lat", "gps_lon", "gps_altitude_m", "gps_speed_kmh",
+        "gps_lat", "gps_lon", "gps_altitude_m", "gps_speed_mps",
         "gps_accuracy_m", "gps_orientation_deg", "gps_sats",
     }
 )
@@ -91,7 +91,7 @@ _HEADER_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^gps latitude\b"), "gps_lat"),
     (re.compile(r"^gps longitude\b"), "gps_lon"),
     (re.compile(r"^gps altitude\b"), "gps_altitude_m"),
-    (re.compile(r"^gps speed\b"), "gps_speed_kmh"),
+    (re.compile(r"^gps speed\b"), "gps_speed_mps"),
     (re.compile(r"^gps accuracy\b"), "gps_accuracy_m"),
     (re.compile(r"^gps orientation\b"), "gps_orientation_deg"),
     # Both spellings ship, with and without the "GPS " prefix.

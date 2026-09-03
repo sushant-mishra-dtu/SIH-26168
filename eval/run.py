@@ -106,10 +106,11 @@ class SequenceUnusable(RuntimeError):
 def imu_stream(seq: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """`(gyro, accel, t_rel_s)` for one sequence: `(n, 3)`, `(n, 3)`, `(n,)`.
 
-    Axis mapping is the one D-047 established: the shipped `GYROSCOPE Yaw/Pitch/Roll` columns are
-    AndroSensor's labels for device x/y/z and are byte-identical to the `GYROSCOPE X/Y/Z` spelling
-    in the other folder, so `gyro_yaw` is device **x**, not the vertical axis. Getting this wrong
-    is silent: the filter still runs and the trajectory still looks like a drive.
+    Axis mapping is the proper right-handed triad established by D-101 (superseding D-047 and
+    D-095): `device_x = +gyro_yaw`, `device_y = -gyro_roll`, `device_z = +gyro_pitch`.
+    `gyro_pitch` is the vertical body rate across 100% of synchronised IO-VNBD stems (R² > 0.99
+    and unit slope against heading rate over turns), preventing the ~1.3 g gravity tilt into
+    horizontal axes that previously corrupted dead-reckoning propagation.
 
     `t_rel_s` comes from the stream's own `time_since_start_ms`. Never a nominal 1/10 s: sensor
     timestamps jitter and batch, and five `S-` stems restart their clock mid-recording (D-013).
@@ -125,7 +126,11 @@ def imu_stream(seq: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             "timestamps. Propagating on a nominal interval integrates the wrong dt silently."
         )
 
-    gyro = imu[["gyro_yaw", "gyro_pitch", "gyro_roll"]].to_numpy(dtype=float)
+    raw_yaw = imu["gyro_yaw"].to_numpy(dtype=float)
+    raw_pitch = imu["gyro_pitch"].to_numpy(dtype=float)
+    raw_roll = imu["gyro_roll"].to_numpy(dtype=float)
+    # D-101 proper right-handed triad: (+gyro_yaw, -gyro_roll, +gyro_pitch)
+    gyro = np.column_stack([raw_yaw, -raw_roll, raw_pitch])
     accel = imu[["accel_x", "accel_y", "accel_z"]].to_numpy(dtype=float)
     t_rel_s = imu["time_since_start_ms"].to_numpy(dtype=float) / 1000.0
     if not np.isfinite(gyro).all() or not np.isfinite(accel).all():
@@ -354,7 +359,7 @@ class FilterInit:
 
 
 def _forward_reference(seq: Sequence, n: int) -> np.ndarray | None:
-    """A per-sample signed scalar that grows with forward acceleration, from `gps_speed_kmh`.
+    """A per-sample signed scalar that grows with forward acceleration, from `gps_speed_mps`.
 
     `pca_mount_yaw` returns an *axis*, and forward and backward share it. This resolves the sign,
     and it has to be resolved rather than assumed: a 180-degree mount error is a vehicle driving
@@ -365,10 +370,11 @@ def _forward_reference(seq: Sequence, n: int) -> np.ndarray | None:
     entirely adequate for a sign, which is all `pca_mount_yaw` uses it for.
     """
     gnss = seq.gnss
-    if "gps_speed_kmh" not in gnss.columns:
+    if "gps_speed_mps" not in gnss.columns:
         return None
     idx = gnss["sample_idx"].to_numpy(dtype=int)
-    speed = gnss["gps_speed_kmh"].to_numpy(dtype=float) / 3.6
+    # The column is in m/s directly (D-096, D-102); dividing by 3.6 was the unit defect.
+    speed = gnss["gps_speed_mps"].to_numpy(dtype=float)
     ok = np.isfinite(speed) & (idx >= 0) & (idx < n)
     idx, speed = idx[ok], speed[ok]
     if idx.size < 2:

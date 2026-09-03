@@ -27,12 +27,11 @@ from types import MappingProxyType
 #: these sequences are unusable for us at any outage length.
 #:
 #: They were in the protocol drafted from the paper (EVALUATION.md section 3), which is written
-#: against the vehicle stream. Removing them shrank the long-outage set from 9 sequences to 3 and
-#: the mandatory plot set from 4 to 2.
+#: against the vehicle stream. Removing them originally shrank the long-outage set from 9 sequences
+#: to 3 and the mandatory plot set from 4 to 2.
 #:
-#: TODO(seat D): re-pick replacements from the stems that do have an "S-" file, then update
-#: EVALUATION.md section 3 and log the new split in DECISION_LOG.md. Until that happens the
-#: long-outage numbers rest on three sequences and should be reported as such.
+#: D-092 executed the re-pick of replacements from measured synchronised stems with an "S-" file,
+#: expanding LONG_OUTAGE to 7 sequences (459 60 s windows); see `LONG_OUTAGE` below.
 UNAVAILABLE_S_STREAM: frozenset[str] = frozenset(
     {
         "St1",

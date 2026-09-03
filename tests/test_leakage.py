@@ -37,8 +37,8 @@ def test_normalisation_strips_units_and_case():
     # Every GPS-speed spelling has to land on the one allowlisted name. This assertion previously
     # accepted "gps_speed_km_hr" or "gps_speed", neither of which is on the allowlist -- so a real
     # file was rejected whichever branch held. The shipped header is "GPS SPEED (Kmh)".
-    assert normalise("GPS Speed (km/hr)") == "gps_speed_kmh"
-    assert normalise("GPS SPEED (Kmh)") == "gps_speed_kmh"
+    assert normalise("GPS Speed (km/hr)") == "gps_speed_mps"
+    assert normalise("GPS SPEED (Kmh)") == "gps_speed_mps"
     assert normalise("GPS Speed (km/hr)") in ALLOWED_COLUMNS
 
 

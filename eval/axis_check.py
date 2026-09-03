@@ -104,13 +104,12 @@ def _course_and_gyro(seq, gyro: np.ndarray, dt: np.ndarray, min_speed: float):
     course over ground is noise, not a heading.
     """
     gnss = seq.gnss
-    if "gps_orientation_deg" not in gnss.columns or "gps_speed_kmh" not in gnss.columns:
+    if "gps_orientation_deg" not in gnss.columns or "gps_speed_mps" not in gnss.columns:
         return None
     idx = gnss["sample_idx"].to_numpy(dtype=int)
     course = gnss["gps_orientation_deg"].to_numpy(dtype=float)
-    # The header spells this column km/h and it is metres per second -- see D-096. Only the
-    # moving/stationary threshold reads it here, so the misnomer is quoted, not propagated.
-    speed_mps = gnss["gps_speed_kmh"].to_numpy(dtype=float)
+    # The column is in metres per second -- see D-096, D-102.
+    speed_mps = gnss["gps_speed_mps"].to_numpy(dtype=float)
     ok = (
         np.isfinite(course)
         & np.isfinite(speed_mps)
@@ -200,12 +199,13 @@ def measure(
 ) -> AxisMeasurement | None:
     """Everything one stem has to say, or None if it cannot say anything."""
     seq = load_split(data_root, (stem,))[stem]
-    gyro, accel, t_rel_s = imu_stream(seq)
+    raw_gyro = seq.imu[list(GYRO_COLUMNS)].to_numpy(dtype=float)
+    _, accel, t_rel_s = imu_stream(seq)
     dt = assert_uniform_grid(seq.name, t_rel_s)
     truth = load_truth(paired_truth_path(stem, data_root), stem)
     fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
 
-    prepared = _course_and_gyro(seq, gyro, dt, min_speed)
+    prepared = _course_and_gyro(seq, raw_gyro, dt, min_speed)
     if prepared is None:
         return None
     idx, heading, speed_mps, rate, gyro_mean, keep, cumulative = prepared
@@ -236,13 +236,13 @@ def measure(
     slope, r2 = regress_heading_on_integrated_gyro(d_heading[block_keep], d_gyro[block_keep])
 
     shipped_rms, turned = _residual_specific_force(
-        seq, gyro, accel, dt, fix_idx, fix_ned, seconds
+        seq, raw_gyro, accel, dt, fix_idx, fix_ned, seconds
     )
     # The correction under test: the measured yaw column moved into the vertical slot. The two
     # horizontal channels are zeroed rather than assigned, because which of them is device x and
     # which is device y is NOT measured by anything here -- see D-095.
     vertical_only = np.column_stack(
-        [np.zeros(gyro.shape[0]), np.zeros(gyro.shape[0]), gyro[:, int(np.argmax(np.abs(r2)))]]
+        [np.zeros(raw_gyro.shape[0]), np.zeros(raw_gyro.shape[0]), raw_gyro[:, int(np.argmax(np.abs(r2)))]]
     )
     corrected_rms, _ = _residual_specific_force(
         seq, vertical_only, accel, dt, fix_idx, fix_ned, seconds
@@ -349,7 +349,8 @@ def report_innovations(stem: str, data_root: str, n_fixes: int, min_speed: float
     """
     seq = load_split(data_root, (stem,))[stem]
     truth = load_truth(paired_truth_path(stem, data_root), stem)
-    gyro, accel, t_rel_s = imu_stream(seq)
+    raw_gyro = seq.imu[list(GYRO_COLUMNS)].to_numpy(dtype=float)
+    _, accel, t_rel_s = imu_stream(seq)
     dt = assert_uniform_grid(seq.name, t_rel_s)
 
     measured = measure(stem, data_root, min_speed=min_speed)
@@ -367,15 +368,15 @@ def report_innovations(stem: str, data_root: str, n_fixes: int, min_speed: float
         chi = distances[1] if len(distances) > 1 else float("nan")
         print(f"  {label:>44} {body} {chi:>10.1f} {accepted:>3}/{len(innovations)}")
 
-    line("AS SHIPPED (yaw, pitch, roll)", gyro)
+    line("AS SHIPPED (yaw, pitch, roll)", raw_gyro)
     for spec in PROPER_HORIZONTAL_CANDIDATES:
         ix, iy, sx, sy = spec
         label = (
             f"({'+-'[sx < 0]}{GYRO_COLUMNS[ix]}, {'+-'[sy < 0]}{GYRO_COLUMNS[iy]}, "
             f"+{GYRO_COLUMNS[vertical]})"
         )
-        line(label, candidate_gyro(gyro, vertical, spec))
-    line(f"(0, 0, +{GYRO_COLUMNS[vertical]})", candidate_gyro(gyro, vertical, None))
+        line(label, candidate_gyro(raw_gyro, vertical, spec))
+    line(f"(0, 0, +{GYRO_COLUMNS[vertical]})", candidate_gyro(raw_gyro, vertical, None))
 
 
 def main() -> int:
