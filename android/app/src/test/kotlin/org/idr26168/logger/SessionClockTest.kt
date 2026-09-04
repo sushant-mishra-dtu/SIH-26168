@@ -181,9 +181,9 @@ class SessionClockTest {
 
     @Test
     fun `the date pattern uses a dot before the milliseconds`() {
-        // D-092. Three spellings are in play and only the dot parses on both sides of D-086, which
-        // is still on the unmerged d-shipped-date-format branch. Choosing the colon to look like
-        // the dataset would buy authenticity and cost compatibility.
+        // D-107. Three spellings are in play and only the dot parses on both sides of D-086, which
+        // has since landed on main. Choosing the colon to look like the dataset would buy
+        // authenticity and cost compatibility.
         assertEquals("yyyy-MM-dd HH:mm:ss.SSS", SessionClock.DATE_PATTERN)
         assertTrue(SessionClock.DATE_PATTERN.endsWith("ss.SSS"))
     }

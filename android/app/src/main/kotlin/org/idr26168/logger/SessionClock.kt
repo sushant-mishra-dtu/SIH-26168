@@ -119,9 +119,9 @@ class SessionClock {
          *  - `HH:mm:ss_SSS` -- what the IO-VNBD header advertises.
          *  - `HH:mm:ss:SSS` -- what IO-VNBD's bytes actually contain, each value additionally
          *    wrapped in literal single quotes. `truth.py::_S_DATE` only accepts this after D-086,
-         *    which at the time of writing is on an unmerged branch: against `main` the colon form
-         *    fails, and it fails *silently* in the sense that it raises on the first held-out
-         *    sequence rather than in the app.
+         *    which has since landed on `main`. Before that fix the colon form failed, and it
+         *    failed *silently* in the sense that it raised on the first held-out sequence rather
+         *    than in the app.
          *  - `HH:mm:ss.SSS` -- a dot. Accepted by the pattern **before and after** D-086.
          *
          * We emit the dot. It is the only one of the three that parses on both sides of that fix,

@@ -21,6 +21,7 @@ from eval.cadence import measure_cadence, summarise
 from eval.loaders.columns import LeakageError, assert_feature_safe
 from eval.loaders.io_vnbd import load_sequence
 from eval.loaders.truth import (
+    BST_OFFSET_S,
     DEFAULT_MANIFEST,
     MAX_EPOCH_OFFSET_S,
     TRUTH_COLUMNS,
@@ -34,8 +35,11 @@ from eval.loaders.truth import (
     load_truth,
     manifest_path_for,
     normalise_truth_header,
+    paired_stems,
     paired_truth_path,
     seconds_of_day,
+    seconds_of_day_utc,
+    uk_utc_offset_s,
     unwrap_time_of_day,
 )
 
@@ -219,8 +223,32 @@ def test_time_of_day_unwraps_across_midnight():
 
 
 def test_seconds_of_day_parses_the_shipped_date_format():
+    """The spelling the `S-` header advertises. Kept: it is what the format string promises."""
     parsed = seconds_of_day(["2019-03-14 15-22-31_500"])[0]
     assert parsed == pytest.approx(15 * 3600 + 22 * 60 + 31.5)
+
+
+def test_seconds_of_day_parses_the_bytes_the_files_actually_ship():
+    """The spelling every real `S-` file carries, which the header's format string contradicts.
+
+    Copied verbatim from the first data row of
+    `Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S3a/S-S3a.csv`,
+    single quotes and colon sub-seconds included. Before this parsed, `eval.run` raised on the
+    first held-out sequence it reached, so Gate 1 could not be measured at all.
+    """
+    parsed = seconds_of_day(["'2019-09-04 19:21:51:494'"])[0]
+    assert parsed == pytest.approx(19 * 3600 + 21 * 60 + 51.494)
+
+
+def test_seconds_of_day_does_not_mistake_the_calendar_date_for_a_time():
+    r"""`2019-09-04` is three `\d{1,2}[-:]\d{2}[-:]\d{2}` fields too, so the anchor has to hold.
+
+    Widening the sub-second separator to include `:` is what makes this worth asserting: the
+    date and the time are now the same shape, and only the end-anchor separates them.
+    """
+    parsed = seconds_of_day(["'2019-09-04 19:21:51:494'"])[0]
+    assert parsed != pytest.approx(20 * 3600 + 19 * 60 + 9)
+    assert parsed == pytest.approx(19 * 3600 + 21 * 60 + 51.494)
 
 
 def test_seconds_of_day_refuses_a_column_it_cannot_parse():
@@ -481,3 +509,168 @@ def test_load_split_picks_between_divergent_copies_deterministically(tmp_path):
     unc = tmp_path / "Uncategorised IOVNB Dataset" / "S-Dataset" / "S-S3a.csv"
     assert _preferred_copy([unc, cat]) == cat
     assert _preferred_copy([cat, unc]) == cat
+
+
+# ------------------------------------------------------------------------------------------
+# The candidate pool for the D-044 split re-pick (D-090)
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_candidate_pool_is_every_synchronised_stem_shipping_both_streams():
+    """The pool is 72 stems, and it is 72 exactly rather than "roughly 72".
+
+    Read from the committed manifest, so this holds on a machine with no dataset bytes -- which is
+    the machine the enumeration was needed on. A held-out sequence needs both files: an `S-` side
+    to consume, because H-1 bars the `V-` side from the feature path, and a paired `V-` side to be
+    graded against (EVALUATION.md section 1.2).
+    """
+    pool = paired_stems()
+    assert len(pool) == 72
+    assert len(set(pool)) == len(pool), "a stem must not appear twice"
+    assert pool == sorted(pool, key=str.lower)
+
+
+def test_the_candidate_pool_contains_every_stem_the_split_already_names():
+    """If a split entry were outside the pool, the pool would be the wrong set to re-pick from."""
+    from eval.splits import TRAIN
+    from eval.splits import test_sequences as held_out
+
+    folded = {s.lower() for s in paired_stems()}
+    for name in tuple(held_out()) + tuple(TRAIN):
+        assert name.lower() in folded, f"{name} is in the split but not in the paired pool"
+
+
+def test_the_candidate_pool_excludes_the_stems_with_no_smartphone_stream():
+    """D-044's eleven ship on the `V-` ECU stream only. A pool that offered one as a replacement
+    would re-make the exact mistake the re-pick exists to correct."""
+    from eval.splits import UNAVAILABLE_S_STREAM
+
+    folded = {s.lower() for s in paired_stems()}
+    assert not folded & {s.lower() for s in UNAVAILABLE_S_STREAM}
+
+
+def test_the_split_is_drawn_from_the_pool_and_the_remainder_is_unassigned():
+    """Supersedes the "53 stems never aligned" form this test had before D-092.
+
+    That number was a snapshot of outstanding work, and the work is done: `--all-paired` swept all
+    72, so nothing is unaligned any more. What is worth pinning now is the allocation itself --
+    every stem the split names must come from the paired pool, and everything else is
+    `unassigned`, which `split_of` treats as ordinary rather than as an error.
+    """
+    from eval.splits import TRAIN
+    from eval.splits import test_sequences as held_out
+
+    pool = {s.lower() for s in paired_stems()}
+    held = {s.lower() for s in held_out()}
+    train = {s.lower() for s in TRAIN}
+
+    assert len(pool) == 72
+    assert not (held | train) - pool, "the split names a stem outside the paired pool"
+    assert len(held) == 12 and len(train) == 19
+    assert len(pool - held - train) == 41, "the rest of the pool is deliberately unassigned"
+
+
+def test_every_stem_the_split_dropped_is_recorded_with_a_reason():
+    """A stem that vanished from the split without a reason is indistinguishable from one nobody
+    noticed. D-092 removed six from CHALLENGING and one from LONG_OUTAGE; each is named."""
+    from eval.splits import REFUSED_TRUTH_PAIRING, TOO_SHORT_FOR_ANY_OUTAGE
+
+    dropped = {"Vtb3", "Vtb8", "Vtb11", "Vw7", "Vw8", "Vw17", "Vta9"}
+    assert dropped <= (REFUSED_TRUTH_PAIRING | TOO_SHORT_FOR_ANY_OUTAGE)
+    pool = {s.lower() for s in paired_stems()}
+    for stem in REFUSED_TRUTH_PAIRING | TOO_SHORT_FOR_ANY_OUTAGE:
+        assert stem.lower() in pool, f"{stem} is recorded as dropped but is not in the pool"
+
+
+def test_a_missing_manifest_names_the_manifest_rather_than_returning_an_empty_pool():
+    """An empty pool would read as "no candidates exist", which is a different and much worse
+    answer than "the manifest is not where you said"."""
+    with pytest.raises(TruthPairingError, match="manifest not found"):
+        paired_stems(manifest="does/not/exist.csv")
+
+
+# ------------------------------------------------------------------------------------------
+# UK local time vs the VBOX's UTC (D-091)
+# ------------------------------------------------------------------------------------------
+
+
+def test_bst_boundaries_are_the_published_ones_for_the_years_the_dataset_spans():
+    """Hand-computed from the rule, not from this function's own output.
+
+    BST runs from 01:00 UTC on the last Sunday of March to 01:00 UTC on the last Sunday of
+    October. In 2019 those Sundays are **31 March** and **27 October**; in 2020, **29 March** and
+    **25 October**. IO-VNBD was collected 2019-08-30 to 2020-01-08, so both years matter.
+    """
+    # 2019: in BST the day after the spring transition, out of it the day after the autumn one.
+    assert uk_utc_offset_s(2019, 4, 1, 12) == BST_OFFSET_S
+    assert uk_utc_offset_s(2019, 10, 26, 12) == BST_OFFSET_S
+    assert uk_utc_offset_s(2019, 10, 28, 12) == 0.0
+    assert uk_utc_offset_s(2019, 3, 30, 12) == 0.0
+    # 2020's transitions fall on different dates, so a hardcoded day-of-month would fail here.
+    assert uk_utc_offset_s(2020, 3, 30, 12) == BST_OFFSET_S
+    assert uk_utc_offset_s(2020, 3, 28, 12) == 0.0
+    assert uk_utc_offset_s(2020, 10, 24, 12) == BST_OFFSET_S
+    assert uk_utc_offset_s(2020, 10, 26, 12) == 0.0
+
+
+def test_the_transition_days_switch_at_the_right_hour_not_at_midnight():
+    """A date-only rule would be an hour wrong for part of two days a year."""
+    assert uk_utc_offset_s(2019, 3, 31, 0) == 0.0          # 00:00 GMT, before the spring jump
+    assert uk_utc_offset_s(2019, 3, 31, 2) == BST_OFFSET_S  # 02:00 BST, after it
+    assert uk_utc_offset_s(2019, 10, 27, 0) == BST_OFFSET_S  # 00:00 BST, before the autumn fall
+    assert uk_utc_offset_s(2019, 10, 27, 12) == 0.0          # midday, GMT
+
+
+def test_deep_winter_and_deep_summer_need_no_boundary_arithmetic():
+    for month in (1, 2, 11, 12):
+        assert uk_utc_offset_s(2019, month, 15, 12) == 0.0
+    for month in (4, 5, 6, 7, 8, 9):
+        assert uk_utc_offset_s(2019, month, 15, 12) == BST_OFFSET_S
+
+
+def test_a_bst_timestamp_is_converted_to_utc_and_a_gmt_one_is_left_alone():
+    """The two real cases, in the spelling the files ship.
+
+    `S3a`'s first row is the BST case and is why it matched 0 of 254 fixes: the `V-` track is UTC,
+    so an uncorrected `S-` fix is an hour of road away from where truth says the car was.
+    """
+    bst = "'2019-09-04 19:21:51:494'"          # September -- BST
+    gmt = "'2019-11-06 10:41:47:363'"          # November -- GMT (Vta1a's first row)
+    local_bst = 19 * 3600 + 21 * 60 + 51.494
+    local_gmt = 10 * 3600 + 41 * 60 + 47.363
+
+    assert seconds_of_day([bst])[0] == pytest.approx(local_bst)
+    assert seconds_of_day_utc([bst])[0] == pytest.approx(local_bst - BST_OFFSET_S)
+    assert seconds_of_day([gmt])[0] == pytest.approx(local_gmt)
+    assert seconds_of_day_utc([gmt])[0] == pytest.approx(local_gmt)
+
+
+def test_the_parser_still_returns_local_time_so_the_conversion_stays_visible():
+    """`seconds_of_day` is the parser and `seconds_of_day_utc` is the frame change. Folding the
+    second into the first would make every existing caller silently change meaning."""
+    value = "'2019-09-04 19:21:51:494'"
+    assert seconds_of_day([value])[0] - seconds_of_day_utc([value])[0] == pytest.approx(
+        BST_OFFSET_S
+    )
+
+
+def test_a_row_whose_calendar_date_is_unreadable_keeps_its_local_time():
+    """Guessing an offset for a date we could not read is how a frame error becomes invisible.
+    Leaving it alone leaves an hour of residual, which `align_to_sequence` reports loudly."""
+    # Parses as a time (the `_S_DATE` anchor is on the end) but carries no `YYYY-MO-DD` head.
+    value = "19-21-51_494"
+    assert seconds_of_day_utc([value])[0] == pytest.approx(seconds_of_day([value])[0])
+
+
+def test_the_conversion_happens_before_the_midnight_unwrap():
+    """Order matters: unwrapping first and converting after can differ by a day, not an hour.
+
+    A BST sequence crossing midnight local time -- 23:59 BST then 00:01 BST -- is 22:59 and 23:01
+    UTC, which does *not* cross midnight. Converting first therefore leaves a plain increasing
+    series and no 86,400 s correction is applied at all.
+    """
+    rows = ["'2019-09-04 23:59:59:000'", "'2019-09-05 00:00:01:000'"]
+    utc = seconds_of_day_utc(rows)
+    assert utc[0] == pytest.approx(22 * 3600 + 59 * 60 + 59)
+    assert utc[1] == pytest.approx(23 * 3600 + 0 * 60 + 1)
+    assert utc[1] - utc[0] == pytest.approx(2.0), "a real 2 s step, not an 86,400 s unwrap"

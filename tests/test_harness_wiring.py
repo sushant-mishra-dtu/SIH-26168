@@ -20,18 +20,21 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from core.reference.inekf import FilterConfig, InEKF
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence
 from eval.loaders.truth import TruthTrack, align_to_sequence
 from eval.outages.inject import Outage
 from eval.run import (
     EPOCH_STRIDE,
     GATE1_LENGTH_S,
+    METHODS,
     SequenceUnusable,
     assert_uniform_grid,
     evaluate_sequence,
     fix_arrays,
     gate1_ratio,
     imu_stream,
+    initialise_filter,
     summarise_by_method_and_length,
     truth_clock_offset_s,
     window_trajectory,
@@ -45,15 +48,28 @@ LAT0, LON0 = 51.5, -1.25
 START_OF_DAY_S = 9 * 3600 + 30 * 60  # 09:30:00, arbitrary but not midnight
 
 
-def _date_strings(seconds_of_day: np.ndarray) -> list[str]:
-    """The shipped `DATE (YYYY-MO-DD HH-MI-SS_SSS)` spelling, which `seconds_of_day` parses."""
+#: The fixture's calendar date. 2019-10-11 is inside British Summer Time (2019's transition is
+#: 27 October), so the `S-` side must be written in **local** time to be the file it imitates --
+#: which is what makes this fixture exercise D-091's conversion rather than sidestep it.
+FIXTURE_DATE = "2019-10-11"
+FIXTURE_UTC_OFFSET_S = 3600.0
+
+
+def _date_strings(utc_seconds_of_day: np.ndarray) -> list[str]:
+    """The shipped `DATE (YYYY-MO-DD HH-MI-SS_SSS)` spelling, in UK local time.
+
+    Takes UTC and adds the offset, because that is the direction the real files are written in:
+    AndroSensor stamps civil time while the paired VBOX stamps UTC (D-091). Passing UTC straight
+    through would make the fixture the one file in the dataset whose `date` column is UTC, and
+    every clock assertion built on it would be testing a case that does not ship.
+    """
     out = []
-    for s in seconds_of_day:
+    for s in np.asarray(utc_seconds_of_day, dtype=float) + FIXTURE_UTC_OFFSET_S:
         h, rem = divmod(float(s), 3600.0)
         m, sec = divmod(rem, 60.0)
         whole = int(sec)
         ms = int(round((sec - whole) * 1000))
-        out.append(f"2019-10-11 {int(h):02d}-{int(m):02d}-{whole:02d}_{ms:03d}")
+        out.append(f"{FIXTURE_DATE} {int(h):02d}-{int(m):02d}-{whole:02d}_{ms:03d}")
     return out
 
 
@@ -64,6 +80,7 @@ def synthetic_drive(
     accel_bias_x: float = 0.0,
     fix_interval_s: float = 9.0,
     name: str = "SYNTH",
+    t_rel_start_s: float = 0.0,
 ):
     """A level vehicle driving due north at a constant speed, as a `Sequence` + `TruthTrack` pair.
 
@@ -71,9 +88,13 @@ def synthetic_drive(
     `S-` side counts milliseconds from the start of the recording and the `V-` side counts seconds
     since midnight, offset by `START_OF_DAY_S`. A harness that quietly treats one as the other
     produces a trajectory that looks like a drive and is graded against the wrong stretch of road.
+
+    `t_rel_start_s` is the value the `S-` relative clock *opens* at. It defaults to zero, which is
+    what this fixture assumed for its whole life and is why nothing here could see the harness
+    deriving epochs from the row index; eleven of the fourteen real held-out stems open non-zero.
     """
     n = int(seconds * SAMPLE_RATE_HZ) + 1
-    t_rel = np.arange(n, dtype=float) / SAMPLE_RATE_HZ
+    t_rel = t_rel_start_s + np.arange(n, dtype=float) / SAMPLE_RATE_HZ
     t_tod = START_OF_DAY_S + t_rel
 
     lat = LAT0 + mps * t_rel * DEG_PER_M
@@ -86,6 +107,10 @@ def synthetic_drive(
         {
             "accel_x": accel[:, 0], "accel_y": accel[:, 1], "accel_z": accel[:, 2],
             "gyro_yaw": gyro[:, 0], "gyro_pitch": gyro[:, 1], "gyro_roll": gyro[:, 2],
+            # The `GRAVITY` channel every real `S-` file ships, pointing **up** (D-085). Without
+            # it the mount initialiser has no vertical and is skipped, which is what this fixture
+            # used to do -- silently, and so it could not exercise D-094's PCA path at all.
+            "gravity_x": np.zeros(n), "gravity_y": np.zeros(n), "gravity_z": np.full(n, G),
             "time_since_start_ms": t_rel * 1000.0,
         }
     )
@@ -115,6 +140,45 @@ def test_the_truth_clock_offset_is_recovered_from_the_fixes():
     `date`/`time_since_start_ms` pair can say so."""
     seq, _ = synthetic_drive()
     assert truth_clock_offset_s(seq) == pytest.approx(START_OF_DAY_S, abs=1e-3)
+
+
+def test_the_offset_is_recovered_when_the_relative_clock_does_not_open_at_zero():
+    """`truth_clock_offset_s` differences the two clocks, so a non-zero opening must cancel."""
+    seq, _ = synthetic_drive(t_rel_start_s=1118.51)
+    assert truth_clock_offset_s(seq) == pytest.approx(START_OF_DAY_S, abs=1e-3)
+
+
+def test_an_excerpt_whose_clock_opens_late_is_graded_against_the_road_it_drove():
+    """The epoch of a window comes from the row's own timestamp, never from its row index.
+
+    Vta11, Vta12, Vta9, Vtb3, Vtb8, Vtb11, Vw6, Vw7, Vw8, Vw16b and Vw17 are excerpts that keep
+    the parent recording's clock: `time_since_start_ms` opens at 1118 s on Vta11 and 13365 s on
+    Vw8. Deriving the epoch as `start_idx / SAMPLE_RATE_HZ + offset` assumes that opening is
+    zero, so it addressed truth 1118 s -- and on Vw8 3.7 hours -- before the window actually
+    occurred. The truth track raises rather than interpolating across that gap, which is why this
+    surfaced as a hard failure on the first real sweep and not as a quietly wrong number.
+    """
+    start = 1118.51
+    seq, truth = synthetic_drive(t_rel_start_s=start)
+    results = evaluate_sequence(seq, truth, (60,))
+
+    assert results, "the sweep produced no windows to grade"
+    assert all(np.isfinite(r.metrics.drift_pct) for r in results)
+
+    # The opening value is a property of the recording, not of the road, so the same drive must
+    # yield the same number of graded windows either way.
+    at_zero = evaluate_sequence(*synthetic_drive(t_rel_start_s=0.0), (60,))
+    assert len(results) == len(at_zero)
+
+    # What separates: each method must score the same whether the clock opens at zero or at
+    # `start`, because it is the same road either way. The absolute bound is chosen against the
+    # failure it has to catch -- addressing the window 1118 s early points it at a stretch of road
+    # 16.8 km away, which does not perturb a drift figure, it replaces it. The methods differ
+    # hugely from each other here (the filter has no speed input on this fixture and sits at
+    # ~100 %, the strapdown is exact at ~1e-9 %), so they are compared like for like.
+    assert [r.method for r in results] == [r.method for r in at_zero]
+    for late, zero in zip(results, at_zero, strict=True):
+        assert late.metrics.drift_pct == pytest.approx(zero.metrics.drift_pct, abs=1e-3)
 
 
 def test_a_sequence_whose_fixes_carry_no_date_is_refused():
@@ -308,3 +372,250 @@ def test_an_unusable_truth_pairing_stops_the_sequence_rather_than_grading_it():
     )
     with pytest.raises(SequenceUnusable, match="not usable as truth"):
         evaluate_sequence(seq, shifted, [60])
+
+
+# ------------------------------------------------------------------------------------------
+# Windows the truth track does not cover (D-089)
+# ------------------------------------------------------------------------------------------
+
+
+def _truth_with_hole(truth: TruthTrack, *, from_rel_s: float, to_rel_s: float) -> TruthTrack:
+    """The same track with its samples between two relative times deleted.
+
+    This is Vw12's failure built to order: `align_to_sequence` still passes -- the surviving
+    samples describe the same drive at the same time, and losing three seconds costs at most one
+    of the ~9 s-spaced `S-` fixes a match -- but the epochs inside the hole have no truth sample
+    within `MAX_EPOCH_OFFSET_S`, so `index_at` raises for the windows that span it and only those.
+    """
+    keep = ~(
+        (truth.t_s >= START_OF_DAY_S + from_rel_s) & (truth.t_s <= START_OF_DAY_S + to_rel_s)
+    )
+    return TruthTrack(
+        name=truth.name,
+        t_s=truth.t_s[keep],
+        lat=truth.lat[keep],
+        lon=truth.lon[keep],
+        source=truth.source,
+    )
+
+
+#: Relative seconds of the hole. Chosen to sit inside the second 60 s window (samples 900-1500,
+#: i.e. 90-150 s) so there are covered windows on both sides of it -- a hole in the first window
+#: would not distinguish "dropped the window" from "started grading late".
+HOLE_FROM_S, HOLE_TO_S = 120.0, 123.0
+
+
+def test_a_window_the_truth_does_not_cover_is_dropped_and_the_rest_still_grade():
+    """D-089. A 3 s hole leaves 4 of the window's 61 epochs uncovered -- Vw12's failure to scale
+    (3 of 11, worst gap 2.305 s) -- and that is not a reason to lose the other five windows.
+
+    Before this, `TruthPairingError` escaped `evaluate_sequence` entirely, passed straight through
+    `main()`'s `except SequenceUnusable`, and killed the sweep -- discarding, on the first real
+    run, the 1260 windows already computed for three earlier stems.
+    """
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    assert align_to_sequence(seq, holed).is_usable, "the hole must not refuse the whole stem"
+
+    intact = evaluate_sequence(seq, truth, [60])
+    dropped: list = []
+    results = evaluate_sequence(seq, holed, [60], dropped=dropped)
+
+    assert len(dropped) == 1, "exactly the window spanning the hole"
+    assert dropped[0].sequence == seq.name
+    assert dropped[0].length_s == 60
+    assert dropped[0].start_idx == 900
+    assert "no truth sample within" in dropped[0].reason
+
+    assert results, "the covered windows must still grade"
+    starts = {r.start_idx for r in results}
+    assert 900 not in starts, "the uncovered window must contribute no result"
+    assert starts == {r.start_idx for r in intact} - {900}
+
+    # Every surviving window scores exactly what it scored against the intact track: dropping one
+    # window must not perturb another, and the filter runs over the whole stream either way.
+    kept = {(r.method, r.start_idx): r.metrics.drift_pct for r in intact if r.start_idx != 900}
+    assert {(r.method, r.start_idx): r.metrics.drift_pct for r in results} == kept
+
+
+def test_a_dropped_window_never_leaves_a_partial_set_of_methods():
+    """The failure that would misreport without a wrong number anywhere in it.
+
+    Three paths inside one window reach the truth track, so a `try` around any single one of them
+    would append `filter` and not `strapdown`. Every count in `summary.json` is per method and per
+    length, and a window contributing two methods instead of three makes those counts disagree
+    while each individual metric stays correct.
+    """
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    dropped: list = []
+    results = evaluate_sequence(seq, holed, [60], dropped=dropped)
+
+    per_method = {m: sorted(r.start_idx for r in results if r.method == m) for m in METHODS}
+    assert len(set(map(tuple, per_method.values()))) == 1, (
+        f"methods graded different windows: {per_method}"
+    )
+    assert len(results) == len(METHODS) * len(per_method["filter"])
+
+
+def test_a_dropped_window_is_counted_in_the_summary_beside_the_results(tmp_path):
+    """D-067: the omission travels with the number. A run that graded five windows and dropped one
+    is a different result from one that graded five, and no metric shows the difference."""
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    dropped: list = []
+    results = evaluate_sequence(seq, holed, [60], dropped=dropped)
+
+    stamp = seed_everything(0)
+    write_artefacts(tmp_path, stamp, results, None, dropped)
+    written = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+
+    assert written["n_dropped_windows"] == 1
+    assert written["n_windows"] == len(results)
+    row = written["dropped_windows"][0]
+    assert (row["sequence"], row["length_s"], row["start_idx"]) == (seq.name, 60, 900)
+    assert "no truth sample within" in row["reason"]
+
+
+def test_a_run_with_no_gaps_reports_zero_dropped_rather_than_omitting_the_field(tmp_path):
+    """A count that is absent when it is zero cannot be distinguished from a count nobody wrote."""
+    seq, truth = synthetic_drive(seconds=200.0)
+    dropped: list = []
+    results = evaluate_sequence(seq, truth, [60], dropped=dropped)
+    assert dropped == []
+
+    written = write_artefacts(tmp_path, seed_everything(0), results, None, dropped)
+    assert written["n_dropped_windows"] == 0
+    assert written["dropped_windows"] == []
+
+
+def test_a_dropped_window_is_announced_even_when_no_sink_collects_it(capsys):
+    """A caller that omits the sink gets a smaller result set. It must not get a quiet one."""
+    seq, truth = synthetic_drive(seconds=400.0)
+    holed = _truth_with_hole(truth, from_rel_s=HOLE_FROM_S, to_rel_s=HOLE_TO_S)
+    evaluate_sequence(seq, holed, [60])
+    assert "DROPPED WINDOW" in capsys.readouterr().err
+
+
+def test_a_window_the_vehicle_never_moved_over_is_dropped_not_divided_by(capsys):
+    """D-093. `drift_pct` is `error / distance`, and a parked vehicle has no distance.
+
+    Found on the first sweep of the re-picked split: S3c has one 10 s window whose eleven truth
+    epochs all carry the identical fix, and the bare `ValueError` it raised escaped
+    `evaluate_sequence` and killed the run after S3a had already produced 1191 results -- D-089's
+    failure from a second cause. The stationary window here is built the same way: the truth track
+    holds one position for the whole window while the `S-` clock keeps running.
+    """
+    seq, truth = synthetic_drive(seconds=400.0)
+    frozen_from, frozen_to = 90.0, 152.0  # covers the second 60 s window end to end
+    hold = (truth.t_s >= START_OF_DAY_S + frozen_from) & (truth.t_s <= START_OF_DAY_S + frozen_to)
+    lat = truth.lat.copy()
+    lat[hold] = lat[hold][0]
+    parked = TruthTrack(
+        name=truth.name, t_s=truth.t_s, lat=lat, lon=truth.lon, source=truth.source
+    )
+
+    dropped: list = []
+    results = evaluate_sequence(seq, parked, [60], dropped=dropped)
+
+    assert [d.start_idx for d in dropped] == [900]
+    assert dropped[0].kind == "zero_distance"
+    assert "must be excluded from the sweep" in dropped[0].reason
+    assert "DROPPED WINDOW" in capsys.readouterr().err
+
+    assert results, "the windows either side of the stop must still grade"
+    assert 900 not in {r.start_idx for r in results}
+    per_method = {m: sorted(r.start_idx for r in results if r.method == m) for m in METHODS}
+    assert len(set(map(tuple, per_method.values()))) == 1, "a dropped window must take all methods"
+
+
+def test_a_real_metric_defect_is_not_swallowed_as_a_dropped_window():
+    """The reason `ZeroDistanceOutage` is a named subclass rather than a bare `ValueError`.
+
+    `evaluate_outage` also raises plain `ValueError` for a shape mismatch, an empty yaw sequence
+    and an unhandled CRSE convention -- all real defects. If the per-window catch took the base
+    class, every one of them would become a silently smaller result set.
+    """
+    import numpy as np
+
+    from eval.metrics.core import ZeroDistanceOutage, evaluate_outage
+
+    assert issubclass(ZeroDistanceOutage, ValueError)
+    with pytest.raises(ValueError) as exc:
+        evaluate_outage(
+            est_disp=np.zeros((3, 2)),
+            true_disp=np.zeros((4, 2)),  # deliberate shape mismatch
+            est_yaw=np.zeros(3),
+            true_yaw=np.zeros(3),
+            distance_m=100.0,
+            duration_s=3.0,
+        )
+    assert not isinstance(exc.value, ZeroDistanceOutage), (
+        "a shape mismatch must not be catchable as a dropped window"
+    )
+
+
+# ------------------------------------------------------------------------------------------
+# Filter initialisation (D-094)
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_filter_is_started_from_the_gnss_fixes_and_not_from_identity():
+    """`run_filter` used to construct `InEKF(cfg)` and propagate from R = R_sv = I, v = 0, p = 0.
+
+    On real data that integrates gravity into the horizontal axes and the run diverges. This
+    fixture cannot show the divergence -- `synthetic_drive` builds a level phone driving due
+    north, which is the one case where identity is correct -- so what it checks is that the
+    initialiser reads the fixes at all and agrees with them.
+    """
+    seq, truth = synthetic_drive(seconds=200.0, mps=15.0)
+    _, accel, _ = imu_stream(seq)
+    fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+
+    f = InEKF(FilterConfig())
+    init = initialise_filter(f, seq, accel, fix_idx, fix_ned)
+
+    assert init.n_warmup_fixes >= 2
+    assert init.speed_mps == pytest.approx(15.0, rel=0.02), "speed from the differenced fixes"
+    assert init.yaw_rad == pytest.approx(0.0, abs=1e-6), "driving due north"
+    assert f.state.p[:2] == pytest.approx(fix_ned[0][:2], abs=1e-6), "position is the first fix"
+
+
+def test_initialisation_reads_only_the_warmup_and_never_the_truth_track():
+    """Two properties that are easy to lose and invisible once lost.
+
+    The initialiser must not see a sample from beyond the warmup, because every outage starts
+    later and that would initialise a window with its own future. And it must not touch truth:
+    `initial_state_from_truth` exists for the strapdown *baseline* (D-064), which is handed truth
+    deliberately because it is a floor rather than a system.
+    """
+    import inspect
+
+    import eval.run as run_mod
+
+    params = set(inspect.signature(run_mod.initialise_filter).parameters)
+    assert not params & {"truth", "truth_track"}, (
+        "the filter must be initialised from the `S-` stream, never from ground truth -- "
+        "`initial_state_from_truth` is the strapdown baseline's, and only its (D-064)"
+    )
+
+    seq, truth = synthetic_drive(seconds=400.0, mps=15.0)
+    _, accel, _ = imu_stream(seq)
+    fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    f = InEKF(FilterConfig())
+    init = initialise_filter(f, seq, accel, fix_idx, fix_ned, warmup_s=run_mod.WARMUP_S)
+    # 30 s of warmup at a 9 s fix interval: fixes at 0, 9, 18, 27 s and no more.
+    assert init.n_warmup_fixes == 4
+
+
+def test_the_mount_block_of_p0_carries_the_measured_spread_not_the_fallback():
+    """D-073 returns a spread precisely so `P0` does not have to fall back to a stated 5 degrees,
+    and until now nothing outside `tests/test_mount.py` ever called it."""
+    seq, truth = synthetic_drive(seconds=200.0, mps=15.0, accel_bias_x=0.4)
+    _, accel, _ = imu_stream(seq)
+    fix_idx, fix_ned, _ = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    f = InEKF(FilterConfig())
+    init = initialise_filter(f, seq, accel, fix_idx, fix_ned)
+
+    assert np.isfinite(init.mount_spread_rad), "the PCA initialiser must have run"
+    assert f.P[15, 15] == pytest.approx(init.mount_spread_rad**2, rel=1e-9)

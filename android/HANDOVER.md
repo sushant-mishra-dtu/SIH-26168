@@ -43,7 +43,7 @@ Nothing in this file is on it. Confirm with seat D before spending days here.
    is no on-device filter. Anything that needs live filter output is blocked, not slow.
 2. **The main CSV header is a whitelist of the entire file.** `io_vnbd.py::_canonicalise` runs
    `assert_no_leakage` over *every* column, so one added column raises `LeakageError` on the whole
-   recording (D-089). New quantities go to a sidecar. `tests/test_android_logger_schema.py` will
+   recording (D-104). New quantities go to a sidecar. `tests/test_android_logger_schema.py` will
    catch you; do not "fix" it by widening `ALLOWED_COLUMNS`.
 3. **No network at runtime, ever.** D-041 claims 100% offline and D-080 forbids the renderer any
    fetch. That rules out Google Maps SDK, Mapbox, any tile server, any CDN font. A judging venue's
@@ -164,12 +164,12 @@ Stated so you do not rediscover them as bugs:
 
 - `RateStats.percentileMs` returns the **upper edge of a 100 µs histogram bin**, not an exact
   percentile. Deliberate — bounded memory over a 40-minute drive — and documented in the class.
-- The `date` column uses a dot sub-second separator on purpose (D-092), because the colon that
-  IO-VNBD ships only parses after D-086, which is on the unmerged `d/shipped-date-format` branch.
-  If that branch lands, re-run the schema test; it asserts against the live pattern.
+- The `date` column uses a dot sub-second separator on purpose (D-107), because the colon that
+  IO-VNBD ships only parses after D-086, which has since landed on `main`. The schema test asserts
+  against the live pattern, so it now covers the post-D-086 loader directly.
 - `SensorHub` shares `rotationMatrix`/`orientationRad` across calls. Safe only because every sensor
   callback is on the one sensor thread. If you add a second listener thread, that breaks.
-- Calibrated data goes in the main CSV and uncalibrated in the sidecar (D-090). This is not an
+- Calibrated data goes in the main CSV and uncalibrated in the sidecar (D-105). This is not an
   oversight and reversing it silently changes what `accel_*` *means* relative to every IO-VNBD
   sequence it is compared against.
 

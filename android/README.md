@@ -14,7 +14,7 @@ These are not preferences. Each one silently corrupts the data if ignored.
 | **Since Android 9, background continuous sensors deliver no events.** | A **foreground service** with a persistent notification is mandatory for continuous logging. |
 | **Since API 31, `registerListener()` caps at 200 Hz** without `HIGH_SAMPLING_RATE_SENSORS`; `SensorDirectChannel` caps near 50 Hz. | Declare the permission. Play Store review requires justifying it. |
 | **If the user disables mic access via device toggles, motion sensors are rate-limited regardless of the permission.** | Detect and warn, or a collection run silently produces useless data. |
-| **Use `TYPE_ACCELEROMETER_UNCALIBRATED` / `TYPE_GYROSCOPE_UNCALIBRATED`.** | Calibrated types silently subtract an OS bias estimate that the filter is *also* estimating. The two fight and the bias state is corrupted. **Amended by D-090:** both are recorded. Uncalibrated is right for what the *filter* consumes; D-085 established that IO-VNBD ships calibrated accel + a separate `GRAVITY` channel, so the harness-facing CSV must carry the same quantity or it means something different from every sequence it is compared against. Calibrated → main CSV, uncalibrated + the OS bias estimate → sidecar. |
+| **Use `TYPE_ACCELEROMETER_UNCALIBRATED` / `TYPE_GYROSCOPE_UNCALIBRATED`.** | Calibrated types silently subtract an OS bias estimate that the filter is *also* estimating. The two fight and the bias state is corrupted. **Amended by D-105:** both are recorded. Uncalibrated is right for what the *filter* consumes; D-085 established that IO-VNBD ships calibrated accel + a separate `GRAVITY` channel, so the harness-facing CSV must carry the same quantity or it means something different from every sequence it is compared against. Calibrated → main CSV, uncalibrated + the OS bias estimate → sidecar. |
 | **Sensor timestamps are a monotonic device clock in ns, with jitter and batching. GNSS is UTC.** | Convert both to one base, model the offset, interpolate GNSS onto IMU epochs. **Never assume a nominal Δt.** |
 | Sustained 200 Hz sensing + inference heats the SoC and throttles. | Budget for it; measure it over a real drive. |
 
@@ -79,19 +79,19 @@ Per session, under `Android/data/org.idr26168.logger/files/sessions/<session-id>
 
 The main CSV carries the allowlist and **nothing else** — 24 columns, exactly. This is not tidiness:
 `_canonicalise` guards every column in the file, so one invented column fails the whole recording
-(D-089). That is why there are sidecars at all.
+(D-104). That is why there are sidecars at all.
 
 ## Why the numbers in the main CSV are what they are
 
 - **10 Hz rows.** `SAMPLE_RATE_HZ = 10` is a constant the outage windows are sized from; a 100 Hz
-  file would be windowed as though it were ten times longer, silently (D-091).
+  file would be windowed as though it were ten times longer, silently (D-106).
 - **km/h in `gps_speed_kmh`.** `Location.getSpeed()` is m/s. The conversion is on our side of the
   wall, where it is visible — the rule `core/ffi/idr_core.h` states for every unit crossing.
 - **`GYROSCOPE X/Y/Z`, not `Yaw/Pitch/Roll`.** They normalise to `gyro_yaw/pitch/roll` either way,
   and `gyro_yaw` is device x, not the vertical axis. The X/Y/Z spelling is the one that does not
   invite a reader to assume otherwise.
 - **Dot as the sub-second separator in `date`.** It parses both before and after D-086; the colon
-  IO-VNBD ships parses only after (D-092).
+  IO-VNBD ships parses only after (D-107).
 - **Blank GNSS cells before the first fix, repeated cells between fixes.** What IO-VNBD does and
   what the loader expects — it takes fixes as position changes and refuses to forward-fill.
 

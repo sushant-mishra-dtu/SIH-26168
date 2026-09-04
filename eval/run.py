@@ -29,20 +29,34 @@ import numpy as np
 from core.reference.inekf import (
     FilterConfig,
     InEKF,
+    initial_covariance,
     is_stationary,
     nhc_is_valid,
+    pca_mount_yaw,
 )
 from eval.baselines import (
+    MIN_HEADING_DISPLACEMENT_M,
     BaselineTrajectory,
     course_over_ground,
     gnss_available,
     initial_state_from_truth,
     naive_strapdown,
     score,
+    yaw_only_rotation,
 )
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence, load_split
-from eval.loaders.truth import align_to_sequence, load_truth, paired_truth_path
-from eval.metrics.core import CRSE_CONVENTION, OutageMetrics, summarise
+from eval.loaders.truth import (
+    TruthPairingError,
+    align_to_sequence,
+    load_truth,
+    paired_truth_path,
+)
+from eval.metrics.core import (
+    CRSE_CONVENTION,
+    OutageMetrics,
+    ZeroDistanceOutage,
+    summarise,
+)
 from eval.outages.inject import (
     OUTAGE_LENGTHS_S,
     PREDICTION_CADENCE_S,
@@ -159,7 +173,7 @@ def truth_clock_offset_s(seq: Sequence) -> float:
     offset is theirs to supply. The **median** over all fixes rather than the first one: a single
     anchor makes the whole sequence's alignment depend on one row's timestamp.
     """
-    from eval.loaders.truth import seconds_of_day
+    from eval.loaders.truth import seconds_of_day_utc
 
     gnss = seq.gnss
     if "date" not in gnss.columns or "time_since_start_ms" not in gnss.columns:
@@ -167,7 +181,7 @@ def truth_clock_offset_s(seq: Sequence) -> float:
             f"{seq.name}: fixes carry no 'date'/'time_since_start_ms' pair, so the `S-` clock "
             "cannot be placed against the `V-` truth clock."
         )
-    tod = seconds_of_day(gnss["date"].tolist())
+    tod = seconds_of_day_utc(gnss["date"].tolist())
     rel = gnss["time_since_start_ms"].to_numpy(dtype=float) / 1000.0
     finite = np.isfinite(tod) & np.isfinite(rel)
     if not finite.any():
@@ -228,6 +242,9 @@ class FilterRun:
     n_zaru_applied: int
     n_zaru_rejected: int
     n_nhc: int
+    #: How the filter was started (D-094), or None when `run_filter` was called without a
+    #: `Sequence` -- which only the unit tests do, on fixtures where `R_sv = I` is correct.
+    init: FilterInit | None = None
 
 
 def run_filter(
@@ -240,6 +257,7 @@ def run_filter(
     gnss_open: np.ndarray,
     *,
     cfg: FilterConfig | None = None,
+    seq: Sequence | None = None,
 ) -> FilterRun:
     """Drive the InEKF across one whole sequence, applying GNSS only where `gnss_open` is True.
 
@@ -257,6 +275,10 @@ def run_filter(
     cfg = cfg or FilterConfig()
     f = InEKF(cfg)
     n = gyro.shape[0]
+
+    # **Before the first propagate, not after it.** See `initialise_filter`: starting from
+    # R = R_sv = I integrates gravity into the horizontal axes and the run diverges (D-094).
+    init = None if seq is None else initialise_filter(f, seq, accel, fix_idx, fix_ned)
 
     fix_at = {int(i): k for k, i in enumerate(fix_idx)}
     window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
@@ -300,6 +322,7 @@ def run_filter(
         pvar[k] = np.diag(f.P)[6:8]
 
     return FilterRun(
+        init=init,
         position_ned=pos,
         yaw_rad=yaw,
         position_var=pvar,
@@ -309,6 +332,151 @@ def run_filter(
         n_zaru_applied=counts["zaru_ok"],
         n_zaru_rejected=counts["zaru_no"],
         n_nhc=counts["nhc"],
+    )
+
+
+#: The GNSS-available run-up `generate_outages` leaves before the first window. The initialiser
+#: may read this and nothing after it: every outage starts later, so using a sample from beyond it
+#: would be initialising a window with its own future.
+WARMUP_S = 30
+
+
+@dataclass(frozen=True)
+class FilterInit:
+    """What the filter was started from, so a run can be read for whether it was started well."""
+
+    yaw_rad: float
+    speed_mps: float
+    mount_yaw_rad: float
+    mount_spread_rad: float
+    mount_sign_resolved: bool
+    n_warmup_fixes: int
+
+
+def _forward_reference(seq: Sequence, n: int) -> np.ndarray | None:
+    """A per-sample signed scalar that grows with forward acceleration, from `gps_speed_kmh`.
+
+    `pca_mount_yaw` returns an *axis*, and forward and backward share it. This resolves the sign,
+    and it has to be resolved rather than assumed: a 180-degree mount error is a vehicle driving
+    backwards and NHC will not converge it out.
+
+    The fixes are ~9 s apart, so this is a step function -- the mean forward acceleration across
+    each fix interval, held over that interval's samples. That is coarse for a magnitude and
+    entirely adequate for a sign, which is all `pca_mount_yaw` uses it for.
+    """
+    gnss = seq.gnss
+    if "gps_speed_kmh" not in gnss.columns:
+        return None
+    idx = gnss["sample_idx"].to_numpy(dtype=int)
+    speed = gnss["gps_speed_kmh"].to_numpy(dtype=float) / 3.6
+    ok = np.isfinite(speed) & (idx >= 0) & (idx < n)
+    idx, speed = idx[ok], speed[ok]
+    if idx.size < 2:
+        return None
+
+    out = np.zeros(n)
+    dt_s = np.diff(idx) / SAMPLE_RATE_HZ
+    accel_fwd = np.divide(
+        np.diff(speed), dt_s, out=np.zeros(dt_s.shape), where=dt_s > 0
+    )
+    for a, lo, hi in zip(accel_fwd, idx[:-1], idx[1:], strict=True):
+        out[lo:hi] = a
+    return out
+
+
+def initialise_filter(
+    f: InEKF,
+    seq: Sequence,
+    accel: np.ndarray,
+    fix_idx: np.ndarray,
+    fix_ned: np.ndarray,
+    *,
+    warmup_s: int = WARMUP_S,
+) -> FilterInit:
+    """Start the filter from the `S-` stream's own GNSS and gravity, never from truth.
+
+    **Without this the filter does not converge, it diverges.** `run_filter` used to construct
+    `InEKF(cfg)` and propagate from `R = I`, `R_sv = I`, `v = 0`, `p = 0`. A phone in a cradle is
+    not aligned with the vehicle and the vehicle is not aligned with north, so gravity leaks into
+    the horizontal axes and is integrated twice: measured on S3a, `norm(v)` reached **1223 m/s at
+    100 s** -- a sustained 12.2 m/s^2, about 1 g -- and the state then sat so far from every fix
+    that the chi-squared gate rejected **59 of 60** of them, locking out the only correction until
+    `P` ran away to 1e70 and `np.linalg.inv` raised. See D-094.
+
+    Truth is not read here and must not be. `eval.baselines.initial_state_from_truth` exists for
+    the *strapdown baseline*, which is deliberately handed truth (D-064) because it is a floor
+    rather than a system; the filter is the system, and it gets what a phone would have.
+
+    Four things, all from inside the warmup window:
+
+    * **Position** -- the first fix. It is the measurement, not an estimate of one.
+    * **Velocity and yaw** -- the first and last warmup fixes, differenced. Course over ground
+      needs motion, so if the vehicle has not moved far enough to have a heading the yaw prior
+      stands at zero and `initial_covariance`'s 14.56-degree block carries it.
+    * **`R_sv`** -- `pca_mount_yaw` over the warmup accelerometer and the stream's own `GRAVITY`
+      channel, which D-085 established points up. This is D-073's initialiser, which until now was
+      called from `tests/test_mount.py` and nowhere else.
+    * **`P0`** -- `initial_covariance` with the PCA's measured `spread_rad` in the mount block,
+      instead of the stated 5-degree fallback it uses when nobody has measured one.
+    """
+    n_warm = min(int(warmup_s * SAMPLE_RATE_HZ), accel.shape[0])
+    in_warmup = np.flatnonzero((fix_idx >= 0) & (fix_idx < n_warm))
+
+    # The mount comes first, because the attitude is expressed through it -- see below.
+    mount_spread: float | None = None
+    mount_yaw = 0.0
+    resolved = False
+    gravity_cols = ["gravity_x", "gravity_y", "gravity_z"]
+    if all(c in seq.imu.columns for c in gravity_cols) and n_warm >= 3:
+        gravity = seq.imu[gravity_cols].to_numpy(dtype=float)[:n_warm]
+        finite = np.isfinite(gravity).all(axis=1)
+        if finite.sum() >= 3:
+            reference = _forward_reference(seq, accel.shape[0])
+            mount = pca_mount_yaw(
+                accel[:n_warm][finite],
+                gravity[finite].mean(axis=0),
+                forward_reference=None if reference is None else reference[:n_warm][finite],
+            )
+            # An unresolved sign is reported, never guessed -- see `pca_mount_yaw`. The rotation
+            # is still applied: PCA has found the mount *axis*, which is most of the answer, and
+            # `mount_sign_resolved` travels to `summary.json` so a run made on an unresolved stem
+            # can be read as one.
+            f.state.R_sv = mount.r_sv
+            mount_spread = mount.spread_rad
+            mount_yaw = mount.yaw_rad
+            resolved = mount.sign_resolved
+
+    yaw = 0.0
+    speed = 0.0
+    if in_warmup.size:
+        f.state.p = np.asarray(fix_ned[in_warmup[0]], dtype=float).copy()
+    if in_warmup.size >= 2:
+        first, last = in_warmup[0], in_warmup[-1]
+        step = np.asarray(fix_ned[last], dtype=float) - np.asarray(fix_ned[first], dtype=float)
+        span_s = float(fix_idx[last] - fix_idx[first]) / SAMPLE_RATE_HZ
+        if span_s > 0 and float(np.linalg.norm(step[:2])) >= MIN_HEADING_DISPLACEMENT_M:
+            yaw = float(np.arctan2(step[1], step[0]))
+            f.state.v = np.array([step[0] / span_s, step[1] / span_s, 0.0])
+            speed = float(np.linalg.norm(f.state.v[:2]))
+
+    # **`state.R` is phone->NED, not vehicle->NED**, and getting that wrong is a 1 g error rather
+    # than a small one. `_h_vehicle_velocity` computes `v_veh = R_sv @ R.T @ v`, so `R.T` takes NED
+    # into the *phone* frame and `R_sv` takes phone into the vehicle; and `propagate` applies `R`
+    # to the raw accelerometer, which is a phone-frame quantity. Course over ground measures the
+    # **vehicle's** heading, so the phone's attitude is that composed with the mount:
+    # `v_ned = R_vn @ R_sv @ v_phone`, hence `R = R_vn @ R_sv`. Setting `R = R_vn` alone leaves the
+    # mount rotation out of the gravity cancellation, and the leaked component is integrated twice
+    # -- measured at 12.2 m/s^2 on S3a, which is what D-094 is about.
+    f.state.R = yaw_only_rotation(yaw) @ f.state.R_sv
+
+    f.P = initial_covariance(f.cfg, mount_sigma_rad=mount_spread)
+    return FilterInit(
+        yaw_rad=yaw,
+        speed_mps=speed,
+        mount_yaw_rad=mount_yaw,
+        mount_spread_rad=float("nan") if mount_spread is None else mount_spread,
+        mount_sign_resolved=resolved,
+        n_warmup_fixes=int(in_warmup.size),
     )
 
 
@@ -349,6 +517,36 @@ class WindowResult:
         }
 
 
+@dataclass(frozen=True)
+class DroppedWindow:
+    """One outage window the paired `V-` track does not cover, and why (D-089).
+
+    A dropped window is **not** a failed sequence. `align_to_sequence` refusing a stem says the
+    two files do not describe the same drive, and the whole stem goes. A `TruthPairingError` here
+    says a handful of epochs inside one window have no truth sample within
+    `eval.loaders.truth.MAX_EPOCH_OFFSET_S`, which is a statement about those epochs only -- so
+    the window goes and the rest of the stem still grades.
+    """
+
+    sequence: str
+    length_s: int
+    start_idx: int
+    #: "no_truth_coverage" (D-089) or "zero_distance" (D-093). Broken out so the summary says
+    #: *why* a window went: a gap in the truth track and a parked vehicle are different findings
+    #: and a single total would conflate a pairing problem with an ordinary traffic light.
+    kind: str
+    reason: str
+
+    def as_row(self) -> dict[str, object]:
+        return {
+            "sequence": self.sequence,
+            "length_s": self.length_s,
+            "start_idx": self.start_idx,
+            "kind": self.kind,
+            "reason": self.reason,
+        }
+
+
 def evaluate_sequence(
     seq: Sequence,
     truth,
@@ -357,6 +555,7 @@ def evaluate_sequence(
     cfg: FilterConfig | None = None,
     replay: dict | None = None,
     stamp: Stamp | None = None,
+    dropped: list[DroppedWindow] | None = None,
 ) -> list[WindowResult]:
     """Every window of every length for one sequence, all three methods.
 
@@ -367,6 +566,12 @@ def evaluate_sequence(
     `REPLAY_LENGTH_S` window is recorded into it for the renderer, stamped with `stamp`. First
     rather than a chosen one: picking the window that plots best is the same error as picking the
     sequence that scores best.
+
+    If `dropped` is a list, any window the truth track does not cover is appended to it as a
+    `DroppedWindow` and contributes nothing to the results (D-089). An out-parameter rather than a
+    second return value for the same reason `replay` is one: every existing caller stays a call
+    that returns `list[WindowResult]`, and a caller that does not pass a sink is not silently
+    handed a count it will not report.
     """
     if replay is not None and stamp is None:
         raise ValueError(
@@ -387,6 +592,13 @@ def evaluate_sequence(
     gyro, accel, t_rel_s = imu_stream(seq)
     dt = assert_uniform_grid(seq.name, t_rel_s)
     offset = truth_clock_offset_s(seq)
+    # Absolute time of day per sample. **Not** `index / SAMPLE_RATE_HZ + offset`: eleven of the
+    # fourteen held-out stems are excerpts cut from a longer recording and keep that recording's
+    # clock, so `time_since_start_ms` opens at 1118 s on Vta11 and 13365 s on Vw8 rather than at
+    # zero. Deriving the epoch from the row index instead of the row's own timestamp shifts the
+    # window by exactly that opening value -- up to 3.7 hours -- and grades the drive against a
+    # stretch of road it never travelled.
+    t_abs_s = t_rel_s + offset
     fix_idx, fix_ned, fix_sigma = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
 
     n = gyro.shape[0]
@@ -399,19 +611,36 @@ def evaluate_sequence(
         assert_non_overlapping(windows)
         run = run_filter(
             gyro, accel, dt, fix_idx, fix_ned, fix_sigma,
-            mask_gnss(n, windows), cfg=cfg,
+            mask_gnss(n, windows), cfg=cfg, seq=seq,
         )
         for outage in windows:
-            t0 = outage.start_idx / SAMPLE_RATE_HZ + offset
-            trajectories = {
-                "filter": window_trajectory(run.position_ned, outage),
-                "strapdown": _strapdown_for(gyro, accel, dt, outage, truth, t0),
-                "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, offset, t0),
-            }
-            for method, traj in trajectories.items():
-                if traj is None:
-                    continue
-                out.append(
+            t0 = float(t_abs_s[outage.start_idx])
+            want_replay = (
+                replay is not None
+                and seq.name in MANDATORY_PLOT_SEQUENCES
+                and length_s == REPLAY_LENGTH_S
+                and seq.name not in replay
+            )
+            # **The whole window is built before any of it is kept.** Three paths below reach the
+            # truth track and each can raise `TruthPairingError` for the same window:
+            # `_strapdown_for` -> `initial_state_from_truth` -> `truth.ned_at`, `score` ->
+            # `truth.displacements_ned`/`distance_m`, and `_replay_record` -> the same. Catching
+            # around any one of them would leave `filter` appended and `strapdown` not, and the
+            # per-method window counts in `summary.json` would stop matching while every
+            # individual number stayed correct -- a summary that misreports without a wrong
+            # number in it. (`_gnss_for` reads the fix arrays and never touches truth, so it is
+            # not a fourth path.) `score` can also raise `ZeroDistanceOutage` when the vehicle
+            # did not move at all over the window, which is a real and ordinary condition -- a
+            # traffic light -- and leaves drift-% with no value to report (D-093). Both are
+            # dropped the same way; nothing broader is caught, because `evaluate_outage`'s other
+            # `ValueError`s are real defects.
+            try:
+                trajectories = {
+                    "filter": window_trajectory(run.position_ned, outage),
+                    "strapdown": _strapdown_for(gyro, accel, dt, outage, truth, t0),
+                    "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, t_abs_s, t0),
+                }
+                window_results = [
                     WindowResult(
                         method=method,
                         sequence=seq.name,
@@ -419,17 +648,49 @@ def evaluate_sequence(
                         start_idx=outage.start_idx,
                         metrics=score(traj, truth, outage, t0_s=t0),
                     )
+                    for method, traj in trajectories.items()
+                    if traj is not None
+                ]
+                record = (
+                    _replay_record(
+                        seq, truth, outage, t0, run, trajectories, gyro, accel, stamp=stamp
+                    )
+                    if want_replay
+                    else None
                 )
+            except (TruthPairingError, ZeroDistanceOutage) as exc:
+                # D-089. The error's own instruction, which until now nothing implemented: drop
+                # the window rather than interpolate across the gap -- and drop it rather than
+                # lose the stem's other windows, or, as before, the whole run's.
+                #
+                # Printed whether or not a sink was passed. A caller that forgets the sink would
+                # otherwise get a quietly smaller result set, which is the one failure D-067
+                # rules out by name -- "under-reporting the count is a far worse failure than a
+                # small count" -- and it would look exactly like a stem that simply had fewer
+                # windows.
+                print(
+                    f"[idr-eval] DROPPED WINDOW {seq.name} {length_s}s @{outage.start_idx}: {exc}",
+                    file=sys.stderr,
+                )
+                if dropped is not None:
+                    dropped.append(
+                        DroppedWindow(
+                            sequence=seq.name,
+                            length_s=length_s,
+                            start_idx=outage.start_idx,
+                            kind=(
+                                "no_truth_coverage"
+                                if isinstance(exc, TruthPairingError)
+                                else "zero_distance"
+                            ),
+                            reason=str(exc),
+                        )
+                    )
+                continue
 
-            if (
-                replay is not None
-                and seq.name in MANDATORY_PLOT_SEQUENCES
-                and length_s == REPLAY_LENGTH_S
-                and seq.name not in replay
-            ):
-                replay[seq.name] = _replay_record(
-                    seq, truth, outage, t0, run, trajectories, gyro, accel, stamp=stamp
-                )
+            out.extend(window_results)
+            if record is not None:
+                replay[seq.name] = record
     return out
 
 
@@ -478,7 +739,7 @@ def _strapdown_for(gyro, accel, dt, outage: Outage, truth, t0_s: float):
     )
 
 
-def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, offset: float, t0_s: float):
+def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, t_abs_s: np.ndarray, t0_s: float):
     """The GNSS-available baseline over one window, or None if no fix precedes it.
 
     None rather than an exception: a window that opens before the receiver's first fix is a real
@@ -488,7 +749,7 @@ def _gnss_for(fix_idx, fix_ned, fix_sigma, outage: Outage, offset: float, t0_s: 
     """
     from eval.baselines import epoch_times
 
-    t_fix = fix_idx / SAMPLE_RATE_HZ + offset
+    t_fix = t_abs_s[fix_idx]
     times = epoch_times(t0_s, outage.length_s)
     usable = t_fix <= times[-1]
     if not usable.any() or t_fix[usable][0] > times[0]:
@@ -614,7 +875,11 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
 
 
 def write_artefacts(
-    out: Path, stamp: Stamp, results: list[WindowResult], replay: dict[str, dict] | None = None
+    out: Path,
+    stamp: Stamp,
+    results: list[WindowResult],
+    replay: dict[str, dict] | None = None,
+    dropped: list[DroppedWindow] | None = None,
 ) -> dict:
     """Write `summary.json`, `windows.csv` and one `trajectory_<seq>.json` per plotted
     sequence, all carrying the stamp.
@@ -624,14 +889,24 @@ def write_artefacts(
     """
     out.mkdir(parents=True, exist_ok=True)
     by_method = summarise_by_method_and_length(results)
+    # D-089. Carried beside the results, never folded into them: a run that graded 1260 windows
+    # and dropped 3 is a different result from one that graded 1263, and the difference is
+    # invisible in every metric. D-067's rule is that the omission travels with the number.
+    dropped = list(dropped or [])
     summary = {
         "stamp": stamp.caption(),
         "reproducible": stamp.is_reproducible(),
         "crse_convention": CRSE_CONVENTION.value,
         "n_windows": len(results),
+        "n_dropped_windows": len(dropped),
+        "n_dropped_by_kind": {
+            kind: sum(d.kind == kind for d in dropped)
+            for kind in sorted({d.kind for d in dropped})
+        },
         "by_method": by_method,
         "gate1": gate1_ratio(by_method),
         "trajectories": sorted(replay or {}),
+        "dropped_windows": [d.as_row() for d in dropped],
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -725,14 +1000,19 @@ def main(argv: list[str] | None = None) -> int:
     results: list[WindowResult] = []
     replay: dict[str, dict] = {}
     skipped: list[str] = []
+    skipped_names: list[str] = []
+    dropped: list[DroppedWindow] = []
     for name, seq in sorted(sequences.items()):
         try:
             truth = load_truth(paired_truth_path(name, args.data), name)
             results.extend(
-                evaluate_sequence(seq, truth, args.lengths, replay=replay, stamp=stamp)
+                evaluate_sequence(
+                    seq, truth, args.lengths, replay=replay, stamp=stamp, dropped=dropped
+                )
             )
         except SequenceUnusable as exc:
             skipped.append(f"{name}: {exc}")
+            skipped_names.append(name)
             print(f"[idr-eval] SKIPPED {exc}", file=sys.stderr)
         else:
             print(f"[idr-eval] {name}: {sum(r.sequence == name for r in results)} window results")
@@ -745,13 +1025,43 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    summary = write_artefacts(args.out, stamp, results, replay)
+    summary = write_artefacts(args.out, stamp, results, replay, dropped)
+
+    # A mandatory figure that is simply absent (D-089). Before dropped windows existed, a hole
+    # inside a `MANDATORY_PLOT_SEQUENCES` replay window aborted the run, so this could not happen
+    # quietly; now it can, and `eval/splits.py` says such a figure should "fail the run rather
+    # than being noticed the night before" while nothing in the code has ever enforced it. A stem
+    # that was skipped whole is already reported as skipped and is not counted twice here.
+    mandatory_missing = [
+        name
+        for name in MANDATORY_PLOT_SEQUENCES
+        if name not in replay and name not in skipped_names
+    ]
+
     if skipped:
         summary["skipped"] = skipped
+    if mandatory_missing:
+        summary["mandatory_plots_missing"] = mandatory_missing
+    if skipped or mandatory_missing:
         (args.out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if skipped:
         print(
             f"[idr-eval] {len(skipped)} sequence(s) skipped -- listed in summary.json. Report the "
             "count with every number from this run.",
+            file=sys.stderr,
+        )
+    if dropped:
+        print(
+            f"[idr-eval] {len(dropped)} window(s) dropped for want of truth coverage -- listed in "
+            "summary.json. Report the count with every number from this run (D-089).",
+            file=sys.stderr,
+        )
+    if mandatory_missing:
+        print(
+            f"[idr-eval] MANDATORY PLOT MISSING: {', '.join(mandatory_missing)} produced no "
+            f"{REPLAY_LENGTH_S} s replay window. eval/splits.MANDATORY_PLOT_SEQUENCES names these "
+            "so a missing figure is found now rather than the night before; the submission is "
+            "not complete without them.",
             file=sys.stderr,
         )
     print(json.dumps(summary["gate1"], indent=2))
