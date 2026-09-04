@@ -39,6 +39,22 @@ world-frame). Window ~1–2 s.
 
 ## Status
 
-Scaffold only. Sprint 0: extract every stated hyperparameter from the Onyekpe INS paper, list the
-ones it omits as choices we must make and log, pick the backbone, build the reproduction skeleton.
-**No training until the harness exists.**
+**Architectures are defined; nothing is trained.**
+[`speed_head.py`](speed_head.py) carries the TCN with its log-variance output, the Gaussian NLL and
+the calibration metric; [`baseline_rnn.py`](baseline_rnn.py) carries the Onyekpe baseline at the
+published hyperparameters (1 s window, MAE, Adamax 7e-4, batch 128, dropout 0.05, ~72 units).
+
+> ⚠️ **Neither file is covered by CI.** `torch` is deliberately not installed there — the harness is
+> the critical path and must never be blocked on a 2 GB download. That is an accepted gap, and it
+> means these two files have never been executed in a clean environment. Run them locally before
+> quoting anything from them.
+
+**`update_speed` on the filter side is still `NotImplementedError`** — deliberately, because a stub
+returning `None` would let the harness produce plausible all-zero trajectories and report them as
+results.
+
+**Gate 1 is currently blocked** (D-053), so the rule above is live rather than theoretical: no
+network goes on top of a filter that has not cleared physics-only. The remaining seat-M work that
+does *not* wait on Gate 1 is documentary — list every hyperparameter the Onyekpe INS paper states
+against every one it omits, and log each omission we have to choose as a DECISION_LOG row rather
+than letting it sit silently in a config file.

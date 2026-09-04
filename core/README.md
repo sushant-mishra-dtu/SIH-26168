@@ -1,18 +1,27 @@
 # core/ — filter core & edge engine
 
-**Seat S.** Language: C++ or Rust — *decision pending, log it in
-[../docs/DECISION_LOG.md](../docs/DECISION_LOG.md) once made.*
+**Seat S.** **The screening filter is the Python reference in `reference/`** (D-022). The compiled
+core is an October port; the choice between C++ and Rust is deferred with it, and only the `ffi/`
+interface is a screening deliverable (D-043).
 
 The spine of the whole system, and the half of the project the sponsor cares most about given the
 FOG-IMU and EW-resilience framing in the problem statement.
 
 ## What lives here
 
-| Path | Contents |
-|---|---|
-| `filter/` | SE₂(3) state, propagation, gated measurement updates |
-| `constraints/` | NHC / ZUPT / ZARU pseudo-measurements **and their gating conditions** |
-| `ffi/` | JNI surface for Android; the same library feeds the edge build |
+| Path | Contents | State |
+|---|---|---|
+| `reference/inekf.py` | **The screening filter.** SE₂(3) state, propagation, the update family, gating predicates, χ² gate | Written and tested |
+| `filter/` | SE₂(3) state, propagation, gated measurement updates — the October port | Empty |
+| `constraints/` | NHC / ZUPT / ZARU pseudo-measurements **and their gating conditions** | Empty |
+| `ffi/` | JNI surface for Android; the same library feeds the edge build | Empty — D-043 wants a ~100-line interface definition at screening, not an implementation |
+
+**Gating lives with the caller, not in the filter (D-052).** `is_stationary` needs accelerometer
+variance over a window and `nhc_is_valid` needs yaw rate and lateral acceleration — none of which
+is a property of the *state*. Putting them inside would mean the filter storing a raw-sample buffer
+to re-derive what the caller already has, and would hide the one rule the error budget depends on:
+**ZUPT and ZARU fire together at every detected stop** (D-004). A stop where only one runs is a bug,
+not a tuning choice, and that is only enforceable where the detector is called.
 
 ## Contract
 
@@ -38,10 +47,22 @@ configuration is the Gate 1 baseline.
 
 ## Status
 
-Scaffold only. The SE₂(3) propagation is **derived and CI-verified** —
-[../docs/SE23_PROPAGATION.md](../docs/SE23_PROPAGATION.md) is what Sprint 1 writes
-`propagate()` and the update family from; do not re-derive it at the keyboard.
+**`reference/inekf.py` is written: `propagate()` on SE₂(3), plus ZUPT, ZARU, NHC and gated GNSS.**
+It is written from [../docs/SE23_PROPAGATION.md](../docs/SE23_PROPAGATION.md), which was derived
+and CI-verified *before* the filter existed — do not re-derive it at the keyboard, and do not edit
+the filter and the derivation independently.
 
-Still open in Sprint 0: start the multi-hour stationary log for Allan variance (Gate 1's
-process noise depends on it), and agree the `ffi/` interface with seat A. Language choice is
-deferred to the October port by D-022 — the screening filter is the Python reference.
+Three things are open, in priority order:
+
+1. **The filter is not consistent, and Gate 1 must not be declared on it (D-053).** Full-state NEES
+   is **29.90** against a 95% band of **[16.843, 19.195]** — over-confident. Propagation-only
+   (18.287) and propagation+ZUPT (18.929) are both in band and asserted by tests; **ZARU is the sole
+   cause**, with two measured contributors. Numbers in
+   [../docs/ERROR_BUDGET.md](../docs/ERROR_BUDGET.md) §9.4. P-04 owns it, together with `P₀`.
+2. **`P₀` is still a flat `1e-3·I`** — far too tight on the mount block, too loose on position.
+3. `update_speed` is `NotImplementedError` (Sprint 2), and `ffi/` is an empty directory (D-043).
+
+Superseded, so it is not restarted: the multi-hour stationary log for Allan variance is **off** the
+Gate 1 critical path (D-038) and `Q_c` now comes from IO-VNBD's own segments (D-045). The mount
+block of `Q_c` is deliberately **zero** (D-048) — the model in force is a rigid mount, and nothing
+in this repo measures otherwise.

@@ -19,9 +19,34 @@ drifts, potholes, valleys, motorway.
 | Stream | Rate | Contents | Use |
 |---|---|---|---|
 | **`V-`** (car ECU) | 10 Hz, ~1.4M × 29 cols | Racelogic VBOX HD2 CAN + VBOX GPS: wheel speeds FL/FR/RL/RR, steering angle, yaw rate, brake pressure, engine rpm, gear, clutch, pedal, GPS lat/lon/velocity/heading/height | **Wheel channels are off-limits.** GPS here is useful as ground truth on paired sequences only. |
-| **`S-`** (smartphone) | 10 Hz, GPS 1 Hz, ~2.2M × 24 cols | AndroSensor on Huawei P20 Pro / Moto G7 Power / BlackBerry Priv: accel XYZ, **gravity XYZ**, gyro yaw/pitch/roll, magnetometer XYZ, orientation, GPS lat/lon/speed/accuracy/sats | **This is our training data.** |
+| **`S-`** (smartphone) | 10 Hz inertial, **GPS ≈ 9 s**, ~2.2M × 24 cols | AndroSensor on Huawei P20 Pro / Moto G7 Power / BlackBerry Priv: accel XYZ, **gravity XYZ**, gyro yaw/pitch/roll, magnetometer XYZ, orientation, GPS lat/lon/speed/accuracy/sats | **This is our training data.** |
+
+Both rates in the `S-` row are **measured, not nominal**: median inertial Δt is 100.0 ms, and the
+median inter-fix GPS interval across all 72 synchronised stems is **9.0 s** — not the 1 Hz this
+table and [EVALUATION.md](EVALUATION.md) §2 were both originally drafted against. Only `Vta1a`,
+`Vta2` and `Vta1b` update at 1 Hz; `Vw1` and `Vw15` contain zero GPS position changes. That gap is
+why ground truth is proposed to move to the paired `V-` VBOX track — [EVALUATION.md](EVALUATION.md)
+§1.1 and §2 carry the consequences and the abort gate.
 
 Sequences are paired: `V-S1` ↔ `S-S1`.
+
+```mermaid
+flowchart LR
+    PBF["<b>IO-VNBD download</b><br/>~5,700 km · 98 h · 8 drivers"] --> SYNC["Synchronised V and S<br/><i>use this one</i>"]
+    PBF --> UNSYNC["Unsynchronised V and S<br/><i>not used — record the choice</i>"]
+
+    SYNC --> PAIR["<b>paired stem</b><br/>e.g. S3a"]
+    PAIR --> S["<b>S-S3a.csv</b><br/>10 Hz inertial<br/>GPS every ~9 s"]
+    PAIR --> V["<b>V-S3a.csv</b><br/>10 Hz CAN + VBOX GPS"]
+
+    S --> FEAT["features + gated GNSS update<br/><i>everything the system gets</i>"]
+    V --> TRUTHUSE["lat, lon, time-of-day only<br/><i>what we grade against</i>"]
+    V --x BAN["wheel speed FL/FR/RL/RR,<br/>steering, rpm, brake, gear,<br/>GPS velocity, GPS heading"]
+
+    style BAN fill:#da3633,color:#fff
+    style FEAT fill:#1f6feb,color:#fff
+    style TRUTHUSE fill:#9e6a03,color:#fff
+```
 
 The repo ships both a "Synchronised V and S datasets" folder and an "Unsynchronised V and S Dataset"
 folder. Use the synchronised one; record which in the manifest.
@@ -52,6 +77,17 @@ not in a notebook**, and no sequence appears on both sides.
   which is why bias instability is reported there as an upper bound and rate random walk is
   derived rather than measured. Regenerate the inventory with
   `python -m eval.allan --inventory-only --paths-from data/manifest/allan_segments_input.txt`.
+- **Every `S-` stem in the synchronised folder ships twice, under two different checksums.** All 72
+  of them; no `V-` stem does. Fifty-seven differ substantively — the uncategorised copy is larger
+  every time, by up to **8.9%** (`S-vta24`) — and the other fifteen differ by 5–6 bytes, which is a
+  trailing newline. A percentage difference is *rows*, so the two copies are different lengths of
+  recording: sequence duration, outage tiling, fix count and every metric move with the choice
+  between them. `load_split` used to take `candidates[0]` off a glob, making filesystem order the
+  arbiter; it now picks the categorised copy deterministically, and
+  `eval.loaders.truth.divergent_copies` reports the divergence. **Which copy the protocol grades on
+  is still seat D's to settle** — see [EVALUATION.md](EVALUATION.md) §1.1. This also narrows D-047's
+  "verified byte-identical on `S-S1`, which ships in both": that holds for the gyro columns it was
+  about, not for the files.
 - `S-I.csv` looks like a dedicated stationary recording (9.7 min, Lagos, parked) and is **not
   usable as one block**: it contains a 285 s recorder pause, and past that pause it switches to a
   burst mode whose timestamps repeat at ~1 ms with 39% duplicates. Allan variance assumes a uniform
@@ -77,6 +113,23 @@ Do not commit dataset bytes to this repo under any circumstance — see [../data
 ## 2. The three traps
 
 Each of these has cost a team its submission somewhere.
+
+```mermaid
+mindmap
+  root((IO-VNBD<br/>traps))
+    ("1 · 10 Hz phone data")
+      ("no 200 Hz pipeline can be shown on it")
+      ("caption every plot with its stream and rate")
+      ("the FOG story is the edge build, not this data")
+    ("2 · wheel speed is present but banned")
+      ("same download, adjacent columns")
+      ("allowlist + a CI job that is watched to fail")
+      ("audit twice: Sprint 1 and pre-submission")
+    ("3 · no Indian roads")
+      ("UK, France, Nigeria only")
+      ("Delhi/NCR underpasses and basement parking")
+      ("domain-shift ablation almost nobody else will submit")
+```
 
 1. **Phone data is only 10 Hz.** You cannot demonstrate a 200 Hz pipeline on it. Use `S-` for the
    app story and state explicitly in every caption and slide which stream produced which plot.

@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 800" width="1400" height="800"
+     role="img" aria-label="Architecture of idr-26168: one continuously propagating Invariant EKF on SE2(3). GNSS enters through a chi-squared innovation gate whose rejected branch dead-ends, so a tunnel produces no update and no mode switch.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3d454e"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1f6feb"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a7f37"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1400" height="800" fill="#ffffff"/>
+
+  <!-- ============ header ============ -->
+  <text x="40" y="48" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="26" font-weight="700" fill="#14171a">One always-propagating InEKF &#8212; no second system, no handoff</text>
+  <text x="40" y="74" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="14" fill="#5b6570">SIH 26168 &#183; Intelligent dead reckoning for GNSS-denied ground vehicles &#183; smartphone-only inputs</text>
+
+  <!-- ============ section labels ============ -->
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="10.5" font-weight="600" fill="#8b95a1" letter-spacing="1.3">
+    <text x="36" y="112">SENSORS</text>
+    <text x="258" y="112">LEARNED &#183; PYTORCH</text>
+    <text x="560" y="112">FILTER CORE</text>
+    <text x="880" y="112">MAP</text>
+    <text x="1130" y="112">OUTPUT</text>
+    <text x="472" y="394" text-anchor="end">CONSTRAINTS</text>
+  </g>
+
+  <!-- ============ wires drawn under boxes ============ -->
+  <g fill="none" stroke="#3d454e" stroke-width="1.6" marker-end="url(#a)">
+    <path d="M124,168 L124,140 L640,140 L640,166"/>
+    <path d="M212,190 L254,190"/>
+    <path d="M212,216 C238,216 234,328 254,328"/>
+    <path d="M212,240 C240,240 232,519 254,519"/>
+    <path d="M290,370 L290,406"/>
+    <path d="M472,218 L556,218"/>
+    <path d="M472,441 L556,441"/>
+    <path d="M472,519 L556,519"/>
+    <path d="M212,612 L556,612"/>
+    <path d="M812,325 L876,325"/>
+    <path d="M1098,325 L1126,325"/>
+  </g>
+
+  <path d="M686,576 L686,536" fill="none" stroke="#1a7f37" stroke-width="2.2" marker-end="url(#ag)"/>
+  <path d="M989,250 L989,158 L740,158 L740,166" fill="none" stroke="#1f6feb" stroke-width="1.6" marker-end="url(#ab)"/>
+
+  <!-- rejected: dead end -->
+  <path d="M812,612 L894,612" fill="none" stroke="#9e6a03" stroke-width="2.2" stroke-dasharray="7 5"/>
+  <g stroke="#9e6a03" stroke-width="2.4" fill="none">
+    <circle cx="908" cy="612" r="11"/>
+    <path d="M900,604 L916,620"/>
+  </g>
+
+  <text x="630" y="133" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#5b6570" text-anchor="end">propagates on every IMU sample</text>
+
+  <!-- ============ column A - sensors ============ -->
+  <rect x="36" y="168" width="176" height="88" rx="8" fill="#ffffff" stroke="#c9d1d9" stroke-width="1.6"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="124" y="199" font-size="14.5" font-weight="700" fill="#14171a">IMU</text>
+    <text x="124" y="219" font-size="11" fill="#5b6570">accel + gyro, uncalibrated</text>
+    <text x="124" y="237" font-size="11" fill="#5b6570">10 Hz phone &#183; 200 Hz FOG</text>
+  </g>
+
+  <rect x="36" y="576" width="176" height="72" rx="8" fill="#ffffff" stroke="#c9d1d9" stroke-width="1.6"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="124" y="601" font-size="14.5" font-weight="700" fill="#14171a">GNSS</text>
+    <text x="124" y="620" font-size="10.5" fill="#5b6570">GPS &#183; GLONASS &#183; Galileo</text>
+    <text x="124" y="636" font-size="10.5" fill="#5b6570">BeiDou (NavIC = bonus)</text>
+  </g>
+
+  <!-- ============ column B - learned ============ -->
+  <rect x="258" y="168" width="214" height="100" rx="8" fill="#ffffff" stroke="#c9d1d9" stroke-width="1.6"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="365" y="194" font-size="13.5" font-weight="700" fill="#14171a">Speed + variance head</text>
+    <text x="365" y="213" font-size="10.5" fill="#5b6570">TCN, 1&#8211;2 s window</text>
+    <text x="365" y="234" font-size="10.5" fill="#3d454e">&#8594; forward-speed pseudo-meas.</text>
+    <text x="365" y="250" font-size="10.5" fill="#3d454e">with its own predicted R</text>
+  </g>
+
+  <rect x="258" y="286" width="214" height="84" rx="8" fill="#ffffff" stroke="#c9d1d9" stroke-width="1.6"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="365" y="312" font-size="13.5" font-weight="700" fill="#14171a">Adaptive R_NHC</text>
+    <text x="365" y="331" font-size="10.5" fill="#5b6570">AI-IMU CNN, ~6k params</text>
+    <text x="365" y="350" font-size="10.5" fill="#8b95a1">measurement noise R, never Q</text>
+  </g>
+
+  <!-- ============ column B - constraints ============ -->
+  <rect x="258" y="410" width="214" height="62" rx="8" fill="#ffffff" stroke="#c9d1d9" stroke-width="1.6"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="365" y="435" font-size="13.5" font-weight="700" fill="#14171a">NHC</text>
+    <text x="365" y="455" font-size="10.5" fill="#5b6570">no sideways, no vertical</text>
+  </g>
+
+  <rect x="258" y="488" width="214" height="62" rx="8" fill="#ffffff" stroke="#c9d1d9" stroke-width="1.6"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="365" y="513" font-size="13.5" font-weight="700" fill="#14171a">ZUPT + ZARU</text>
+    <text x="365" y="533" font-size="10.5" fill="#5b6570">at every detected stop</text>
+  </g>
+
+  <text x="300" y="394" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#5b6570">per-step R</text>
+
+  <!-- ============ the filter ============ -->
+  <rect x="560" y="168" width="252" height="364" rx="10" fill="#f4f8ff" stroke="#1f6feb" stroke-width="2.4"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="686" y="205" font-size="17" font-weight="700" fill="#0d419d">Invariant EKF on SE&#8322;(3)</text>
+    <text x="686" y="227" font-size="12.5" font-weight="600" fill="#1f6feb">always propagating &#183; 10 Hz out</text>
+  </g>
+  <line x1="580" y1="246" x2="792" y2="246" stroke="#bcd3f5" stroke-width="1.2"/>
+  <text x="686" y="266" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="9.5" font-weight="600" fill="#7a8794" letter-spacing="1.1" text-anchor="middle">18-STATE ERROR VECTOR</text>
+
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <rect x="576" y="278" width="66" height="42" rx="5" fill="#ffffff" stroke="#bcd3f5" stroke-width="1.2"/>
+    <text x="609" y="299" font-size="13" font-weight="700" fill="#0d419d">&#948;&#952;</text>
+    <text x="609" y="313" font-size="9" fill="#7a8794">attitude</text>
+
+    <rect x="653" y="278" width="66" height="42" rx="5" fill="#ffffff" stroke="#bcd3f5" stroke-width="1.2"/>
+    <text x="686" y="299" font-size="13" font-weight="700" fill="#0d419d">&#948;v</text>
+    <text x="686" y="313" font-size="9" fill="#7a8794">velocity</text>
+
+    <rect x="730" y="278" width="66" height="42" rx="5" fill="#ffffff" stroke="#bcd3f5" stroke-width="1.2"/>
+    <text x="763" y="299" font-size="13" font-weight="700" fill="#0d419d">&#948;p</text>
+    <text x="763" y="313" font-size="9" fill="#7a8794">position</text>
+
+    <rect x="576" y="330" width="66" height="42" rx="5" fill="#ffffff" stroke="#bcd3f5" stroke-width="1.2"/>
+    <text x="609" y="351" font-size="13" font-weight="700" fill="#0d419d">&#948;b<tspan dy="3" font-size="9">g</tspan></text>
+    <text x="609" y="365" font-size="9" fill="#7a8794">gyro bias</text>
+
+    <rect x="653" y="330" width="66" height="42" rx="5" fill="#ffffff" stroke="#bcd3f5" stroke-width="1.2"/>
+    <text x="686" y="351" font-size="13" font-weight="700" fill="#0d419d">&#948;b<tspan dy="3" font-size="9">a</tspan></text>
+    <text x="686" y="365" font-size="9" fill="#7a8794">accel bias</text>
+
+    <rect x="730" y="330" width="66" height="42" rx="5" fill="#ffffff" stroke="#bcd3f5" stroke-width="1.2"/>
+    <text x="763" y="351" font-size="13" font-weight="700" fill="#0d419d">&#958;<tspan dy="3" font-size="9">sv</tspan></text>
+    <text x="763" y="365" font-size="9" fill="#7a8794">mount angle</text>
+  </g>
+  <line x1="580" y1="392" x2="792" y2="392" stroke="#bcd3f5" stroke-width="1.2"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle" font-size="10.5" fill="#48525d">
+    <text x="686" y="414">&#915;&#8320;/&#915;&#8321;/&#915;&#8322; closed form &#183; Allan-seeded Q</text>
+    <text x="686" y="434">mount yaw estimated online &#8212; budget &#8776; 1&#176;</text>
+    <text x="686" y="454">residual gyro bias &#8804; 0.01 &#176;/s after ZARU</text>
+  </g>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle" fill="#1f6feb">
+    <text x="686" y="486" font-size="12.5" font-weight="700">no branch &#183; no handoff</text>
+    <text x="686" y="506" font-size="11" font-weight="600">no transition latency, by construction</text>
+  </g>
+
+  <!-- ============ the gate ============ -->
+  <rect x="560" y="576" width="252" height="72" rx="8" fill="#fff8ec" stroke="#9e6a03" stroke-width="2.2"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="686" y="605" font-size="14" font-weight="700" fill="#7a5202">&#967;&#178; innovation gate</text>
+    <text x="686" y="626" font-size="10.5" fill="#8a6a2e">Mahalanobis distance on the GNSS residual</text>
+  </g>
+  <text x="386" y="602" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#5b6570" text-anchor="middle">raw fix, whenever one arrives</text>
+  <text x="698" y="560" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1a7f37">accepted &#8594; ordinary update</text>
+
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" fill="#7a5202">
+    <text x="932" y="606" font-size="12" font-weight="700">rejected &#8212; tunnel, car park, multipath</text>
+    <text x="932" y="626" font-size="11.5" fill="#8a6a2e">no update &#183; no mode switch &#183; no position jump</text>
+  </g>
+
+  <!-- ============ map ============ -->
+  <rect x="880" y="250" width="218" height="150" rx="8" fill="#fbfaff" stroke="#8b95a1" stroke-width="1.8" stroke-dasharray="7 5"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="989" y="283" font-size="13.5" font-weight="700" fill="#14171a">HMM map matching</text>
+    <text x="989" y="305" font-size="10.5" fill="#5b6570">offline OSM CSR graph</text>
+    <text x="989" y="323" font-size="10.5" fill="#5b6570">emission &#963; from the filter P</text>
+    <text x="989" y="341" font-size="10.5" fill="#5b6570">~21 MiB Delhi &#183; ~32 MiB NCR</text>
+    <text x="989" y="363" font-size="10" font-weight="600" fill="#8b95a1">100% offline &#8212; no map SDK, no API key</text>
+    <text x="989" y="385" font-size="9.5" font-weight="700" fill="#8b95a1" letter-spacing="1">POST-SCREENING</text>
+  </g>
+  <text x="846" y="316" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5b6570" text-anchor="middle">pose + P</text>
+  <text x="866" y="150" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="600" fill="#1f6feb" text-anchor="middle">heading feedback</text>
+
+  <!-- ============ output ============ -->
+  <rect x="1130" y="272" width="222" height="112" rx="8" fill="#f1faf3" stroke="#1a7f37" stroke-width="2.2"/>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" text-anchor="middle">
+    <text x="1241" y="305" font-size="15.5" font-weight="700" fill="#14532d">10 Hz pose</text>
+    <text x="1241" y="327" font-size="12.5" font-weight="600" fill="#1a7f37">+ uncertainty ellipse</text>
+    <text x="1241" y="352" font-size="10.5" fill="#4a7a58">graded on drift as % of distance</text>
+    <text x="1241" y="370" font-size="10.5" fill="#4a7a58">median and 95th percentile</text>
+  </g>
+
+  <!-- ============ legend + footer ============ -->
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#8b95a1">
+    <rect x="36" y="700" width="26" height="14" rx="3" fill="#ffffff" stroke="#8b95a1" stroke-width="1.6" stroke-dasharray="6 4"/>
+    <text x="72" y="711">dashed block = deferred past the 8 Sep screening submission</text>
+    <line x1="36" y1="736" x2="94" y2="736" stroke="#9e6a03" stroke-width="2.2" stroke-dasharray="7 5"/>
+    <text x="104" y="740">dashed amber = what happens to a GNSS fix that fails the gate</text>
+  </g>
+  <line x1="36" y1="762" x2="1364" y2="762" stroke="#e3e7ec" stroke-width="1.2"/>
+  <text x="36" y="784" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#3d454e">The dashed branch is the whole argument: in a tunnel nothing passes the gate, so nothing is applied. There is no code path to switch &#8212; therefore no transition latency and no position jump.</text>
+</svg>

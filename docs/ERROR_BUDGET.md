@@ -1,8 +1,11 @@
 # Error Budget
 
-**Owner:** seat S. **Revised at:** Gate 1 (against measured Allan variance), Gate 2, Gate 3.
-**Status:** provisional allocation — the numbers below are targets derived from first principles,
-not measurements. Sprint 1 replaces the sensor assumptions with our own Allan-variance run.
+**Owner:** seat S. **Revised at:** Gate 1, Gate 2, Gate 3.
+**Status:** the **allocation** (§6) is still provisional — targets derived from first principles,
+not from measurements, because no drift number has been produced on real data yet. The **sensor
+numbers** (§9.1) are no longer assumptions: they are measured from IO-VNBD's own stationary
+segments (D-045), and they replaced a placeholder that was 7× pessimistic. §9.4 records the one
+measurement that says the filter is not yet ready to be graded against this budget at all.
 
 The grade metric is **position drift < 10% of distance travelled**. This document says where that
 10% is allowed to go, so that when a term overruns we know which one and who owns it.
@@ -153,6 +156,15 @@ knocked by 5° silently costs 87 m over the same outage.
 
 ## 6. Provisional allocation
 
+```mermaid
+pie showData
+    title 100 m over a 60 s outage at 16.7 m/s
+    "Lateral - residual gyro bias" : 40
+    "Along-track - speed estimate" : 30
+    "Lateral - R_sv misalignment" : 20
+    "Gyro scale factor in turns" : 10
+```
+
 | Term | Budget | Owner | Attacked by |
 |---|---|---|---|
 | Lateral — residual gyro bias | 40 m | S | ZARU at every stop, bias snapshot at tunnel entry, map-matching heading feedback, magnetometer as weak prior only |
@@ -171,7 +183,33 @@ not close in a car park.
 
 ## 7. Instrumentation requirements
 
-The budget is worthless if we cannot see which term is overrunning. Every evaluation run logs:
+The budget is worthless if we cannot see which term is overrunning. Each term fails with a
+different signature, and the instrumentation below exists so that the signature is readable:
+
+```mermaid
+flowchart TB
+    OVER{"Drift over 10%<br/>on a 60 s outage"} --> DECOMP["Decompose the error:<br/><b>along-track vs cross-track</b><br/>never just the norm"]
+
+    DECOMP -->|"mostly along-track"| ALONG{"Yaw error small?"}
+    DECOMP -->|"mostly cross-track"| LAT{"Yaw error grows<br/>linearly in t?"}
+
+    ALONG -->|"yes"| SPEED["<b>Speed head</b> — §4<br/>eps_v over 0.5 m/s RMS<br/>owner M"]
+    ALONG -->|"no"| BOTH["Yaw is leaking into both.<br/>Treat as the lateral branch."]
+
+    LAT -->|"yes, from t=0"| BIAS["<b>Residual gyro bias</b> — §3.2<br/>check ZARU fired at every stop,<br/>check the tunnel-entry snapshot<br/>owner S"]
+    LAT -->|"no, only in turns"| SF["<b>Gyro scale factor</b> — §6<br/>owner S"]
+    LAT -->|"constant offset,<br/>no yaw error at all"| MOUNT["<b>R_sv misalignment</b> — §5<br/>1 deg is 20 m; 5 deg is 87 m<br/>owner S"]
+
+    BIAS --> COV{"Does trace(P) track<br/>the real error?"}
+    SPEED --> COV
+    MOUNT --> COV
+    COV -->|"no — filter is over-confident"| NEES["<b>Consistency, not accuracy.</b><br/>Go to §9.4 before tuning anything else."]
+
+    style NEES fill:#da3633,color:#fff
+    style OVER fill:#9e6a03,color:#fff
+```
+
+Every evaluation run logs:
 
 - **Yaw error time series**, separately and always ([EVALUATION.md](EVALUATION.md) §4.4).
 - Estimated gyro bias vs. time, with a marker at each ZUPT/ZARU application.
@@ -293,3 +331,45 @@ A separate several-hour, multi-temperature run on our own handset — logged at 
 `HIGH_SAMPLING_RATE_SENSORS` — remains worth doing for the demo and edge story, and would bound
 thermal drift and resolve limits 2 and 3 above. It is explicitly **not** on the Gate 1 critical
 path (D-038): it characterises a device that produced none of the graded data.
+
+### 9.4 The consistency envelope — measured, and currently failing
+
+A budget in metres assumes the filter's own covariance is honest. It is not yet. NEES over the
+60 s reference scenario, 100 Monte-Carlo runs, 18 degrees of freedom, 95% band **[16.843, 19.195]**
+(D-053):
+
+| Configuration | Full-state NEES | Verdict |
+|---|---|---|
+| Propagation only | **18.287** | in band — asserted by a committed test |
+| Propagation + ZUPT | **18.929** | in band — asserted by a committed test |
+| **Full state, everything on** | **29.90** | **over-confident.** Not committed as a passing test. |
+
+Per-block, against an expected 3.0:
+
+| Block | Propagation only | ZUPT only | NHC only | ZARU only |
+|---|---|---|---|---|
+| all blocks | 2.8–3.2 | 2.8–3.4 | 1.6–2.8 | — |
+| gyro bias | — | — | — | **12.89** |
+
+NHC's 1.6–2.8 is *under*-confident, which is the safe direction, and is an artefact of
+`R_NHC = 0.5 m/s` being model slack that a noise-free simulation does not need. **ZARU is the sole
+cause of the failure**, with two measured contributors:
+
+1. `zaru_sigma = 1.0e-3` rad/s sits **below** the gyro white noise §9.1 measured —
+   `gyro_arw / √dt = 4.11e-4 / √0.1 = 1.30e-3` rad/s at 10 Hz. Understated 1.3× in σ, 1.7× in
+   variance. Correcting it moves the gyro-bias block 12.03 → 8.48 and the total 29.90 → 23.71:
+   real, and **not** the larger cause.
+2. The same gyro sample is used as process noise inside `propagate()` *and* as ZARU's measurement,
+   which the Kalman update assumes are independent. On a 60 s stationary run the gyro-bias block
+   reads 3.41 with the correct σ, but **2.74** given an independent second gyro read, and 2.72 when
+   ZARU is decimated to every tenth step.
+
+Neither fix belonged to the phase that measured this: the first is tuning an `R` to pass a
+consistency test, and the second changes D-004's "ZARU at every stop" semantics that **this
+document's §3.2 assumes**. P-04 owns both, together with `P₀`.
+
+> **Why this sits in the error budget and not only in the decision log.** An over-confident
+> covariance is invisible in a position plot — the trajectory looks fine — but it is read by the
+> χ² gate, by the uncertainty ellipse in the demo, and by the map matcher's emission σ. A filter
+> that under-states its own uncertainty rejects good GNSS fixes on re-acquisition and snaps
+> confidently onto the wrong road. **Gate 1 must not be declared on it.**

@@ -7,6 +7,12 @@ Full plan as a shareable page: https://claude.ai/code/artifact/59779151-0d41-49c
 **Nearest deadline:** screening submission, **Tue 8 Sep 2026** (corrected 26 Aug — see DECISION_LOG D-021).
 **Grade metric:** position drift under 10% of distance travelled.
 
+> **Read this before planning anything from this file.** The authoritative plan and calendar is
+> [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md); the current state is the
+> [README](README.md) status block. As at **5 Sep, 3 days out: Gate 0 is not closed and Gate 1 is
+> blocked** on filter consistency (D-053). Sections below marked ⚠️ have been overtaken by
+> decisions in [docs/DECISION_LOG.md](docs/DECISION_LOG.md) and are kept for the record.
+
 Derived from the two source docs in this folder: the AI/ML dead-reckoning engineering survey (markdown) and the condensed research brief (PDF).
 
 ---
@@ -59,10 +65,14 @@ Three inputs the filter can't get wrong quietly:
 
 ## Evaluation protocol — fix before any model trains
 
-- `S-` smartphone channels **ONLY**. `V-` wheel-speed columns are disallowed by the problem statement; assert this in the dataloader with a CI test that fails on any `V-` column name.
-- 10 Hz, NED frame, yaw-only 2-D, Vincenty ground-truth displacement.
+> **This section is a summary. [docs/EVALUATION.md](docs/EVALUATION.md) is the protocol**, and two
+> lines below have already been corrected there: the GNSS is 9 s rather than 1 Hz, and six of the
+> sequence stems named here have no `S-` file at all. Read the protocol before quoting either.
+
+- `S-` smartphone channels **ONLY**. `V-` wheel-speed columns are disallowed by the problem statement; assert this in the dataloader with a CI test that fails on any `V-` column name. One narrow exception, ground truth only: EVALUATION.md §1.2.
+- 10 Hz inertial, NED frame, yaw-only 2-D, Vincenty ground-truth displacement. ⚠️ The `S-` **GNSS** is a measured **9.0 s**, not 1 Hz — EVALUATION.md §1.1.
 - Outages: 10 / 30 / 60 / 120 / 180 s, non-overlapping, on held-out scenarios, 1 s prediction cadence.
-- Long-outage plot sets: V-St6, V-St7, V-S3a. Hard scenarios: roundabout (Vta11, Vfb02d), hard-brake (Vw16b, Vw17, Vta9), wet (Vtb8/11/13).
+- ⚠️ **Stale as written (D-044).** Eleven stems, `St6` and `St7` among them, ship on the `V-` stream only and are unusable. The loadable split lives in [`eval/splits.py`](eval/splits.py): long outage `S3a, Vtb3, Vta1a`; mandatory plots `S3a, Vta11`. The re-pick is still open.
 - Metrics: CTE (cumulative true error) + CRSE (cumulative root square error) — their definitions, **not** cross-track error or ATE — plus drift as % of distance, which is what PS 26168 grades.
 - Yaw error logged separately, always.
 - Every plot and table is stamped with the commit and seed that produced it.
@@ -83,7 +93,12 @@ Three inputs the filter can't get wrong quietly:
 
 ## Cut list, in order
 
-UI polish → EqNIO equivariant canonicalisation → car-park mode → comma2k19 pretraining.
+⚠️ **Superseded by [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §5.** The items below
+are already cut, not candidates: map matching, the Android app, car-park mode, comma2k19 pretraining
+and the C++/Rust port are all deferred past screening. The live cut list is **adaptive `R_NHC` →
+in-filter `R_sv` → replay-renderer polish → the renderer entirely.**
+
+*(Historical: UI polish → EqNIO equivariant canonicalisation → car-park mode → comma2k19 pretraining.)*
 
 **Never cut:** the evaluation harness, the leakage audit, the yaw instrument, the honest-limits section of the write-up.
 
@@ -101,21 +116,48 @@ Pedestrian weights (RoNIN, IONet, RIDI, TLIO, IDOL, CTIN) are **not** reused —
 
 ```
 idr-26168/
-├── core/              C++ or Rust — InEKF, NHC/ZUPT/ZARU, mounting angle
-│   ├── filter/        SE₂(3) state, propagation, gated updates
-│   ├── constraints/   pseudo-measurements + their gating conditions
-│   └── ffi/           JNI surface for Android; same lib feeds the edge build
-├── models/            PyTorch — speed+variance head, adaptive R_NHC CNN
+├── idr/               shared: Vincenty geodesy, NED, provenance stamping, seeding
+├── core/              filter core                                       [seat S]
+│   ├── reference/     Python InEKF — THIS is the screening filter (D-022)
+│   ├── filter/        SE₂(3) state, propagation, gated updates — October port
+│   ├── constraints/   pseudo-measurements + their gating conditions — October port
+│   └── ffi/           JNI surface; same lib feeds the edge build (D-043: interface only)
+├── models/            PyTorch — speed+variance head, adaptive R_NHC CNN  [seat M]
 │   └── export/        FP16 TFLite / ExecuTorch, with a covariance-head test
-├── eval/              the harness — owns every number in the submission
+├── eval/              the harness — owns every number in the submission  [seat D]
 │   ├── loaders/       IO-VNBD S- only; V- columns fail a CI test
 │   ├── outages/       10/30/60/120/180 s injection
 │   ├── metrics/       CTE, CRSE, drift %, yaw error
+│   ├── splits.py      the frozen split, in code
+│   ├── allan.py       Allan variance → Q_c
+│   ├── cadence.py     measured GNSS cadence; V-/S- truth alignment
 │   └── figures/       every plot regenerated by one command
-├── maps/              OSM extract → CSR graph, HMM matcher
-├── android/           foreground logger + demo UI
+├── maps/              OSM extract → CSR graph, HMM matcher              [seat P]
+├── android/           foreground logger + demo UI                       [seat A]
 ├── data/              gitignored; a manifest with checksums is committed
-└── docs/              method write-up, error budget, decision log
+├── docs/              method write-up, error budget, decision log, protocol
+└── tests/             the leakage audit is its own CI gate
+```
+
+Who owns what, and where the interfaces are that two seats have to agree in writing:
+
+```mermaid
+flowchart TB
+    S["<b>S</b> · filter core & edge engine"] --> CORE["core/"]
+    M["<b>M</b> · learning"] --> MODELS["models/"]
+    D["<b>D</b> · data & evaluation"] --> EVAL["eval/ · data/manifest/"]
+    P["<b>P</b> · maps & geodata"] --> MAPS["maps/"]
+    A["<b>A</b> · Android & demo"] --> ANDROID["android/"]
+    C["<b>C</b> · field data & submission"] --> METHOD["docs/METHOD.md · deck · video"]
+
+    CORE <-.->|"<b>core/ffi/</b><br/>agreed in writing<br/>before either side writes code"| ANDROID
+    EVAL <-.->|"<b>eval/metrics/ signatures</b><br/>D reviews anything that touches a number"| MODELS
+    EVAL <-.-> CORE
+    EVAL <-.-> MAPS
+    EVAL ==>|"every number<br/>in the submission"| METHOD
+
+    style EVAL fill:#1f6feb,color:#fff
+    style METHOD fill:#238636,color:#fff
 ```
 
 **Decision log:** one append-only markdown file, one line per non-obvious choice with its reason. It writes half the method document for you.

@@ -33,7 +33,13 @@ Outage detection: `GnssStatus` per-satellite C/N₀ and count, `Location.getAccu
 Do not wait for the OS to declare loss — it reports a "good" coasted fix for a while after real
 signal loss. Cross-check against the INS prediction and gate on innovation.
 
-## Demo UI
+## Demo UI — **cut for screening (D-039)**
+
+> The screening demo is a **static replay renderer over harness output**: one self-contained HTML
+> file, no build step, no server, no map SDK, and **no simulator**. A live cockpit fed by its own
+> scenario generator can display numbers the evaluation never produced, which is the failure the
+> frozen protocol exists to prevent. **The rule: if the renderer can display it, the harness
+> produced it.** Everything below is the October target.
 
 Vector map, smooth 10 Hz car icon, mode indicator, and a **visible uncertainty ellipse**. Judges
 respond to watching the covariance grow inside the tunnel and collapse on exit — it makes the
@@ -48,5 +54,11 @@ The `core/ffi/` interface is agreed **in writing with seat S before either side 
 
 ## Status
 
-Scaffold only. Sprint 0: logger skeleton, and measure the actual achieved sample rate and timestamp
-jitter on every team device. Write the numbers down — the nominal rate is not the real rate.
+**Empty, and deliberately so.** The Android app and the JNI layer are **deferred past screening**;
+the core is the deliverable and the app is the demo. Seat A's screening deliverable is the replay
+renderer (D-039), which cannot start until `eval/run.py` produces output — and it must not be given
+a simulator to fall back on.
+
+Still worth doing off the critical path, because it is a slide in the deployment section whether or
+not the app ships: build the minimal foreground-service logger and **measure the actual achieved
+sample rate and timestamp jitter on every team device.** The nominal rate is not the real rate.

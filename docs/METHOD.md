@@ -1,14 +1,35 @@
 # Method
 
-**Status:** skeleton. **Owner:** seat C, with each section drafted by the seat that built the thing.
+**Status:** ⚠️ **still a skeleton — all fifteen sections `[TODO]` with three days to submission.**
+This is the largest unstarted deliverable in the repo. **Owner:** seat C, with each section drafted
+by the seat that built the thing.
 
-This grows into the screening write-up. **Fill sections as the work lands, not in the last week.**
-Most of the raw material already exists: [DECISION_LOG.md](DECISION_LOG.md) supplies the *why* for
-every choice, [ERROR_BUDGET.md](ERROR_BUDGET.md) supplies the analysis, and
-[EVALUATION.md](EVALUATION.md) supplies the protocol. A section written the week it was built is a
-section written from memory that is still accurate.
+The advice below — *fill sections as the work lands, not in the last week* — was not taken, and the
+last week is now. The mitigation is that almost nothing here needs to be *invented*: eleven of the
+fifteen sections have a source document that already contains the substance, and the job is
+compression and honesty rather than authorship. Sections 5, 6 and 12 are the exceptions, because
+they need results that do not exist yet.
+
+```mermaid
+flowchart LR
+    SURVEY["engineering survey<br/><i>compass_artifact_*.md</i>"] --> S1["§1 problem"] & S8["§8 map matching"] & S14["§14 citation hygiene"]
+    EB["<b>ERROR_BUDGET.md</b>"] --> S2["§2 why the obvious<br/>approach fails"] & S7["§7 mounting angle"] & S13["§13 honest limits"]
+    SE23["<b>SE23_PROPAGATION.md</b>"] --> S3["§3 architecture"] & S4["§4 constraints"]
+    EVAL["<b>EVALUATION.md</b>"] --> S11["§11 protocol"]
+    DL["<b>DECISION_LOG.md</b>"] -->|"the <i>why</i> for<br/>every choice"| ALL(["every section"])
+    PLAN["<b>IMPLEMENTATION_PLAN.md</b> §4A, §10"] --> S13 & S10["§10 deployment"]
+    RUN["<b>eval/figures/</b><br/><i>does not exist yet</i>"] --> S12["§12 results"]
+    GATE2["<b>Gate 2 calibration</b><br/><i>not reached</i>"] --> S5["§5 speed head"] & S6["§6 adaptive R_NHC"]
+
+    style RUN fill:#da3633,color:#fff
+    style GATE2 fill:#da3633,color:#fff
+    style DL fill:#238636,color:#fff
+```
 
 Markers: `[TODO]` not started · `[DRAFT]` first pass exists · `[LOCKED]` reviewed, do not churn.
+
+**Write §13 first.** It is the section that is finished today — every limitation in it is already
+known and written down elsewhere — and it is the one that is never cut.
 
 ---
 
@@ -111,8 +132,13 @@ that they are commonly mislabelled as cross-track error and ATE.
 
 ## 12. Results — `[TODO]` *(D)*
 
-Baselines, then ours. Mandatory plots: V-St6, V-St7, V-S3a, plus a roundabout. Drift % as median and
-95th percentile. Yaw error separately. Every figure stamped with commit and seed.
+Baselines, then ours. Mandatory plots: **`S3a` and `Vta11` (the roundabout)** — `eval/splits.py` is
+the authority, and `St6`/`St7` are not available to us at all because they ship on the `V-` stream
+only (D-044). Drift % as median and 95th percentile. Yaw error separately. Every figure stamped
+with commit and seed.
+
+**Say how many sequences each number rests on.** The long-outage result currently rests on three,
+not the nine the protocol was drafted with, and the reader should learn that from us.
 
 Include the domain-shift ablation (train IO-VNBD → test Delhi/NCR) if the collection lands. Almost
 no other team will submit one.
@@ -124,6 +150,19 @@ no other team will submit one.
 - Where our numbers are worse than published wheel-odometry or automotive-IMU results, say why:
   different sensor grade, different permitted inputs.
 - Any hyperparameter the source papers did not state, which we therefore chose ourselves.
+- **The long-outage result rests on three sequences, not nine.** Eleven stems in the protocol as
+  drafted have no `S-` smartphone file (D-044). Say the count beside the number.
+- **The `S-` GNSS updates every ~9 s, not 1 Hz.** State where ground truth came from and why, and
+  state the GNSS-available baseline's actual update count beside the Gate 1 ratio
+  ([EVALUATION.md](EVALUATION.md) §1.1, §5).
+- **Bias instability is reported as an upper bound**, and the two bias driving noises are *derived*
+  from a Gauss–Markov model rather than measured — the longest stationary segment in the dataset is
+  507 s, which is too short for the +½ slope ([ERROR_BUDGET.md](ERROR_BUDGET.md) §9.2).
+- **The mount block of `Q` is zero (D-048)**, so the ~1° mount requirement rests on the PCA
+  initialiser alone. That is a stated limitation, not a modelled term.
+- **If the filter ships with the consistency failure open** (D-053), say so and say what it means:
+  an over-confident covariance is invisible in a position plot but is read by the χ² gate, the
+  uncertainty ellipse and the map matcher's emission σ.
 
 A limitation we state costs a fraction of what one a judge finds costs.
 

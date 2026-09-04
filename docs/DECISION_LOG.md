@@ -13,6 +13,33 @@ Rules:
 
 Owner tags: **S** filter core · **M** learning · **D** data/eval · **P** maps · **A** Android · **C** submission.
 
+**Rows D-001 to D-054.** Rule 1 means a decision is never edited in place, so the chains below are
+the part that is easy to lose — read them before quoting any row that has been overtaken:
+
+```mermaid
+flowchart LR
+    D023["<b>D-023</b><br/>CRSE = root of the sum of squares<br/><i>'reasoned, not verified'</i>"] -->|"superseded"| D054["<b>D-054</b><br/>CRSE = sum of absolute errors<br/><i>the paper's Eq. (16), verified<br/>against its own tables</i>"]
+    D038["<b>D-038</b><br/>Q_c from IO-VNBD's<br/>>20 min segments"] -->|"premise was false —<br/>longest is 507 s"| D045["<b>D-045</b><br/>Q_c measured on the segments<br/>that exist; bias RW derived"]
+    D046["<b>D-046</b><br/>B = sigma_min ÷ 0.664<br/><i>a division. ×0.664 understates<br/>B by 2.27x</i>"] -.->|"corrects the method<br/>text in two docs"| D045
+    D005["<b>D-005</b>"] -->|"sharpened"| D040["<b>D-040</b><br/>the CNN adapts R_NHC,<br/>never Q"]
+    D018["<b>D-018</b><br/>figures carry commit + seed"] -->|"extended to<br/>every quoted number"| D042["<b>D-042</b>"]
+    D050["<b>D-050</b><br/>the correction is SUBTRACTED"] -.->|"supersedes<br/>SE23 §8.3"| DOC1["doc fixed"]
+    D051["<b>D-051</b><br/>ZUPT is body-frame"] -.->|"supersedes<br/>SE23 §7.2"| DOC1
+    D044["<b>D-044</b><br/>split by bare stem;<br/>11 stems have no S- file"] -.->|"EVALUATION §3<br/>re-pick still OPEN"| OPEN1["open"]
+    D053["<b>D-053</b><br/>NEES 29.90 vs [16.84, 19.20]<br/>ZARU is the cause"] -.->|"Gate 1 blocker"| OPEN2["open · P-04"]
+
+    style D054 fill:#238636,color:#fff
+    style D045 fill:#238636,color:#fff
+    style OPEN1 fill:#9e6a03,color:#fff
+    style OPEN2 fill:#da3633,color:#fff
+```
+
+**Not yet logged, deliberately.** The GNSS-cadence change — sourcing ground truth from the paired
+`V-` VBOX GPS instead of the 9 s `S-` fixes — has **no row here**, because its evidence does not
+exist yet: `eval/cadence.py` has never run against real bytes, and its alignment residual is the
+abort gate for the whole change ([EVALUATION.md](EVALUATION.md) §2). Rule 4 says log the choice when
+you make it; it does not say log it before you can defend it.
+
 ---
 
 ## Seeded from the plan of record (26 Aug 2026)
@@ -107,8 +134,6 @@ document in its entirety.
 | D-046 | 2026-08-28 | **Bias instability is `B = σ_min / 0.664`, a division.** [ERROR_BUDGET.md](ERROR_BUDGET.md) §9's earlier "the flat minimum gives bias instability (×0.664)" is corrected in place, and `eval.allan.BIAS_INSTABILITY_COEFF` is defined as `√(2 ln2 / π)` with a test pinning both the constant and the direction. | IEEE Std 952's flicker-floor relation is `σ(τ) = B √(2 ln2/π) = 0.664 B`, so the Allan minimum is 0.664 *of* B. Multiplying instead of dividing understates B by 2.27×, and it understates it in the dangerous direction: the filter would believe a drifting gyro bias more than it should, exactly where the error budget has least room (lateral error is 40 m of a 100 m budget and is gyro-bias-driven). The phrasing was ambiguous rather than plainly wrong, which is why it survived a review — hence the test rather than only a doc fix. | S |
 | D-047 | 2026-08-28 | **The `S-` loader's column allowlist gains explicit aliases for the header spellings IO-VNBD actually ships, and reads the files as latin-1.** Guard semantics are unchanged: the aliases map shipped spellings onto names already on the allowlist and add no new permitted concept. | The allowlist was written against the paper's column names, not the CSVs, and no code in the repo had ever loaded the dataset — so this was invisible until R-1 needed real bytes. Every real `S-` file was rejected wholesale: `ACCELEROMETER X (m/s²)` normalises generically to `accelerometer_x`, which is not on the allowlist, and all three `ORIENTATION (Yaw\|Pitch\|Roll)` columns collapse to the single name `orientation` once parenthesised groups are stripped. The headers also carry raw 0xB0/0xB5 bytes, so the default utf-8 read raises before the guard runs at all. Two further spellings ship (`GYROSCOPE X/Y/Z` for `Yaw/Pitch/Roll` — verified byte-identical on `S-S1`, which appears in both folders, so this is AndroSensor labelling and not a different axis order; and `SATELLITES IN RANGE` without the `GPS` prefix). The `time since start` alias is anchored on its `(ms` unit specifically so the `V-` stream's `Time Since Start of Day (seconds)` cannot be laundered into an allowed name; a test asserts that it is not. A guard that rejects everything is not safer than one that works — it is untested, and it would have been "fixed" under deadline pressure by someone switching the allowlist off. | S |
 
-<!-- Add new rows below. Do not edit rows above. -->
-
 
 ## Sprint 1 — P-02, `InEKF.propagate()` on SE₂(3) (29 Aug 2026)
 
@@ -135,3 +160,5 @@ document in its entirety.
 | ID | Date | Decision | Reason | Owner |
 |---|---|---|---|---|
 | D-054 | 2026-08-31 | **CRSE is `Σ\|eᵢ\|`, the sum of absolute per-second errors — a third convention, not either of the two D-023 chose between.** `CrseConvention.SUM_ABS` added, `crse()` gains an explicit branch per member with no `else` fallthrough, and `CRSE_CONVENTION` becomes `SUM_ABS`. `SUM_SQUARES` and `RMS` are retained so earlier working stays reproducible. **Supersedes D-023.** [EVALUATION.md](EVALUATION.md) §4.2 rewritten with the equations quoted verbatim; [GLOSSARY.md](GLOSSARY.md) and [eval/README.md](../eval/README.md) corrected to match. Closes R-4. | D-023 chose `SUM_SQUARES` on a consistency argument and labelled itself "reasoned, not verified", with seat D to pin it against the paper's equations before Gate 0. This is that check, and it went to neither option. R-WhONet (arXiv 2209.05877) **Eq. (16)** is `CRSE = Σ_{t=1}^{N_t} √(e_pred²)` — the root is taken **per term, inside the sum** — with **Eq. (17)** `CTE = Σ_{t=1}^{N_t} e_pred` as its signed counterpart, and `t` defined as a 1 s sampling period. The original WhONet paper (arXiv 2104.02581 §3.2) carries the same metrics at the same equation numbers. Both papers' *prose* says "cumulative root mean squared", which the equation contradicts and which is why three documents here described it as an RMS; the equation wins. Confirmed against WhONet's own published tables ([DATASETS.md](DATASETS.md) §3, four outage lengths × two methods): dividing by `N_t` leaves the per-epoch error rate flat to **1.4 %** (physics) and **2.3 %** (WhONet), where `√N_t` spreads 2.4× and leaving it as-is spreads 5.9×. D-023's argument never discriminated — `SUM_ABS` satisfies the 180 s row too (13.67/180 ≈ 0.076 m per epoch beside a signed sum of 2.90 m) — so it took all four rows. Pinned by `test_only_sum_abs_makes_the_published_tables_consistent`, so the reason is executable rather than a comment. **Nothing is invalidated:** no CRSE had been computed on real data, because the filter was `NotImplementedError` until P-03 and the dataset is not in this container. | D |
+
+<!-- Add new rows below. Do not edit rows above. -->
