@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IDR 26168 — replay</title>
+<!--
+  ============================================================================================
+  THE RULE, AND IT IS THE ENTIRE POINT OF THIS FILE:
+
+      THIS PAGE CONTAINS NO PHYSICS AND NO SIMULATION.
+
+  If it can display it, eval/run.py produced it. There is no second path, no generator, and no
+  fallback that invents data when a file is missing -- a missing file shows an empty state and
+  says so. A cockpit fed by its own simulator can display numbers the evaluation never produced,
+  and that is the single failure the frozen protocol exists to prevent (D-039, D-042).
+
+  Everything drawn below is read verbatim out of a trajectory record: the per-epoch drift-% and
+  yaw error are computed in eval/run.py:trajectory_record, not here, precisely so that this page
+  cannot compute a number of its own.
+
+  No build step. No server required. No network: no CDN, no font, no map SDK, no XHR to anything
+  but a file the user chose or a same-directory artefact. Open it from file:// and load the JSON
+  with the picker; served over http it finds the artefacts itself.
+  ============================================================================================
+-->
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --fg: #e6edf3; --dim: #8b949e;
+    --truth: #e6edf3; --filter: #2f81f7; --strapdown: #f85149; --gnss: #d29922;
+    --ok: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line);
+           display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  .stamp { color: var(--dim); font-size: 12px; }
+  .dirty { color: var(--strapdown); font-weight: 600; }
+  main { display: grid; grid-template-columns: minmax(320px, 1fr) 320px; gap: 16px; padding: 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+  .panel h2 { font-size: 12px; margin: 0 0 8px; color: var(--dim); font-weight: 600;
+              text-transform: uppercase; letter-spacing: .08em; }
+  canvas { width: 100%; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; }
+  .legend span::before { content: ""; display: inline-block; width: 18px; height: 3px;
+                         margin-right: 6px; vertical-align: middle; }
+  .l-truth::before { background: var(--truth); }
+  .l-filter::before { background: var(--filter); }
+  .l-strapdown::before { background: var(--strapdown); }
+  .l-gnss::before { background: var(--gnss); }
+  .readout { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .readout dt { color: var(--dim); }
+  .readout dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .big { font-size: 22px; font-weight: 600; }
+  input[type=range] { width: 100%; }
+  .caption { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  .empty { padding: 40px 16px; text-align: center; color: var(--dim); }
+  .empty code { color: var(--fg); }
+  button, select { background: #21262d; color: var(--fg); border: 1px solid var(--line);
+                   border-radius: 5px; padding: 5px 10px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IDR 26168 · replay</h1>
+  <span class="stamp" id="stamp">no artefact loaded</span>
+  <span style="flex:1"></span>
+  <select id="pick" hidden></select>
+  <button id="browse">Load trajectory JSON…</button>
+  <input id="file" type="file" accept="application/json,.json" multiple hidden>
+</header>
+
+<div id="empty" class="empty">
+  <p><strong>No harness output loaded.</strong></p>
+  <p>This page renders <code>eval/figures/trajectory_&lt;sequence&gt;.json</code>, written by
+     <code>python -m eval.run</code>. It does not generate data, so until a run has produced one
+     there is nothing to show.</p>
+  <p>Served over http it looks for those files itself. Opened from <code>file://</code> the
+     browser will not let it read them — use the button above.</p>
+</div>
+
+<main id="app" hidden>
+  <section class="panel">
+    <h2>Trajectory · local NED, metres</h2>
+    <canvas id="map" height="420"></canvas>
+    <div class="legend">
+      <span class="l-truth">ground truth (V- VBOX, 10 Hz)</span>
+      <span class="l-filter">ours — InEKF</span>
+      <span class="l-strapdown">naive strapdown baseline</span>
+      <span class="l-gnss">GNSS available</span>
+    </div>
+    <div class="caption" id="ellipse-caption"></div>
+  </section>
+
+  <section class="panel">
+    <h2>At this epoch</h2>
+    <dl class="readout">
+      <dt>t into outage</dt><dd id="r-t" class="big">—</dd>
+      <dt>drift, % of distance</dt><dd id="r-drift" class="big">—</dd>
+      <dt>yaw error, deg</dt><dd id="r-yaw" class="big">—</dd>
+      <dt>position σ north, m</dt><dd id="r-sn">—</dd>
+      <dt>position σ east, m</dt><dd id="r-se">—</dd>
+      <dt>truth distance, m</dt><dd id="r-dist">—</dd>
+      <dt>outage length, s</dt><dd id="r-len">—</dd>
+      <dt>sequence</dt><dd id="r-seq">—</dd>
+    </dl>
+    <div class="caption">Drift-% and yaw error are read from the artefact, not computed here.</div>
+  </section>
+
+  <section class="panel" style="grid-column: 1 / -1">
+    <h2>Scrubber</h2>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+    <canvas id="series" height="150"></canvas>
+    <div class="caption">Drift-% (blue) and |yaw error| in degrees (amber) per 1 s epoch.</div>
+  </section>
+
+  <section class="panel" style="grid-column: 1 / -1">
+    <h2>Sensor traces</h2>
+    <canvas id="imu" height="200"></canvas>
+    <div class="caption" id="imu-caption"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const SCHEMA = "idr-trajectory/1";
+const records = new Map();
+let current = null;
+
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function accept(record, label) {
+  if (!record || record.schema !== SCHEMA) {
+    alert(`${label}: not an ${SCHEMA} record. This page refuses a layout it does not recognise ` +
+          `rather than drawing its fields in the wrong places.`);
+    return;
+  }
+  records.set(record.sequence, record);
+  refreshPicker();
+  select(record.sequence);
+}
+
+function refreshPicker() {
+  const pick = $("pick");
+  pick.innerHTML = "";
+  for (const name of [...records.keys()].sort()) {
+    const o = document.createElement("option");
+    o.value = o.textContent = name;
+    pick.appendChild(o);
+  }
+  pick.hidden = records.size < 2;
+}
+
+function select(name) {
+  current = records.get(name);
+  $("empty").hidden = true;
+  $("app").hidden = false;
+  $("pick").value = name;
+
+  const dirty = current.reproducible === false;
+  $("stamp").textContent = current.stamp + (dirty ? "  — NOT REPRODUCIBLE" : "");
+  $("stamp").className = "stamp" + (dirty ? " dirty" : "");
+
+  const n = current.epoch_s.length;
+  const scrub = $("scrub");
+  scrub.max = String(n - 1);
+  scrub.value = String(n - 1);
+  $("r-seq").textContent = current.sequence;
+  $("r-len").textContent = current.length_s;
+  $("r-dist").textContent = current.distance_m.toFixed(1);
+  $("imu-caption").textContent =
+    `${current.stream} smartphone stream at ${current.imu_rate_hz} Hz — ` +
+    `${current.accel_mps2.length} samples over ${current.length_s} s. ` +
+    `Accelerometer m/s² (solid), gyroscope rad/s (dashed). This is the phone rate; ` +
+    `the 200 Hz FOG configuration is not demonstrated on this dataset.`;
+  $("ellipse-caption").textContent =
+    "Dashed ellipse: the filter's own 1σ position covariance at the scrubbed epoch. " +
+    "It grows through the outage because nothing is correcting it, and collapses at the first " +
+    "accepted fix after it.";
+  draw();
+}
+
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.height;
+  cv.width = Math.round(w * dpr);
+  cv.style.height = h + "px";
+  cv.height = Math.round(h * dpr);
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  return { g, w, h };
+}
+
+function extent(seriesList, sigma) {
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  for (const s of seriesList) {
+    if (!s) continue;
+    for (const p of s) {
+      lo[0] = Math.min(lo[0], p[0]); hi[0] = Math.max(hi[0], p[0]);
+      lo[1] = Math.min(lo[1], p[1]); hi[1] = Math.max(hi[1], p[1]);
+    }
+  }
+  const pad = Math.max(...sigma.flat(), 1) * 2;
+  return [[lo[0] - pad, lo[1] - pad], [hi[0] + pad, hi[1] + pad]];
+}
+
+function drawMap(k) {
+  const { g, w, h } = setupCanvas($("map"));
+  const r = current;
+  const series = [r.truth_ned, r.filter_ned, r.strapdown_ned, r.gnss_ned];
+  const [lo, hi] = extent(series, r.position_sigma_m);
+  const spanN = Math.max(hi[0] - lo[0], 1e-6), spanE = Math.max(hi[1] - lo[1], 1e-6);
+  const m = 28;
+  const scale = Math.min((w - 2 * m) / spanE, (h - 2 * m) / spanN);
+  // East is x to the right; north is y upward, so the y axis is inverted.
+  const X = (p) => m + (p[1] - lo[1]) * scale + ((w - 2 * m) - spanE * scale) / 2;
+  const Y = (p) => h - m - (p[0] - lo[0]) * scale - ((h - 2 * m) - spanN * scale) / 2;
+
+  const colours = [css("--truth"), css("--filter"), css("--strapdown"), css("--gnss")];
+  series.forEach((s, i) => {
+    if (!s) return;
+    g.strokeStyle = colours[i];
+    g.lineWidth = i === 0 ? 2.5 : 1.8;
+    g.beginPath();
+    for (let j = 0; j <= k && j < s.length; j++) {
+      const x = X(s[j]), y = Y(s[j]);
+      j ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    g.stroke();
+    if (k < s.length) {
+      g.fillStyle = colours[i];
+      g.beginPath(); g.arc(X(s[k]), Y(s[k]), i === 0 ? 4 : 3, 0, 2 * Math.PI); g.fill();
+    }
+  });
+
+  const [sn, se] = r.position_sigma_m[k] || [0, 0];
+  const c = r.filter_ned[k];
+  g.strokeStyle = css("--filter");
+  g.setLineDash([4, 4]);
+  g.lineWidth = 1.2;
+  g.beginPath();
+  g.ellipse(X(c), Y(c), Math.max(se * scale, 1), Math.max(sn * scale, 1), 0, 0, 2 * Math.PI);
+  g.stroke();
+  g.setLineDash([]);
+
+  g.fillStyle = css("--dim");
+  g.font = "11px ui-monospace, monospace";
+  g.fillText(`${(spanE).toFixed(0)} m east × ${(spanN).toFixed(0)} m north`, m, 16);
+  g.fillText("N ↑", w - m - 22, h - m + 14);
+}
+
+function drawSeries(k) {
+  const { g, w, h } = setupCanvas($("series"));
+  const r = current, n = r.epoch_s.length, m = 26;
+  const drift = r.drift_pct, yaw = r.yaw_error_deg.map(Math.abs);
+  const maxD = Math.max(...drift, 1), maxY = Math.max(...yaw, 1);
+  const X = (i) => m + (i / Math.max(n - 1, 1)) * (w - 2 * m);
+
+  g.strokeStyle = css("--line"); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(m, h - m); g.lineTo(w - m, h - m); g.stroke();
+
+  const plot = (vals, max, colour) => {
+    g.strokeStyle = colour; g.lineWidth = 1.8; g.beginPath();
+    vals.forEach((v, i) => {
+      const y = h - m - (v / max) * (h - 2 * m);
+      i ? g.lineTo(X(i), y) : g.moveTo(X(i), y);
+    });
+    g.stroke();
+  };
+  plot(drift, maxD, css("--filter"));
+  plot(yaw, maxY, css("--gnss"));
+
+  g.strokeStyle = css("--fg"); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(X(k), 8); g.lineTo(X(k), h - m); g.stroke();
+
+  g.fillStyle = css("--dim"); g.font = "11px ui-monospace, monospace";
+  g.fillText(`drift max ${maxD.toFixed(2)}%`, m, 14);
+  g.fillText(`|yaw| max ${maxY.toFixed(2)}°`, m + 150, 14);
+  g.fillText("0 s", m, h - 8);
+  g.fillText(`${r.length_s} s`, w - m - 24, h - 8);
+}
+
+function drawImu(k) {
+  const { g, w, h } = setupCanvas($("imu"));
+  const r = current, a = r.accel_mps2, y = r.gyro_rps, m = 26;
+  const n = a.length;
+  if (!n) return;
+  const maxA = Math.max(...a.flat().map(Math.abs), 1);
+  const maxG = Math.max(...y.flat().map(Math.abs), 1e-3);
+  const X = (i) => m + (i / Math.max(n - 1, 1)) * (w - 2 * m);
+  const mid = h / 2;
+
+  g.strokeStyle = css("--line"); g.beginPath(); g.moveTo(m, mid); g.lineTo(w - m, mid); g.stroke();
+
+  const axes = [css("--strapdown"), css("--ok"), css("--filter")];
+  for (let ax = 0; ax < 3; ax++) {
+    g.strokeStyle = axes[ax]; g.lineWidth = 1; g.setLineDash([]);
+    g.beginPath();
+    for (let i = 0; i < n; i++) {
+      const v = mid - (a[i][ax] / maxA) * (h / 2 - m);
+      i ? g.lineTo(X(i), v) : g.moveTo(X(i), v);
+    }
+    g.stroke();
+    g.setLineDash([3, 3]);
+    g.beginPath();
+    for (let i = 0; i < n; i++) {
+      const v = mid - (y[i][ax] / maxG) * (h / 2 - m);
+      i ? g.lineTo(X(i), v) : g.moveTo(X(i), v);
+    }
+    g.stroke();
+  }
+  g.setLineDash([]);
+  const at = Math.min(n - 1, Math.round(k * (n - 1) / Math.max(r.epoch_s.length - 1, 1)));
+  g.strokeStyle = css("--fg"); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(X(at), 6); g.lineTo(X(at), h - 6); g.stroke();
+
+  g.fillStyle = css("--dim"); g.font = "11px ui-monospace, monospace";
+  g.fillText(`±${maxA.toFixed(2)} m/s² · ±${maxG.toFixed(3)} rad/s`, m, 14);
+}
+
+function draw() {
+  if (!current) return;
+  const k = Number($("scrub").value);
+  $("r-t").textContent = current.epoch_s[k] + " s";
+  $("r-drift").textContent = current.drift_pct[k].toFixed(2) + " %";
+  $("r-yaw").textContent = current.yaw_error_deg[k].toFixed(2) + "°";
+  const [sn, se] = current.position_sigma_m[k] || [0, 0];
+  $("r-sn").textContent = sn.toFixed(2);
+  $("r-se").textContent = se.toFixed(2);
+  drawMap(k); drawSeries(k); drawImu(k);
+}
+
+$("scrub").addEventListener("input", draw);
+$("pick").addEventListener("change", (e) => select(e.target.value));
+$("browse").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", async (e) => {
+  for (const f of e.target.files) {
+    try { accept(JSON.parse(await f.text()), f.name); }
+    catch (err) { alert(`${f.name}: ${err.message}`); }
+  }
+});
+window.addEventListener("resize", draw);
+
+// Served over http, find the artefacts. Over file:// this throws and the empty state stands --
+// there is deliberately no fallback that manufactures a record when the fetch fails.
+(async () => {
+  if (location.protocol === "file:") return;
+  try {
+    const summary = await (await fetch("summary.json")).json();
+    for (const name of summary.trajectories || []) {
+      const r = await (await fetch(`trajectory_${name}.json`)).json();
+      if (r.schema === SCHEMA) { records.set(r.sequence, r); }
+    }
+    if (records.size) { refreshPicker(); select([...records.keys()].sort()[0]); }
+  } catch { /* no artefacts here yet; the empty state is the correct answer */ }
+})();
+</script>
+</body>
+</html>

@@ -32,6 +32,7 @@ import csv
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -73,9 +74,25 @@ SECONDS_PER_DAY = 86_400.0
 
 #: `S-` date format, per the shipped header `DATE (YYYY-MO-DD HH-MI-SS_SSS)`. Some files truncate
 #: the millisecond group, so the fractional part is optional.
+#: The `S-` `date` value, as the files actually ship it.
+#:
+#: The header advertises `YYYY-MO-DD HH-MI-SS_SSS`, and this pattern was originally written from
+#: that string rather than from the bytes. The bytes disagree in two ways, and every real `S-`
+#: file fails on both: the sub-second separator is a colon, not `_` or `.`
+#: (`19:21:51:494`), and each value is wrapped in literal single quotes that the `$`
+#: anchor then refuses. The trailing-quote class and the `:` in the sub-second group are what
+#: make the shipped spelling parse; the advertised spelling still parses unchanged.
 _S_DATE = re.compile(
-    r"(?P<h>\d{1,2})[-:](?P<m>\d{2})[-:](?P<s>\d{2})(?:[._](?P<ms>\d{1,3}))?\s*$"
+    r"(?P<h>\d{1,2})[-:](?P<m>\d{2})[-:](?P<s>\d{2})(?:[._:](?P<ms>\d{1,3}))?['\"\s]*$"
 )
+
+#: The calendar half of the same value, anchored at the start so it cannot match the time.
+#: `_S_DATE` deliberately reads only the clock; this reads only the date, because whether the
+#: clock is BST or GMT is a question the date answers and the time cannot (D-091).
+_S_CALENDAR_DATE = re.compile(r"^['\"\s]*(?P<Y>\d{4})-(?P<Mo>\d{1,2})-(?P<D>\d{1,2})")
+
+#: British Summer Time is UTC+1.
+BST_OFFSET_S = 3600.0
 
 
 class TruthPairingError(LookupError):
@@ -384,6 +401,49 @@ def divergent_copies(*, manifest: str | Path = DEFAULT_MANIFEST) -> list[CopyDiv
     return out
 
 
+def paired_stems(*, manifest: str | Path = DEFAULT_MANIFEST) -> list[str]:
+    """Every stem shipping **both** an `S-` and a `V-` file in the synchronised folder.
+
+    This is the candidate pool for the D-044 split re-pick, and it is the pool because those two
+    conditions are exactly what a held-out sequence needs: an `S-` smartphone stream to consume
+    (H-1 bars the `V-` side from the feature path) and a paired `V-` VBOX track to be graded
+    against (EVALUATION.md section 1.2). Synchronised only, for the reason `_SYNCHRONISED` gives
+    -- the argument for `V-` GPS as truth rests on the two streams sharing a clock.
+
+    **Membership of the pool is not fitness for the split.** It says the two files exist, which is
+    what a file listing can establish and the limit of what it can: D-044 was drafted from a
+    listing and the first contact with real bytes refused 6 of its 14 stems. Whether a stem may be
+    graded is `align_to_sequence`, and `python -m eval.cadence --all-paired` is what runs it over
+    this pool (D-090).
+
+    Read from the manifest rather than the tree so the pool is the same on a machine that has not
+    downloaded the dataset -- which is the machine the enumeration was needed on -- and so it
+    sidesteps the case difference between `V-vta9.csv` and `V-Vta9.csv` that `manifest_path_for`
+    documents. Returned in the manifest's own spelling of the `S-` file, sorted case-insensitively.
+    """
+    manifest_path = Path(manifest)
+    if not manifest_path.exists():
+        raise TruthPairingError(
+            f"manifest not found at {manifest_path}. The candidate pool is read from the manifest "
+            "rather than from the dataset tree; see docs/DATASETS.md."
+        )
+
+    seen: dict[str, dict[str, str]] = {}
+    with manifest_path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            stream = row.get("stream", "")
+            if stream not in ("S-", "V-") or _SYNCHRONISED not in row["path"]:
+                continue
+            name = Path(row["path"]).name
+            stem = name[len(stream) : -len(".csv")]
+            seen.setdefault(stem.lower(), {})[stream] = stem
+
+    return sorted(
+        (spellings["S-"] for spellings in seen.values() if "S-" in spellings and "V-" in spellings),
+        key=str.lower,
+    )
+
+
 # --------------------------------------------------------------------------------------------
 # Loading
 # --------------------------------------------------------------------------------------------
@@ -446,14 +506,56 @@ def unwrap_time_of_day(t_s: np.ndarray) -> np.ndarray:
     return t + np.concatenate([[0.0], np.cumsum(rollovers) * SECONDS_PER_DAY])
 
 
-def seconds_of_day(dates: Iterable[object]) -> np.ndarray:
-    """Parse the `S-` `date` column into seconds since midnight.
+def _last_sunday(year: int, month: int) -> int:
+    """Day of the month of its last Sunday. March and October both have 31 days."""
+    # `date.weekday()` is Mon=0 .. Sun=6, so this steps back from the 31st to the nearest Sunday.
+    return 31 - ((date(year, month, 31).weekday() - 6) % 7)
 
-    The shipped header is `DATE (YYYY-MO-DD HH-MI-SS_SSS)`, so the time of day is in the string
-    and no timezone question arises: both streams were logged on the same vehicle on the same
-    clock, and we only ever difference the two.
+
+def uk_utc_offset_s(year: int, month: int, day: int, hour: int) -> float:
+    """Seconds to subtract from a UK *local* timestamp to get UTC: `BST_OFFSET_S` or zero.
+
+    The published rule: British Summer Time runs from **01:00 UTC on the last Sunday of March**
+    to **01:00 UTC on the last Sunday of October**, which in local terms is 01:00 GMT -> 02:00 BST
+    in spring and 02:00 BST -> 01:00 GMT in autumn. Implemented from the standard rather than via
+    `zoneinfo`, which needs the `tzdata` package on Windows -- the dev box -- and G-5 forbids the
+    dependency. The boundaries are pinned by hand-computed tests, not by this code's own output.
+
+    **The autumn transition has one ambiguous local hour** (01:00-01:59 occurs twice, once BST and
+    once GMT) which no local timestamp can resolve. It is read as BST, the earlier of the two, and
+    said out loud here rather than guessed silently. No IO-VNBD recording falls in it: the dataset
+    was collected 2019-08-30 to 2020-01-08 and the 2019 transition is 2019-10-27.
     """
-    values = list(dates)
+    if not 3 <= month <= 10:
+        return 0.0
+    if month == 3:
+        start = _last_sunday(year, 3)
+        return BST_OFFSET_S if (day > start or (day == start and hour >= 2)) else 0.0
+    if month == 10:
+        end = _last_sunday(year, 10)
+        return BST_OFFSET_S if (day < end or (day == end and hour < 2)) else 0.0
+    return BST_OFFSET_S
+
+
+def seconds_of_day(dates: Iterable[object]) -> np.ndarray:
+    """Parse the `S-` `date` column into seconds since midnight, **as shipped**.
+
+    This is the parser and nothing more: the value it returns is UK *local* time, because that is
+    what the column holds. Use `seconds_of_day_utc` to compare it with anything on the `V-` clock.
+
+    The header's format string is not what the column contains -- see `_S_DATE`. Both the
+    advertised and the shipped spellings parse.
+    """
+    return unwrap_time_of_day(_parse_local_seconds(list(dates)))
+
+
+def _parse_local_seconds(values: list[object]) -> np.ndarray:
+    """Local seconds since midnight per row, **not** unwrapped. NaN where the row does not parse.
+
+    Split out so the timezone conversion can happen between parsing and unwrapping. Unwrapping
+    first and converting after would let a midnight rollover and a BST transition be applied in
+    the wrong order, and the result would differ by a day rather than by an hour.
+    """
     out = np.full(len(values), np.nan)
     for i, value in enumerate(values):
         if not isinstance(value, str):
@@ -472,9 +574,46 @@ def seconds_of_day(dates: Iterable[object]) -> np.ndarray:
         sample = next((d for d in values if isinstance(d, str)), None)
         raise ValueError(
             "no value in the 'date' column parses as a time of day; first string seen: "
-            f"{sample!r}. Expected the shipped 'YYYY-MO-DD HH-MI-SS_SSS' form."
+            f"{sample!r}. Expected the header's 'YYYY-MO-DD HH-MI-SS_SSS' form or the "
+            "'YYYY-MO-DD HH:MI:SS:SSS' form the files actually ship."
         )
-    return unwrap_time_of_day(out)
+    return out
+
+
+def seconds_of_day_utc(dates: Iterable[object]) -> np.ndarray:
+    """The same column, converted from UK local time to UTC -- the `V-` VBOX clock (D-091).
+
+    `seconds_of_day`'s docstring used to say that no timezone question arises because "both
+    streams were logged on the same vehicle on the same clock". The vehicle is one thing and the
+    two loggers are another: AndroSensor writes the phone's civil time and the VBOX writes UTC, so
+    every recording made inside British Summer Time puts the two exactly an hour apart. Measured
+    on three reset-free BST stems -- S3a +3593.5 s, S1 +3600.5 s, S3c +3600.7 s -- against
+    Vta1a -13.6 s, Vw4 +0.3 s and Vtb3 -1.4 s outside it. That was S3a's "0 of 254 fixes matched".
+
+    **Per row, from that row's own date**, not once for the file. A recording that straddled the
+    autumn transition would carry both offsets, and applying one file-wide would reintroduce the
+    hour it exists to remove. Converting each row first also makes the series continuous across
+    the transition, where the local clock genuinely steps backwards, so `unwrap_time_of_day` is
+    applied after the conversion and not before.
+
+    A row whose calendar date does not parse keeps its local time and is **not** silently assumed
+    to be UTC: the value is left as `seconds_of_day` read it and `align_to_sequence` then reports
+    an hour of residual, which is loud. Guessing an offset for a date we could not read is how a
+    frame error becomes invisible.
+    """
+    values = list(dates)
+    local = _parse_local_seconds(values)
+    for i, value in enumerate(values):
+        if not isinstance(value, str) or not np.isfinite(local[i]):
+            continue
+        cal = _S_CALENDAR_DATE.match(value)
+        clock = _S_DATE.search(value)
+        if cal is None or clock is None:
+            continue
+        local[i] -= uk_utc_offset_s(
+            int(cal.group("Y")), int(cal.group("Mo")), int(cal.group("D")), int(clock.group("h"))
+        )
+    return unwrap_time_of_day(local)
 
 
 # --------------------------------------------------------------------------------------------
@@ -592,7 +731,10 @@ def align_to_sequence(seq: Sequence, truth: TruthTrack) -> AlignmentReport:
             "placed on the clock. Reload it with a loader that keeps the fix timestamps."
         )
 
-    t_s = seconds_of_day(gnss["date"].tolist())
+    # UTC, not the shipped local time: the `V-` track's clock is UTC, and comparing a BST
+    # timestamp against it puts an hour of road between two files that describe the same drive
+    # (D-091). This is the frame conversion; the residual below is still reported, never fitted.
+    t_s = seconds_of_day_utc(gnss["date"].tolist())
     lat = gnss["gps_lat"].to_numpy(dtype=float)
     lon = gnss["gps_lon"].to_numpy(dtype=float)
     finite = np.isfinite(t_s) & np.isfinite(lat) & np.isfinite(lon)

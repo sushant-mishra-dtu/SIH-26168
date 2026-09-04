@@ -15,6 +15,19 @@ Dataset background, schema, splits and traps: [../docs/DATASETS.md](../docs/DATA
 | comma2k19 | 33 h highway, phone-grade IMU + CAN | Optional; first on the cut list |
 | Our Delhi/NCR collection | Seat C, Sprint 2 onward | Required for the domain-shift ablation |
 
+## Fetching it
+
+`eval/fetch.py` downloads every file the manifest names and verifies each one's SHA-256 against
+it, deleting any file that does not match rather than keeping it with a warning:
+
+```
+.venv/bin/python -m eval.fetch --sync-only    # the 288 synchronised files, 0.86 GB
+```
+
+The CSVs are Git-LFS objects. The LFS **batch** endpoint is refused by the agent git proxy
+(D-059), which is what made the dataset look unreachable; `media.githubusercontent.com/media/...`
+serves the same objects anonymously and is not refused (D-091 note in phases.md section 11).
+
 ## Manifest
 
 Every file we depend on gets a row in `manifest/`, committed:

@@ -1,11 +1,8 @@
 # Error Budget
 
-**Owner:** seat S. **Revised at:** Gate 1, Gate 2, Gate 3.
-**Status:** the **allocation** (§6) is still provisional — targets derived from first principles,
-not from measurements, because no drift number has been produced on real data yet. The **sensor
-numbers** (§9.1) are no longer assumptions: they are measured from IO-VNBD's own stationary
-segments (D-045), and they replaced a placeholder that was 7× pessimistic. §9.4 records the one
-measurement that says the filter is not yet ready to be graded against this budget at all.
+**Owner:** seat S. **Revised at:** Gate 1 (against measured Allan variance), Gate 2, Gate 3.
+**Status:** provisional allocation — the numbers below are targets derived from first principles,
+not measurements. Sprint 1 replaces the sensor assumptions with our own Allan-variance run.
 
 The grade metric is **position drift < 10% of distance travelled**. This document says where that
 10% is allowed to go, so that when a term overruns we know which one and who owns it.
@@ -152,18 +149,44 @@ why R_sv goes into the filter state and is estimated recursively under NHC, rath
 once by PCA at startup (D-006). It is also why the mount-disturbance detector matters: a phone
 knocked by 5° silently costs 87 m over the same outage.
 
+### 5.1 Measured, P-11
+
+`R_sv` is initialised by PCA on horizontal specific force
+([`core.reference.inekf.pca_mount_yaw`](../core/reference/inekf.py)), which also reports the
+**spread** `P₀`'s mount block should carry (§10) — the asymptotic standard error of a 2D
+principal-axis angle, `√(λ₁λ₂ / (n_eff (λ₁−λ₂)²))`, checked by Monte Carlo to within 7% over
+eigenvalue ratios 2–25. `n_eff` is the AR(1) effective sample count from the measured lag-1
+autocorrelation, *not* the sample count: 10 Hz accelerometer samples are not independent draws and
+using `n` understates the spread. PCA returns an **axis**, so forward and backward share a
+principal component; the sign is resolved against a forward-acceleration reference and, without
+one, the 180° ambiguity is reported rather than guessed — a 180° mount error is a vehicle driving
+backwards and will not converge out under NHC.
+
+A knock is then handled by widening the mount block, never by correcting the rotation: a bump is
+news about *uncertainty*, and its actual angle is not observable from the gyro energy that detected
+it. Measured over 60 s of cruising at 15 m/s after a 5° knock:
+
+| | Residual mount-yaw error |
+|---|---|
+| Mount block re-inflated after the knock | **0.43°** |
+| Not re-inflated | **8.56°** |
+
+Not re-inflating is worse than the knock itself: the filter carries a stale rotation behind a
+covariance that says the rotation is known — `mount_rw` is zero (D-048), so nothing else ever
+widens it — and the wrong mount drags the rest of the state with it. At 16.7 m/s over 60 s, 8.56°
+is roughly 150 m of lateral error against a 100 m budget.
+
+**Open, and it is a real gap (D-075).** `mount_disturbance_gyro_thresh = 3.0` rad/s cannot see the
+knock this section is about. A knock of angle θ delivered inside one sample presents at most θ/Δt
+of *measured* rate, so at the `S-` stream's 10 Hz the threshold corresponds to a **17.2°** knock;
+a 5° one presents 0.87 rad/s, 3.4× under, and the detector does not fire. The threshold has no
+source in this repo and is not tuned against a synthetic knock. It needs a recording of a real
+phone being knocked in a cradle — ten minutes of seat A's time — and until it has one, the ~1°
+requirement above rests on the PCA initialiser plus whatever NHC re-estimates unaided.
+
 ---
 
 ## 6. Provisional allocation
-
-```mermaid
-pie showData
-    title 100 m over a 60 s outage at 16.7 m/s
-    "Lateral - residual gyro bias" : 40
-    "Along-track - speed estimate" : 30
-    "Lateral - R_sv misalignment" : 20
-    "Gyro scale factor in turns" : 10
-```
 
 | Term | Budget | Owner | Attacked by |
 |---|---|---|---|
@@ -183,33 +206,7 @@ not close in a car park.
 
 ## 7. Instrumentation requirements
 
-The budget is worthless if we cannot see which term is overrunning. Each term fails with a
-different signature, and the instrumentation below exists so that the signature is readable:
-
-```mermaid
-flowchart TB
-    OVER{"Drift over 10%<br/>on a 60 s outage"} --> DECOMP["Decompose the error:<br/><b>along-track vs cross-track</b><br/>never just the norm"]
-
-    DECOMP -->|"mostly along-track"| ALONG{"Yaw error small?"}
-    DECOMP -->|"mostly cross-track"| LAT{"Yaw error grows<br/>linearly in t?"}
-
-    ALONG -->|"yes"| SPEED["<b>Speed head</b> — §4<br/>eps_v over 0.5 m/s RMS<br/>owner M"]
-    ALONG -->|"no"| BOTH["Yaw is leaking into both.<br/>Treat as the lateral branch."]
-
-    LAT -->|"yes, from t=0"| BIAS["<b>Residual gyro bias</b> — §3.2<br/>check ZARU fired at every stop,<br/>check the tunnel-entry snapshot<br/>owner S"]
-    LAT -->|"no, only in turns"| SF["<b>Gyro scale factor</b> — §6<br/>owner S"]
-    LAT -->|"constant offset,<br/>no yaw error at all"| MOUNT["<b>R_sv misalignment</b> — §5<br/>1 deg is 20 m; 5 deg is 87 m<br/>owner S"]
-
-    BIAS --> COV{"Does trace(P) track<br/>the real error?"}
-    SPEED --> COV
-    MOUNT --> COV
-    COV -->|"no — filter is over-confident"| NEES["<b>Consistency, not accuracy.</b><br/>Go to §9.4 before tuning anything else."]
-
-    style NEES fill:#da3633,color:#fff
-    style OVER fill:#9e6a03,color:#fff
-```
-
-Every evaluation run logs:
+The budget is worthless if we cannot see which term is overrunning. Every evaluation run logs:
 
 - **Yaw error time series**, separately and always ([EVALUATION.md](EVALUATION.md) §4.4).
 - Estimated gyro bias vs. time, with a marker at each ZUPT/ZARU application.
@@ -332,44 +329,79 @@ A separate several-hour, multi-temperature run on our own handset — logged at 
 thermal drift and resolve limits 2 and 3 above. It is explicitly **not** on the Gate 1 critical
 path (D-038): it characterises a device that produced none of the graded data.
 
-### 9.4 The consistency envelope — measured, and currently failing
+---
 
-A budget in metres assumes the filter's own covariance is honest. It is not yet. NEES over the
-60 s reference scenario, 100 Monte-Carlo runs, 18 degrees of freedom, 95% band **[16.843, 19.195]**
-(D-053):
+## 10. Initial covariance `P₀` — measured, derived, and the one entry that is neither
 
-| Configuration | Full-state NEES | Verdict |
-|---|---|---|
-| Propagation only | **18.287** | in band — asserted by a committed test |
-| Propagation + ZUPT | **18.929** | in band — asserted by a committed test |
-| **Full state, everything on** | **29.90** | **over-confident.** Not committed as a passing test. |
+**Owner:** seat S · **Set by:** P-04 (plan item R-3) · **Code:**
+[`core.reference.inekf.initial_covariance`](../core/reference/inekf.py) · **Decision:** D-055.
 
-Per-block, against an expected 3.0:
+`P₀` is the filter's opening statement about how much it does not know. It was a flat `1e-3·I` —
+one number, σ = 0.0316, carried in six different units — and so it was wrong in every block and in
+both directions at once.
 
-| Block | Propagation only | ZUPT only | NHC only | ZARU only |
-|---|---|---|---|---|
-| all blocks | 2.8–3.2 | 2.8–3.4 | 1.6–2.8 | — |
-| gyro bias | — | — | — | **12.89** |
+| Block | σ | Where it comes from | Flat `1e-3` was |
+|---|---|---|---|
+| Position N/E/D | **3 m** | §2 below: `gnss_sigma_m`, the ±3 m GNSS accuracy in [EVALUATION.md](EVALUATION.md) §2 | 3.2 cm — **95× too tight** |
+| Velocity N/E/D | **4.24 m/s** | `√2·σ_p/Δt_gnss`: two fixes differenced over one 1 Hz epoch | 3.2 cm/s — **134× too tight** |
+| Attitude roll, pitch | **1.31°** | `√(zupt_accel_var_thresh)/g` — levelling from gravity, bounded by the largest specific-force disturbance the stop detector still admits | 1.81° — 1.4× too loose |
+| Attitude yaw | **14.56°** | `(√2·σ_p/Δt_gnss)/v_ref` — GNSS course over ground at the §1 reference speed | 1.81° — **8× too tight** |
+| Gyro bias | **42 °/hr** | §9.1, measured (D-045) | 1810 °/hr — 43× too loose |
+| Accel bias | **0.34 mg** | §9.1, measured (D-045) | 3.2 mm/s² — 9.5× too loose |
+| Mount `ξ_sv` | **5°** | §5's knock. **Not** §5's requirement — see below | 1.81° — 2.8× too tight |
 
-NHC's 1.6–2.8 is *under*-confident, which is the safe direction, and is an artefact of
-`R_NHC = 0.5 m/s` being model slack that a noise-free simulation does not need. **ZARU is the sole
-cause of the failure**, with two measured contributors:
+Too tight is the direction that costs: a `P₀` below the truth makes the χ² gate reject good
+measurements, and that failure presents as a sensor problem rather than as a tuning one, which is
+exactly how it survives a debugging session. `P₀` is returned diagonal, because the correlations
+between blocks are precisely what the filter has not learned yet.
 
-1. `zaru_sigma = 1.0e-3` rad/s sits **below** the gyro white noise §9.1 measured —
-   `gyro_arw / √dt = 4.11e-4 / √0.1 = 1.30e-3` rad/s at 10 Hz. Understated 1.3× in σ, 1.7× in
-   variance. Correcting it moves the gyro-bias block 12.03 → 8.48 and the total 29.90 → 23.71:
-   real, and **not** the larger cause.
-2. The same gyro sample is used as process noise inside `propagate()` *and* as ZARU's measurement,
-   which the Kalman update assumes are independent. On a 60 s stationary run the gyro-bias block
-   reads 3.41 with the correct σ, but **2.74** given an independent second gyro read, and 2.72 when
-   ZARU is decimated to every tenth step.
+**Two epochs, not one.** Roll and pitch come from the gravity vector at a *detected stop*; yaw
+comes from GNSS course over ground, which needs motion and so is not observable at that same
+stationary epoch. The yaw prior therefore stands until the vehicle moves. This is ordinary coarse
+levelling followed by course alignment, and it is stated because the two rows above would
+otherwise look inconsistent.
 
-Neither fix belonged to the phase that measured this: the first is tuning an `R` to pass a
-consistency test, and the second changes D-004's "ZARU at every stop" semantics that **this
-document's §3.2 assumes**. P-04 owns both, together with `P₀`.
+**Why roll/pitch is the detector's threshold and not the sensor floor.** The measured 0.34 mg accel
+bias instability implies a levelling floor of 0.019° — 60× tighter. That floor is what the sensor
+*could* do; it is not what bounds a real alignment. `zupt_accel_var_thresh = 0.05 (m/s²)²` is how
+much residual specific force the stop detector still calls a stop, so σ = √0.05/g = 1.31° is the
+levelling error an alignment at a detected stop must tolerate. Using the floor would assert an
+accuracy the detector does not guarantee.
 
-> **Why this sits in the error budget and not only in the decision log.** An over-confident
-> covariance is invisible in a position plot — the trajectory looks fine — but it is read by the
-> χ² gate, by the uncertainty ellipse in the demo, and by the map matcher's emission σ. A filter
-> that under-states its own uncertainty rejects good GNSS fixes on re-acquisition and snaps
-> confidently onto the wrong road. **Gate 1 must not be declared on it.**
+**The mount block is the one entry with no measured source, and it is not invented.** Nothing in
+this repo has estimated `R_sv`: the PCA initialiser is P-11 and `mount_rw` is zero (D-048), so the
+block starts from no measurement and cannot re-inflate. §5 gives two magnitudes — the ~1.15°
+*requirement* and the 5° *knock* the disturbance detector exists for. A prior at the requirement
+would have the filter open by asserting that the budget is already met, and would let the gate
+reject the very NHC updates that would correct a real misalignment. The knock is the widest mount
+angle any document here names, so it is used instead. Same reasoning as D-048, opposite direction,
+because here zero is not available. **P-11 replaces this with the initialiser's measured spread**,
+and until it does, the ~1° requirement in §5 rests on nothing the filter models.
+
+### 10.1 ZARU's measurement noise is not a tuning parameter
+
+`zaru_sigma` is the noise on `z = ω̃ − b̂_g` ([SE23_PROPAGATION.md](SE23_PROPAGATION.md) §7.3),
+which is the gyro *white* noise per sample — so it is the Allan run's own number at the stream's
+own rate, `gyro_arw·√f = 4.11e-4·√10 = 1.2997e-3` rad/s, and it is computed in `FilterConfig`
+rather than typed so the two cannot drift apart (D-056). It replaces a `1.0e-3` that predated the
+Allan run and was 1.3× understated in σ, 1.7× in variance — over-confident, the unsafe direction.
+The value is **rate-dependent**: the 200 Hz FOG build needs its own.
+
+### 10.2 Filter consistency at Gate 1 — measured
+
+Full-state NEES over the 60 s reference scenario, 100 Monte-Carlo runs, 95% band **[16.84, 19.19]**
+for 18 dof; per-block against 3.0 expected. Tool: `tests/test_se23_derivation.py` test 11.
+
+| Case | NEES | Band | Gyro-bias block |
+|---|---|---|---|
+| Propagation only | 18.29 | in | 2.94 |
+| + ZUPT | 18.93 | in | 2.87 |
+| + ZARU *(D-053: 27.67, over-confident)* | **17.03** | **in** | **3.05** *(was 13.14)* |
+| ZUPT + ZARU together | **19.03** | **in** | 3.16 |
+| Full, with NHC | **14.14** | under | 2.73 |
+
+The over-confidence D-053 recorded is gone, and D-053's attribution of it was wrong: see D-057.
+The full-state case is now *under*-confident — the safe direction — and the whole of the remainder
+is NHC's `R_NHC = 0.5 m/s`, which is model slack for suspension travel, road camber and tyre slip
+that a noise-free simulation does not contain. It is not tuned away here; `R_NHC` belongs to P-10's
+adaptive head, set from data.

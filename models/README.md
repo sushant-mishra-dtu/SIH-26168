@@ -39,22 +39,14 @@ world-frame). Window ~1–2 s.
 
 ## Status
 
-**Architectures are defined; nothing is trained.**
-[`speed_head.py`](speed_head.py) carries the TCN with its log-variance output, the Gaussian NLL and
-the calibration metric; [`baseline_rnn.py`](baseline_rnn.py) carries the Onyekpe baseline at the
-published hyperparameters (1 s window, MAE, Adamax 7e-4, batch 128, dropout 0.05, ~72 units).
+**Onyekpe INS baseline (P-06): trained.** `python -m models.train_baseline_rnn --data data` fits
+it and scores it over the frozen outage sweep; `--audit` prints the stated-versus-omitted
+hyperparameter table and trains nothing. Nine of the nineteen settings are ours rather than the
+papers' (D-098), the regression target is a tenth (D-099), and the result is reported as an
+improvement over raw INS because that is the shape the published claim takes (D-100).
 
-> ⚠️ **Neither file is covered by CI.** `torch` is deliberately not installed there — the harness is
-> the critical path and must never be blocked on a 2 GB download. That is an accepted gap, and it
-> means these two files have never been executed in a clean environment. Run them locally before
-> quoting anything from them.
+Needs the `ml` extra and the dataset: `pip install -e ".[ml]"` then
+`python -m eval.fetch --sync-only`. `torch` is imported inside the functions that need it, so the
+audit and its tests still run in the CI job that has neither.
 
-**`update_speed` on the filter side is still `NotImplementedError`** — deliberately, because a stub
-returning `None` would let the harness produce plausible all-zero trajectories and report them as
-results.
-
-**Gate 1 is currently blocked** (D-053), so the rule above is live rather than theoretical: no
-network goes on top of a filter that has not cleared physics-only. The remaining seat-M work that
-does *not* wait on Gate 1 is documentary — list every hyperparameter the Onyekpe INS paper states
-against every one it omits, and log each omission we have to choose as a DECISION_LOG row rather
-than letting it sit silently in a config file.
+**The speed+variance head (P-08) is still untrained** — that is Sprint 2, and Gate 1 comes first.
