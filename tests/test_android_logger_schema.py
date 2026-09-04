@@ -177,15 +177,22 @@ def test_a_header_with_an_invented_column_is_refused(tmp_path: Path):
         load_sequence(path)
 
 
-def test_the_speed_column_is_km_per_hour_and_the_app_converts(tmp_path: Path):
-    """`gps_speed_kmh` is km/h; `Location.getSpeed()` is m/s. The conversion belongs on the
-    caller's side of the wall, where it is visible -- the same rule `core/ffi/idr_core.h` states
-    for every unit crossing that boundary."""
+def test_the_speed_column_is_metres_per_second_and_the_app_does_not_scale():
+    """D-109. `Location.getSpeed()` is m/s and `gps_speed_mps` is m/s, so the crossing is a
+    widening and nothing else.
+
+    This test pinned a `* 3.6` until D-102, which is the shape of the defect it now guards: the
+    factor agreed with the `GPS SPEED (Kmh)` header IO-VNBD ships and disagreed with the bytes,
+    and it cancelled against a `/ 3.6` in `_forward_reference` that D-102 removed. Nothing
+    divides now, so a factor reintroduced here reaches a published number unchallenged."""
     text = _kotlin(CHANNELS_KT)
-    assert re.search(r"fun kmh\([^)]*\)[^=]*=\s*.*3\.6", text), (
-        "Channels.kmh no longer applies the m/s -> km/h factor"
+    body = re.search(r"fun mps\([^)]*\): Double = (.+)", text)
+    assert body, "Channels.mps is gone or is no longer a single-expression conversion"
+    assert body.group(1).strip() == "metresPerSecond.toDouble()", (
+        f"Channels.mps scales the reading: {body.group(1).strip()!r}"
     )
-    assert any(normalise(c) == "gps_speed_kmh" for c in HEADER)
+    speed_columns = [c for c in HEADER if normalise(c) == "gps_speed_mps"]
+    assert speed_columns == ["GPS Speed (m/s)"], speed_columns
 
 
 def test_the_written_file_round_trips_through_the_loader_encoding(tmp_path: Path):

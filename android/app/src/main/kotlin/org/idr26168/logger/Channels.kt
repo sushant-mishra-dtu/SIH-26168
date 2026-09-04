@@ -50,7 +50,7 @@ object Channels {
         "GPS Latitude (deg)",        // -> gps_lat
         "GPS Longitude (deg)",       // -> gps_lon
         "GPS Altitude (m)",          // -> gps_altitude_m
-        "GPS Speed (Kmh)",           // -> gps_speed_kmh     NOTE: km/h, not m/s. See [kmh].
+        "GPS Speed (m/s)",           // -> gps_speed_mps     NOTE: m/s, not km/h. See [mps].
         "GPS Accuracy (m)",          // -> gps_accuracy_m
         "GPS Orientation (deg)",     // -> gps_orientation_deg
         "Satellites in range",       // -> gps_sats
@@ -86,6 +86,15 @@ object Channels {
 
     const val CSV_ROW_PERIOD_MS: Long = 1000L / CSV_ROW_HZ
 
-    /** m/s as Android reports it -> km/h as the `gps_speed_kmh` column is defined. */
-    fun kmh(metresPerSecond: Float): Double = metresPerSecond.toDouble() * 3.6
+    /**
+     * m/s as Android reports it, and m/s as the `gps_speed_mps` column is defined -- the widening
+     * to `Double` is the whole of the conversion.
+     *
+     * There was a `* 3.6` here until D-109, and it was correct against the `GPS SPEED (Kmh)`
+     * header IO-VNBD ships and wrong against the bytes behind it. D-096 measured that column at
+     * 1.00x a chord-speed reference in metres per second; D-102 renamed the canonical column
+     * `gps_speed_mps` and removed the matching `/ 3.6` from `_forward_reference`. Multiplying
+     * here after that would write every recording 3.6x fast into a column nothing divides again.
+     */
+    fun mps(metresPerSecond: Float): Double = metresPerSecond.toDouble()
 }
