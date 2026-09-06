@@ -43,6 +43,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".replay.ReplayActivity"
+            android:exported="true"
+            android:label="Trajectory Replay"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait" />
+
         <service
             android:name=".LoggerService"
             android:exported="false"
