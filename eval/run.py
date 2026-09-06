@@ -93,9 +93,29 @@ GATE1_LENGTH_S = 60
 #: put every epoch boundary somewhere other than where the truth lookup expects it.
 MAX_DT_DEVIATION_S = 0.05
 
+#: A speed no road vehicle in this dataset reaches (540 km/h), used only to catch a filter state
+#: that has left physical reality before it reaches literal infinity a few hundred steps later.
+#: Not a tuning knob: it exists to make `FilterDivergedError` fire early enough to name the sample
+#: it happened at, not to decide what counts as "diverged" -- D-094 already measured that the
+#: state can run away by two orders of magnitude in under ten fixes.
+DIVERGENCE_SPEED_MPS = 150.0
+
 
 class SequenceUnusable(RuntimeError):
     """This stem cannot be graded, and the run says so rather than reporting a number anyway."""
+
+
+class FilterDivergedError(RuntimeError):
+    """The filter's own state left the bounds a moving car can produce.
+
+    Caught in `evaluate_sequence` and turned into `SequenceUnusable` -- a diverged state
+    corrupts every window drawn from the rest of the run, not just the sample it is caught at,
+    because `run_filter` integrates one continuous pass per length and every window slices a
+    displacement out of it (D-089's atomicity argument applies here too). Raised before the state
+    reaches literal infinity: unchecked, `van_loan`'s `expm_series` converts an infinite matrix
+    norm to an int and raises an unnamed `OverflowError` several steps later, which is a crash a
+    read of the traceback does not explain and a window drop cannot recover from.
+    """
 
 
 # --------------------------------------------------------------------------------------------
@@ -296,6 +316,15 @@ def run_filter(
     for k in range(n):
         if k > 0:
             f.propagate(gyro[k], accel[k], float(dt[k - 1]))
+            speed = float(np.linalg.norm(f.state.v))
+            if not np.isfinite(speed) or not np.isfinite(f.state.p).all() or speed > DIVERGENCE_SPEED_MPS:
+                raise FilterDivergedError(
+                    f"{seq.name if seq is not None else '<unnamed>'}: filter state left physical "
+                    f"bounds at sample {k} ({k / SAMPLE_RATE_HZ:.1f} s into this pass) -- "
+                    f"|v| = {speed:.3g} m/s (limit {DIVERGENCE_SPEED_MPS:g}), p = {f.state.p}. "
+                    "GNSS is not correcting the state (see D-094); nothing downstream of this "
+                    "sample is a navigation solution."
+                )
 
         lo = max(0, k - window + 1)
         if k + 1 >= window and is_stationary(accel[lo : k + 1], gyro[lo : k + 1], cfg):
@@ -615,10 +644,20 @@ def evaluate_sequence(
         if not windows:
             continue
         assert_non_overlapping(windows)
-        run = run_filter(
-            gyro, accel, dt, fix_idx, fix_ned, fix_sigma,
-            mask_gnss(n, windows), cfg=cfg, seq=seq,
-        )
+        try:
+            run = run_filter(
+                gyro, accel, dt, fix_idx, fix_ned, fix_sigma,
+                mask_gnss(n, windows), cfg=cfg, seq=seq,
+            )
+        except FilterDivergedError as exc:
+            # Not window-scoped like D-089/D-093: `run_filter` integrates one continuous pass
+            # per length, so a state that left physical bounds partway through has already
+            # corrupted every window's slice of it, including ones before the sample named in
+            # the message (the state was wrong before it was caught, not only after). The same
+            # divergence reproduces at every length -- it is a property of the continuous
+            # integration, not of any one outage -- so the whole stem is unusable, not just this
+            # length's windows.
+            raise SequenceUnusable(str(exc)) from exc
         for outage in windows:
             t0 = float(t_abs_s[outage.start_idx])
             want_replay = (

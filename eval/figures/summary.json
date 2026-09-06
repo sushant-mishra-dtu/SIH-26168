@@ -1,0 +1,172 @@
+{
+  "stamp": "commit 9fdd261-dirty | seed 0 | 2026-09-06T11:04:24Z",
+  "reproducible": false,
+  "crse_convention": "sum_abs",
+  "n_windows": 135,
+  "n_dropped_windows": 3,
+  "n_dropped_by_kind": {
+    "no_truth_coverage": 3
+  },
+  "by_method": {
+    "filter": {
+      "10": {
+        "n_sequences": 33,
+        "drift_pct_median": 190.30254137275702,
+        "drift_pct_p95": 614.064141768535,
+        "drift_pct_max": 775.2658198165412,
+        "frac_under_10pct": 0.0,
+        "cte_m_mean": -172.13358652997468,
+        "crse_m_mean": 309.16387750841056,
+        "yaw_rmse_deg_mean": 109.79259464020362,
+        "yaw_max_deg": 179.64194763023812,
+        "total_distance_m": 4711.548671506458
+      },
+      "30": {
+        "n_sequences": 9,
+        "drift_pct_median": 138.84223537340367,
+        "drift_pct_p95": 331.37523950132834,
+        "drift_pct_max": 334.5523946537427,
+        "frac_under_10pct": 0.0,
+        "cte_m_mean": -484.1662817184056,
+        "crse_m_mean": 902.7738217316441,
+        "yaw_rmse_deg_mean": 111.19615272841882,
+        "yaw_max_deg": 179.64194763023812,
+        "total_distance_m": 3652.742436517513
+      },
+      "60": {
+        "n_sequences": 3,
+        "drift_pct_median": 136.7574068663465,
+        "drift_pct_p95": 187.44684139431368,
+        "drift_pct_max": 193.07900078631005,
+        "frac_under_10pct": 0.0,
+        "cte_m_mean": -683.2178314722206,
+        "crse_m_mean": 1817.7172874179403,
+        "yaw_rmse_deg_mean": 107.54972325282156,
+        "yaw_max_deg": 179.6417075269702,
+        "total_distance_m": 2022.1948857856737
+      }
+    },
+    "strapdown": {
+      "10": {
+        "n_sequences": 33,
+        "drift_pct_median": 34.5752452776364,
+        "drift_pct_p95": 151.1659029995234,
+        "drift_pct_max": 298.93940506121,
+        "frac_under_10pct": 0.030303030303030304,
+        "cte_m_mean": -8.059044601623468,
+        "crse_m_mean": 49.81832334083184,
+        "yaw_rmse_deg_mean": 30.63267262398445,
+        "yaw_max_deg": 175.36009353362533,
+        "total_distance_m": 4711.548671506458
+      },
+      "30": {
+        "n_sequences": 9,
+        "drift_pct_median": 161.785003397554,
+        "drift_pct_p95": 698.7286114692432,
+        "drift_pct_max": 705.806680075487,
+        "frac_under_10pct": 0.0,
+        "cte_m_mean": -326.38589245697676,
+        "crse_m_mean": 712.251685167938,
+        "yaw_rmse_deg_mean": 69.22560066989872,
+        "yaw_max_deg": 176.77494018833264,
+        "total_distance_m": 3652.742436517513
+      },
+      "60": {
+        "n_sequences": 3,
+        "drift_pct_median": 548.7269865946968,
+        "drift_pct_p95": 1682.5864555746934,
+        "drift_pct_max": 1808.5708410169154,
+        "frac_under_10pct": 0.0,
+        "cte_m_mean": -1125.1682635247325,
+        "crse_m_mean": 3571.666233785145,
+        "yaw_rmse_deg_mean": 84.74134249742826,
+        "yaw_max_deg": 176.77494018833264,
+        "total_distance_m": 2022.1948857856737
+      }
+    },
+    "gnss_available": {
+      "10": {
+        "n_sequences": 33,
+        "drift_pct_median": 11.525872984707478,
+        "drift_pct_p95": 90.36692259130787,
+        "drift_pct_max": 102.50501423180292,
+        "frac_under_10pct": 0.42424242424242425,
+        "cte_m_mean": -2.644178700066127,
+        "crse_m_mean": 218.57215465603235,
+        "yaw_rmse_deg_mean": 40.819513063810845,
+        "yaw_max_deg": 172.3863068491787,
+        "total_distance_m": 4711.548671506458
+      },
+      "30": {
+        "n_sequences": 9,
+        "drift_pct_median": 10.674086740817993,
+        "drift_pct_p95": 20.39420742642988,
+        "drift_pct_max": 22.750209244229392,
+        "frac_under_10pct": 0.3333333333333333,
+        "cte_m_mean": 11.90942172294914,
+        "crse_m_mean": 611.0795245812931,
+        "yaw_rmse_deg_mean": 30.48490380707622,
+        "yaw_max_deg": 172.38599275986357,
+        "total_distance_m": 3652.742436517513
+      },
+      "60": {
+        "n_sequences": 3,
+        "drift_pct_median": 7.043130517655519,
+        "drift_pct_p95": 7.989188131385688,
+        "drift_pct_max": 8.094305644022374,
+        "frac_under_10pct": 1.0,
+        "cte_m_mean": 17.465083881691218,
+        "crse_m_mean": 852.0201124192739,
+        "yaw_rmse_deg_mean": 31.551328210076107,
+        "yaw_max_deg": 172.38547579335528,
+        "total_distance_m": 2022.1948857856737
+      }
+    }
+  },
+  "gate1": {
+    "measured": true,
+    "length_s": 60,
+    "filter_drift_pct_median": 136.7574068663465,
+    "gnss_available_drift_pct_median": 7.043130517655519,
+    "ratio": 19.417133691265118,
+    "range_required": [
+      3.0,
+      5.0
+    ],
+    "in_range": false,
+    "n_windows_filter": 3,
+    "n_windows_gnss_available": 3
+  },
+  "trajectories": [],
+  "dropped_windows": [
+    {
+      "sequence": "Vw12",
+      "length_s": 10,
+      "start_idx": 800,
+      "kind": "no_truth_coverage",
+      "reason": "Vw12: 3 of 11 epoch(s) have no truth sample within 0.05 s; worst is 2.305 s at t = 58730.205 s. The paired 'V-' file does not cover this window at 10 Hz -- drop the window from the protocol rather than interpolating across the gap."
+    },
+    {
+      "sequence": "Vw12",
+      "length_s": 30,
+      "start_idx": 600,
+      "kind": "no_truth_coverage",
+      "reason": "Vw12: 3 of 31 epoch(s) have no truth sample within 0.05 s; worst is 2.305 s at t = 58730.205 s. The paired 'V-' file does not cover this window at 10 Hz -- drop the window from the protocol rather than interpolating across the gap."
+    },
+    {
+      "sequence": "Vw12",
+      "length_s": 60,
+      "start_idx": 300,
+      "kind": "no_truth_coverage",
+      "reason": "Vw12: 3 of 61 epoch(s) have no truth sample within 0.05 s; worst is 2.305 s at t = 58730.205 s. The paired 'V-' file does not cover this window at 10 Hz -- drop the window from the protocol rather than interpolating across the gap."
+    }
+  ],
+  "skipped": [
+    "S3a: S3a: filter state left physical bounds at sample 7667 (766.7 s into this pass) -- |v| = 150 m/s (limit 150), p = [1167.45590888 3055.43883616  836.63040964]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
+    "S3c: S3c: filter state left physical bounds at sample 2883 (288.3 s into this pass) -- |v| = 153 m/s (limit 150), p = [-1555.97700298 -1806.54591186   901.95708338]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
+    "Vta16: Vta16: filter state left physical bounds at sample 4692 (469.2 s into this pass) -- |v| = 150 m/s (limit 150), p = [-1596.09503001  -644.09256699  1012.68734337]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
+    "Vta1a: Vta1a: filter state left physical bounds at sample 2664 (266.4 s into this pass) -- |v| = 152 m/s (limit 150), p = [-1446.52666945 -1326.084285    1631.04691574]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
+    "Vw2: Vw2: filter state left physical bounds at sample 5270 (527.0 s into this pass) -- |v| = 151 m/s (limit 150), p = [ -539.30978265 -2110.34611225  1190.31516018]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
+    "Vw4: Vw4: filter state left physical bounds at sample 7853 (785.3 s into this pass) -- |v| = 151 m/s (limit 150), p = [ 1320.91641775 -1171.352704     629.67233655]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution."
+  ]
+}
