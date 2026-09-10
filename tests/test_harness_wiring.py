@@ -202,15 +202,15 @@ def test_the_synthetic_pair_aligns_and_is_usable_as_truth():
 # ------------------------------------------------------------------------------------------
 
 
-def test_the_gyro_axis_mapping_is_the_one_d047_established():
-    """`gyro_yaw` is device **x**, not the vertical axis (D-047). Getting this wrong is silent:
-    the filter still runs and the trajectory still looks like a drive."""
+def test_the_gyro_axis_mapping_is_the_one_d101_established():
+    """Proper right-handed triad (+gyro_yaw, -gyro_roll, +gyro_pitch) established by D-101
+    (superseding D-047). `gyro_pitch` is the vertical body rate across synchronised stems."""
     seq, _ = synthetic_drive()
     seq.imu["gyro_yaw"] = 1.0
     seq.imu["gyro_pitch"] = 2.0
     seq.imu["gyro_roll"] = 3.0
     gyro, _, _ = imu_stream(seq)
-    assert gyro[0] == pytest.approx([1.0, 2.0, 3.0])
+    assert gyro[0] == pytest.approx([1.0, -3.0, 2.0])
 
 
 def test_dt_comes_from_the_timestamps_and_a_backwards_clock_is_refused():

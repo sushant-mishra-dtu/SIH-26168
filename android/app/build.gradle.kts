@@ -81,4 +81,5 @@ dependencies {
     implementation(libs.androidx.activity)
 
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20231013")
 }

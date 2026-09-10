@@ -85,8 +85,9 @@ The main CSV carries the allowlist and **nothing else** — 24 columns, exactly.
 
 - **10 Hz rows.** `SAMPLE_RATE_HZ = 10` is a constant the outage windows are sized from; a 100 Hz
   file would be windowed as though it were ten times longer, silently (D-106).
-- **km/h in `gps_speed_kmh`.** `Location.getSpeed()` is m/s. The conversion is on our side of the
-  wall, where it is visible — the rule `core/ffi/idr_core.h` states for every unit crossing.
+- **m/s in `gps_speed_mps`, unscaled (D-109).** `Location.getSpeed()` is m/s and the canonical
+  column is m/s since D-102, so the crossing is a widening to `Double`. The `× 3.6` that was here
+  matched the `GPS SPEED (Kmh)` header IO-VNBD ships, not the bytes behind it.
 - **`GYROSCOPE X/Y/Z`, not `Yaw/Pitch/Roll`.** They normalise to `gyro_yaw/pitch/roll` either way,
   and `gyro_yaw` is device x, not the vertical axis. The X/Y/Z spelling is the one that does not
   invite a reader to assume otherwise.

@@ -3,25 +3,24 @@ package org.idr26168.logger
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import org.idr26168.logger.replay.ReplayActivity
+import java.io.File
 import java.util.Locale
 
 /**
- * One screen: start, stop, and the two numbers per stream that decide whether the drive was worth
- * making.
- *
- * It shows the achieved rate and the jitter **while recording**, not in a report afterwards,
- * because the failure this app is most likely to hit is a phone that silently rate-limits its
- * motion sensors. Caught in the car park that costs a minute. Caught on a laptop it costs the
- * drive.
+ * One screen: start, stop, achieved rate and jitter while recording, export session zip,
+ * and trajectory replay view.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -32,6 +31,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var warnings: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
+    private lateinit var exportButton: Button
+    private lateinit var replayButton: Button
+
+    private var pendingExportSessionDir: File? = null
 
     private val ui = Handler(Looper.getMainLooper())
 
@@ -41,11 +44,28 @@ class MainActivity : AppCompatActivity() {
         if (granted[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
             startService()
         } else {
-            // Refusing to record without GNSS is the point. A drive with no fixes has no
-            // reference against which anything can later be evaluated, and it looks like a
-            // complete recording on disk.
             status.text = "Location permission denied. A recording without GNSS has no reference " +
                 "track and will not be started."
+        }
+    }
+
+    private val createDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? ->
+        val sessionDir = pendingExportSessionDir
+        if (uri != null && sessionDir != null) {
+            try {
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    val zipped = SessionExporter.zipSession(sessionDir, out)
+                    Toast.makeText(
+                        this,
+                        "Exported ${zipped.size} files for session ${sessionDir.name}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -67,10 +87,17 @@ class MainActivity : AppCompatActivity() {
         warnings = findViewById(R.id.warnings)
         startButton = findViewById(R.id.start)
         stopButton = findViewById(R.id.stop)
+        exportButton = findViewById(R.id.export_session)
+        replayButton = findViewById(R.id.open_replay)
 
         startButton.setOnClickListener { requestPermissionsThenStart() }
         stopButton.setOnClickListener {
             startService(Intent(this, LoggerService::class.java).setAction(LoggerService.ACTION_STOP))
+        }
+
+        exportButton.setOnClickListener { exportLatestSession() }
+        replayButton.setOnClickListener {
+            startActivity(Intent(this, ReplayActivity::class.java))
         }
     }
 
@@ -82,6 +109,21 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         ui.removeCallbacks(refresh)
+    }
+
+    private fun exportLatestSession() {
+        val baseDir = File(getExternalFilesDir(null) ?: filesDir, "sessions")
+        val sessions = baseDir.listFiles()?.filter { it.isDirectory && it.listFiles()?.isNotEmpty() == true }
+            ?.sortedByDescending { it.name } ?: emptyList()
+
+        if (sessions.isEmpty()) {
+            Toast.makeText(this, "No recorded sessions found to export.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val targetSession = sessions.first()
+        pendingExportSessionDir = targetSession
+        createDocumentLauncher.launch("${targetSession.name}.zip")
     }
 
     private fun requestPermissionsThenStart() {
@@ -96,8 +138,6 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            // Not cosmetic: without it the foreground-service notification is suppressed, and a
-            // recording the driver cannot see is a recording nobody stops.
             needed += Manifest.permission.POST_NOTIFICATIONS
         }
 
@@ -140,8 +180,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         rates.text = buildString {
-            append(String.format(Locale.US, "%-28s %7s %7s %7s %7s %7s\n",
-                "stream", "req Hz", "got Hz", "med ms", "p95 ms", "sd ms"))
+            append(String.format(
+                Locale.US, "%-28s %7s %7s %7s %7s %7s\n",
+                "stream", "req Hz", "got Hz", "med ms", "p95 ms", "sd ms"
+            ))
             for (st in s.streams) {
                 append(
                     String.format(

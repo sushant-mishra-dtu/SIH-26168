@@ -353,7 +353,7 @@ def pca_mount_yaw(
     **PCA returns an axis, not a direction.** Forward and backward have the same principal
     component, and nothing in a covariance can tell them apart. `forward_reference` resolves it: a
     per-sample signed scalar that grows with forward acceleration -- the finite-differenced
-    `gps_speed_kmh` is the one the `S-` stream can supply -- and the sign is chosen so the two
+    `gps_speed_mps` is the one the `S-` stream can supply -- and the sign is chosen so the two
     correlate positively. Without it `sign_resolved` is False and the yaw carries a 180-degree
     ambiguity that the caller must resolve before the result is used. It is returned rather than
     guessed because a 180-degree mount error is not a large version of a small one: it is a

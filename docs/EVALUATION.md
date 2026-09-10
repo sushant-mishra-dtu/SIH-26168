@@ -1,6 +1,6 @@
 # Evaluation Protocol
 
-**Status:** DRAFT → to be FROZEN at Gate 0 (**Fri 28 Aug 2026**).
+**Status:** FROZEN (03 Sep 2026).
 **Owner:** seat D. **Ratified by:** all six seats.
 **Submission:** Tue 8 Sep 2026 (see DECISION_LOG D-021 — the schedule compressed on 26 Aug).
 
@@ -27,7 +27,7 @@ will be moved, one small justified step at a time, until the numbers flatter us 
 | Magnetometer | magnetic X / Y / Z | µT |
 | Orientation | orientation yaw / pitch / roll | deg |
 | Time | time-since-start, date | ms |
-| GNSS *(reference & gated update only)* | lat, lon, altitude, speed, accuracy, orientation, sats-in-range | deg / m / km·h⁻¹ / m |
+| GNSS *(reference & gated update only)* | lat, lon, altitude, speed, accuracy, orientation, sats-in-range | deg / deg / m / m/s / m / deg / count |
 
 ### 1.2 Denylist — the `V-` (ECU/CAN) stream
 

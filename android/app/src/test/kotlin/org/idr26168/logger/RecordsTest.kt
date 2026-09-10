@@ -48,7 +48,7 @@ class RecordsTest {
         latDeg: Double = 28.545,
         lonDeg: Double = 77.191,
         altitudeM: Double? = 216.4,
-        speedKmh: Double? = 12.4,
+        speedMps: Double? = 12.4,
         accuracyM: Double? = 4.1,
         bearingDeg: Double? = 88.1,
         satsInView: Int = 17,
@@ -56,7 +56,7 @@ class RecordsTest {
         latDeg = latDeg,
         lonDeg = lonDeg,
         altitudeM = altitudeM,
-        speedKmh = speedKmh,
+        speedMps = speedMps,
         accuracyM = accuracyM,
         bearingDeg = bearingDeg,
         satsInView = satsInView,
@@ -133,7 +133,7 @@ class RecordsTest {
         // Location.hasAltitude / hasSpeed / hasAccuracy / hasBearing are all independently false
         // on a fresh fix, and each missing one has to leave its own cell empty without disturbing
         // the fields either side of it.
-        val f = fields(row(fix = fix(altitudeM = null, speedKmh = null, accuracyM = null, bearingDeg = null)))
+        val f = fields(row(fix = fix(altitudeM = null, speedMps = null, accuracyM = null, bearingDeg = null)))
         assertEquals("28.54500000", f[16])
         assertEquals("77.19100000", f[17])
         assertEquals("", f[18])
@@ -295,11 +295,12 @@ class RecordsTest {
     // -- the unit crossing -------------------------------------------------------------------------
 
     @Test
-    fun `speed is converted from metres per second to km per hour on our side of the wall`() {
-        // Location.getSpeed() is m/s and the gps_speed_kmh column is km/h. The conversion belongs
-        // where it is visible, which is the same rule core/ffi/idr_core.h states for every unit
-        // crossing that boundary.
-        assertEquals(36.0, Channels.kmh(10.0f), 1e-9)
-        assertEquals(0.0, Channels.kmh(0.0f), 0.0)
+    fun `speed crosses the wall in metres per second and is not scaled`() {
+        // D-109. Location.getSpeed() is m/s and gps_speed_mps is m/s, so the crossing is a
+        // widening and nothing else. The `* 3.6` this test used to pin was right about the
+        // `GPS SPEED (Kmh)` header and wrong about the bytes -- D-102 removed the matching
+        // `/ 3.6` downstream, and a factor here would now survive all the way into a result.
+        assertEquals(10.0, Channels.mps(10.0f), 1e-9)
+        assertEquals(0.0, Channels.mps(0.0f), 0.0)
     }
 }
