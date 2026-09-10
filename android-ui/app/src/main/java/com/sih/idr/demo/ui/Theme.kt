@@ -14,28 +14,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.googlefonts.Font
-import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// ── Google Fonts ────────────────────────────────────────────────────────────
-private val fontProvider = GoogleFont.Provider(
-    providerAuthority = "com.google.android.gms.fonts",
-    providerPackage = "com.google.android.gms",
-    certificates = emptyList()      // works without certs on physical devices
-)
-
-private val InterFont = GoogleFont("Inter")
-
-val InterFamily = FontFamily(
-    Font(googleFont = InterFont, fontProvider = fontProvider, weight = FontWeight.Light),
-    Font(googleFont = InterFont, fontProvider = fontProvider, weight = FontWeight.Normal),
-    Font(googleFont = InterFont, fontProvider = fontProvider, weight = FontWeight.Medium),
-    Font(googleFont = InterFont, fontProvider = fontProvider, weight = FontWeight.SemiBold),
-    Font(googleFont = InterFont, fontProvider = fontProvider, weight = FontWeight.Bold),
-    Font(googleFont = InterFont, fontProvider = fontProvider, weight = FontWeight.ExtraBold),
-)
+// ── Type face ───────────────────────────────────────────────────────────────
+// The device's own sans-serif, not a downloaded one.
+//
+// This was `GoogleFont.Provider("com.google.android.gms.fonts")` with an Inter family, which
+// fetches its faces at runtime through Play Services. On a phone that has never seen the font --
+// the judging-venue case -- that is a network call, and D-041's offline claim does not survive
+// one. The weights below are the same weights; only the source of the glyphs changed.
+val InterFamily = FontFamily.SansSerif
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 object IDRColors {

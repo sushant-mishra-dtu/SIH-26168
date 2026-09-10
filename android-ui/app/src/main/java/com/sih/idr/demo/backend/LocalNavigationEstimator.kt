@@ -7,8 +7,27 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Device-side demo estimator. It is deliberately small and deterministic: the production
- * InEKF/JNI implementation can replace this class behind the same service contract.
+ * Device-side demo estimator. Deliberately small and deterministic: the production InEKF can
+ * replace it behind the same service contract once `core/ffi/` has an implementation behind it.
+ *
+ * **This is not the filter the project is evaluated on, and nothing it produces is a result.**
+ * Three specific things it is not, because each has been mistaken for the real thing at least
+ * once:
+ *
+ *  - It is not an InEKF. It carries no covariance. [uncertaintyM] grows by a hand-chosen
+ *    `0.08 * sqrt(dt)` while GNSS is stale and is otherwise set to `Location.accuracy` -- a
+ *    plausible-looking curve, not a propagated one, and it must never be captioned as 1σ from a
+ *    filter.
+ *  - It switches between a GNSS branch and an INS branch on a 2.5 s timeout. The architecture
+ *    this project argues for does the opposite: one filter always propagating, GNSS an optional
+ *    gated correction, no mode and no handoff (README, "The thesis in one paragraph"). The mode
+ *    label on screen describes *this class*, not the design.
+ *  - Its speed comes from `Location.getSpeed()` and holds through the whole GNSS gap, so the
+ *    dead-reckoned position it reports during an outage is a constant-speed extrapolation.
+ *
+ * It exists so the operator UI has something live to render on a phone. Numbers for the
+ * submission come from `eval/run.py`, and the honest way to show them on a device is the replay
+ * view in `android/`, which renders a measured `idr-trajectory/1` record and computes nothing.
  */
 class LocalNavigationEstimator {
     private var lastTimestampNs = 0L

@@ -123,8 +123,26 @@ fun NavigationScreen(
                         .padding(horizontal = 24.dp, vertical = 24.dp)
                         .navigationBarsPadding()
                 ) {
-                    // Telemetry cards (Speed, Drift, Sats)
+                    // Telemetry cards (Speed, estimator sigma, Sats)
                     TelemetryPanel(telemetry = telemetry)
+
+                    // Caption discipline, D-081. It says what produced the numbers above, and it
+                    // is here because a screenshot of this sheet travels further than any README.
+                    // Do not drop it because it is ugly on a slide.
+                    Text(
+                        text = if (telemetry.running) {
+                            "On-device demo estimator over the phone's own sensors — not the " +
+                                "evaluated InEKF, and not a drift figure. The graded numbers come " +
+                                "from the offline harness; the 200 Hz FOG configuration is not " +
+                                "demonstrated here."
+                        } else {
+                            "Not recording. No sensor data has been read, so there is nothing to " +
+                                "show — this screen displays no stand-in trajectory."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = IDRColors.TextSecondary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
 
                     Spacer(Modifier.height(16.dp))
 

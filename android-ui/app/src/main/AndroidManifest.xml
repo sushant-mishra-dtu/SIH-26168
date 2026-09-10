@@ -5,8 +5,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+        INTERNET and ACCESS_NETWORK_STATE are deliberately absent, and the absence is the point.
+        D-041 claims the system is 100% offline and D-080 forbids the demo surface any fetch, so
+        the app is built without the permission that would let it make one. A reviewer can check
+        the claim by reading this file rather than by trusting the code, and a future edit that
+        reaches for the network fails at runtime instead of quietly working.
+    -->
 
     <application
         android:allowBackup="true"
@@ -14,9 +20,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.IDRNavigator">
 
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="YOUR_GOOGLE_MAPS_API_KEY" />
+        <!--
+            No Google Maps API key: there is no Maps SDK here and there is not going to be one.
+            See the note on permissions above, and MapView.kt.
+        -->
 
         <activity
             android:name=".MainActivity"

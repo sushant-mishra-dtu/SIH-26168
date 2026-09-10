@@ -11,11 +11,8 @@ import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sih.idr.demo.backend.NavigationMode
 import com.sih.idr.demo.backend.SensorForegroundService
-import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.TelemetryStore
-import com.sih.idr.demo.backend.TrackPoint
 import com.sih.idr.demo.ui.NavigatorTheme
 import com.sih.idr.demo.ui.screens.NavigationScreen
 
@@ -51,11 +48,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             NavigatorTheme {
-                // Collect live telemetry or fall back to preview data
-                val liveTelemetry by TelemetryStore.state.collectAsStateWithLifecycle()
-
-                // Use live data if service is running, otherwise show preview
-                val telemetry = if (liveTelemetry.running) liveTelemetry else PREVIEW_TELEMETRY
+                // The one source of telemetry there is. Before the service starts this is a
+                // default-constructed TelemetryState -- zeros, INITIALIZING, an empty path -- and
+                // that empty state is what the screen shows. D-080: a surface with no data shows
+                // that it has no data. It does not stand in a plausible-looking drive, because a
+                // plausible-looking drive is indistinguishable from a real one in a photograph.
+                val telemetry by TelemetryStore.state.collectAsStateWithLifecycle()
 
                 var isRecording by remember { mutableStateOf(false) }
                 var permsGranted by remember { mutableStateOf(permissionsGranted) }
@@ -66,8 +64,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // If service is running, sync recording state
-                LaunchedEffect(liveTelemetry.running) {
-                    if (liveTelemetry.running) isRecording = true
+                LaunchedEffect(telemetry.running) {
+                    if (telemetry.running) isRecording = true
                 }
 
                 NavigationScreen(
@@ -106,41 +104,20 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        /**
-         * Static preview telemetry for UI-only mode: shows what the app looks like
-         * without needing sensor permissions, a physical device, or the backend running.
-         * This is what Android Studio previews and emulator runs display.
-         */
-        val PREVIEW_TELEMETRY = TelemetryState(
-            running = false,
-            mode = NavigationMode.INS,
-            speedMps = 13.8f,
-            yawRad = 0.24f,
-            positionNorthM = 164.2f,
-            positionEastM = -38.6f,
-            uncertaintyM = 18f,
-            sampleRateHz = 200f,
-            timestampJitterMs = 0.8f,
-            satellites = 0,
-            accelAvailable = true,
-            gyroAvailable = true,
-            gnssAvailable = false,
-            path = listOf(
-                TrackPoint(-82f, -120f),
-                TrackPoint(-64f, -98f),
-                TrackPoint(-54f, -78f),
-                TrackPoint(-40f, -60f),
-                TrackPoint(-22f, -42f),
-                TrackPoint(-4f, -28f),
-                TrackPoint(18f, -18f),
-                TrackPoint(38f, -10f),
-                TrackPoint(58f, -4f),
-                TrackPoint(78f, -8f),
-                TrackPoint(104f, -16f),
-                TrackPoint(128f, -24f),
-                TrackPoint(148f, -32f),
-                TrackPoint(164.2f, -38.6f)
-            )
-        )
+        // --- what is deliberately NOT here ------------------------------------------------
+        // A `PREVIEW_TELEMETRY` constant used to live here and was rendered whenever the service
+        // was not running -- which is what the app shows on launch, in Android Studio, and on a
+        // phone with no permissions granted. It carried speed 13.8 m/s, uncertainty 18 m, a
+        // fourteen-point track, `sampleRateHz = 200f` and `timestampJitterMs = 0.8f`.
+        //
+        // The last two are the reason this is a decision and not a cleanup. Achieved sample rate
+        // and timestamp jitter per device are exactly the numbers HANDOVER.md section 1 says have
+        // never been measured on any phone in this project, and 200 Hz is the FOG configuration
+        // that D-081 requires captioned as *not demonstrated*. An unmeasured claim rendered in
+        // the same typeface as a measured one is the failure D-080 exists to prevent, and a
+        // screenshot of it is indistinguishable from evidence.
+        //
+        // The empty state is the honest preview. If a design needs reviewing without a device,
+        // review it empty, or load a real recording through the replay view in `android/`.
     }
 }
