@@ -350,6 +350,9 @@ both directions at once.
 | Accel bias | **0.34 mg** | §9.1, measured (D-045) | 3.2 mm/s² — 9.5× too loose |
 | Mount `ξ_sv` | **5°** | §5's knock. **Not** §5's requirement — see below | 1.81° — 2.8× too tight |
 
+*(The gyro-bias, roll/pitch and mount rows above are the D-055 values; §10.3 records what D-111
+replaced them with, and why a stationary measurement was the wrong one for two of them.)*
+
 Too tight is the direction that costs: a `P₀` below the truth makes the χ² gate reject good
 measurements, and that failure presents as a sensor problem rather than as a tuning one, which is
 exactly how it survives a debugging session. `P₀` is returned diagonal, because the correlations
@@ -405,3 +408,30 @@ The full-state case is now *under*-confident — the safe direction — and the 
 is NHC's `R_NHC = 0.5 m/s`, which is model slack for suspension travel, road camber and tyre slip
 that a noise-free simulation does not contain. It is not tuned away here; `R_NHC` belongs to P-10's
 adaptive head, set from data.
+
+### 10.3 What D-111 changed in `P₀` and `Q`, and why — measured in motion
+
+The §9.1 numbers are a *stationary* phone's. Measured against the paired `V-` track while
+driving (D-111), three entries above are the wrong quantity for a filter that starts moving:
+
+| Entry | Was | Is | Measured as |
+|---|---|---|---|
+| Gyro bias, `P₀` | 42 °/hr (instability) | **0.2 °/s** (`gyro_bias_turn_on`) | Mean gyro over 638 s of TRAIN standstill: 0.14 °/s RMS, 0.20 °/s worst axis. The instability is how far an *estimated* bias wanders; the block starts from an unestimated one. At 42 °/hr a real 0.1 °/s bias was a 9σ event and every ZARU on every held-out stem was rejected. |
+| `gyro_arw`, `Q` | 1.41 °/√hr | **per stem, floored at 1.41** (`in_motion_config`) | Tilt of the integrated gyro against a quiet-end levelling, S3a: 1.1 / 2.3 / 3.7 / 7.0 ° at 10 / 30 / 60 / 120 s ≈ 0.5 °/√s, 20× the Allan figure; the stream's own 0.5 s-residual white level reproduces it to 1.4× (S3a) – 2× (Vta1a), the conservative side. Vta/Vw stems run 4–20 °/s per sample. |
+| `accel_vrw`, `Q` | 0.45 m/s/√hr | **per stem, floored** | Same residual: 0.46 m/s² per sample on S3a, 1.4–3.5 on the Vta/Vw stems. |
+| Roll, pitch, `P₀` | 1.31° | **0.83°** at a stop; the harness's own figure on a moving window | The detector now admits `zupt_accel_var_thresh = 0.02`, and `_level_sigma` adds the window's uncorrected mean acceleration over g. |
+
+**`P₀` is no longer used diagonal.** The table's sigmas are plain errors about the vehicle; the
+filter's error is right-invariant, `ξ_p = δp + p^ δθ`, so a diagonal `P₀` in the filter's
+coordinates claims a `|p|·σ_yaw` position uncertainty attributable to yaw and a `|p|·σ_tilt`
+height uncertainty attributable to roll/pitch. `right_invariant_from_plain` applies the §5 map
+once at alignment; `H P Hᵀ` for a fix is then exactly the plain position block. See D-111 and
+`tests/test_filter.py::test_the_caller_can_override_the_position_gate` for what the diagonal
+prior did to a forced fix 200 m from the origin (it rotated the state 80°).
+
+**The mount block** now carries `mount_rw = 1e-3` rad/√s (0.44° over a minute), superseding
+D-048's zero; with zero, NHC collapsed the block to under 0.1° within a minute and the constraint
+was thereafter asserted through a rotation the filter believed perfectly (D-110).
+
+The §10.2 NEES table stands except that ZARU-only measures 16.63 against [16.84, 19.19] with the
+turn-on bias in the block — 1.3% under-confident, asserted one-sided like the full-state case.
