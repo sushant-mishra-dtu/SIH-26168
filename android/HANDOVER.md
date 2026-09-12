@@ -22,26 +22,23 @@ Verifiable, not remembered:
 |---|---|
 | The logger module exists — 17 main sources, 3,128 lines | `find android/app/src/main -name "*.kt" \| xargs wc -l` |
 | A second app exists at `android-ui/` — 8 sources, 1,184 lines | `find android-ui/app/src/main -name "*.kt" \| xargs wc -l`, and §8 below |
-| It has been seen **only in its idle state** | no session folder on any device |
-| **No drive has ever been recorded** | no `*_session.json` exists anywhere |
-| **It has never been installed on a phone** | no one has run `:app:installDebug`; §9 item 1 is the procedure |
+| Stationary session recorded & committed | `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` (D-116) |
+| **Drive logging pending** | stationary run done; car drive observation remaining (§9 item 2) |
+| **Installed on a phone** | installed on Samsung Galaxy A55 5G (`SM-A556E`) on 13 Sep 2026 |
 | The CSV schema is pinned to the harness loader | `pytest tests/test_android_logger_schema.py` |
 | Both Android surfaces are pinned to D-041/D-079/D-080 | `pytest tests/test_android_demo_surface.py` — 67 pass |
 | It has JVM unit tests | `cd android && ./gradlew :app:test` — 56 `@Test` methods |
 | CI compiles both Gradle roots | `.github/workflows/android.yml` |
 | `./gradlew` exists at all | the wrapper was committed in `53e0053`; before that there was none |
 
-**The single most important sentence in this file is unchanged:** the app's reason to exist — the
-achieved sample rate and timestamp jitter per team device, asked for in
-[IMPLEMENTATION_PLAN.md](../docs/IMPLEMENTATION_PLAN.md) §4 — is **not measured**. Everything below is
-lower priority than one two-minute stationary recording followed by one real drive. Do that first;
-§9 item 1 is the procedure, and it needs one afternoon, one phone and one car.
-If you build a map view before there is a single measured number, you have made the demo prettier
-and the submission no more defensible.
+**The hardware baseline is no longer unmeasured (D-116).** On 13 Sep 2026, the logger was installed
+on the team Samsung Galaxy A55 5G (`SM-A556E`) and completed a 246.6 s stationary desk session
+(`S-IDR-20260913-031148-samsung-sm-a556e`). Achieved sample rate was **125.0 Hz** across all
+accelerometer, gyroscope, and uncalibrated channels (requested 100 Hz), with **8.1 ms** median/p95
+Δt jitter (stdev 0.0030 ms) under `ELAPSED_REALTIME` and 0 non-monotonic stamps. The 10 Hz main CSV
+loaded directly into `eval.loaders.io_vnbd::load_sequence` with 2,462 rows and zero leakage errors.
+The deliverable now turns to §9 item 2: the real drive for thermal and GNSS-denied observation.
 
-That sentence has now been broken once, in the direction it warns about. `android-ui`'s launch
-screen displayed `sampleRateHz = 200f` and `timestampJitterMs = 0.8f` as though measured, for five
-days, on the two numbers this paragraph says do not exist. §8.
 
 **Gate 1 is no longer unmeasured, and the line that said so was stale by a week.** D-110 measured it
 on 6 Sep and it **fails**: 136.8% median filter drift at 60 s against a 7.0% GNSS-available
@@ -330,12 +327,13 @@ it says so.
 
 | # | Work | Blocked on | Done when |
 |---|---|---|---|
-| 1 | **Run the logger on a phone: stationary recording on every team device** (§9.1–9.4) | nothing — one phone, one afternoon | a `_session.json` with `"status": "complete"` per device, committed |
+| 1 | **Run the logger on a phone: stationary recording on every team device** (§9.1–9.4) | nothing — one phone, one afternoon | **DONE (Samsung SM-A556E, 13 Sep 2026, D-116)** — `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` committed (125.0 Hz, 8.1 ms Δt p95) |
 | 2 | **Record one real drive** (§9.5), including the battery/thermal observation | item 1, a car, a mount | a drive-length sidecar per device, achieved rate over time noted |
-| 3 | **Get the files off, validate, and write the numbers down** (§9.6–9.7) | items 1–2 | sprint-board table filled, decision-log row added, the two "not measured" sentences retired |
+| 3 | **Get the files off, validate, and write the numbers down** (§9.6–9.7) | items 1–2 | **Partially done (stationary run)**: D-116 row logged, sidecar committed; drive numbers pending |
 | 4 | **See the replay view render a real trajectory record on a device** (§9.8) | a full `eval/run.py` run, which writes `trajectory_<seq>.json` | four tracks + ellipse + the D-081 caption on screen; a wrong `schema` string refused visibly |
-| 5 | **CI uploads the debug APK** | nothing | `actions/upload-artifact` over `android/app/build/outputs/apk/debug/` in `.github/workflows/android.yml`, so anyone can sideload a PR build without an SDK |
+| 5 | **CI uploads the debug APK** | nothing | **DONE** — `actions/upload-artifact` in `.github/workflows/android.yml` for logger and operator UI APKs |
 | 6 | **Decide `android-ui/`, then act on it** (§7, §8 q1) | a decision, not code | either its Compose screens live under the one Gradle root at `android/` with one application id, or the directory is deleted — and `tests/test_android_demo_surface.py` is updated to match, since it currently reads both roots |
+
 | 7 | **Allan run on our own hardware** from the `_raw_imu.csv` sidecar | items 1–2 (a long stationary segment, ≥ 20 min if the phone can be left on a desk that long) | `eval/allan.py` over the raw sidecar produces ARW / bias-instability figures for the team phone; recorded next to IO-VNBD's (D-038, D-045) and never substituted for them |
 | 8 | **Road geometry under the replay track, offline** (§3b) | `maps/` — designed and sized, no code, no extract format defined | a static geometry file drawn under `TrajectoryMapView`, captioned as fixed geometry and not as a match; no network, no tiles (D-041, D-080) |
 | 9 | **Instrumented test for the `startRecording` partial-failure path** (§4 item 4) | a decision to add Robolectric or an `androidTest` source set | a failed start leaves no foreground notification and no half-written session; test runs in CI |

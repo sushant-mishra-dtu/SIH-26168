@@ -3,6 +3,8 @@ data/*
 !data/README.md
 !data/manifest/
 !data/manifest/**
+sessions/
+
 
 # --- build ---
 build/
