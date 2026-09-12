@@ -68,7 +68,10 @@ schema is right.
 
 ## Files it writes
 
-Per session, under `Android/data/org.idr26168.logger/files/sessions/<session-id>/`:
+Per session, under `Android/data/<application id>/files/sessions/<session-id>/`. The application
+id is `org.idr26168.logger.debug` for the debug build (`applicationIdSuffix` in
+`app/build.gradle.kts`), which is the only build that exists, so the path on a phone is
+`/sdcard/Android/data/org.idr26168.logger.debug/files/sessions/`:
 
 | File | Rate | Read by |
 |---|---|---|
@@ -221,9 +224,23 @@ Record two minutes stationary on a desk and read the front screen. If `got Hz` i
 `req Hz`, stop: the device microphone toggle rate-limits motion sensors regardless of permissions,
 and thermal throttling looks identical. The app says so in a warning rather than leaving it to be
 discovered afterwards. Then record the numbers per device — that is the Sprint 0 exit criterion.
+The step-by-step for a phone — install, permissions, the stationary run, the drive, getting the
+files off and where the numbers go — is [HANDOVER.md](HANDOVER.md) §9.
 
 ## Status
 
-Logger written, not yet built or run: no Android SDK on the machine it was written on, and **no
-number in `_session.json` has been produced by a real device.** Until a drive exists, the achieved
-rate and jitter are unmeasured and nothing in this directory may be quoted.
+Updated 13 Sep 2026 (D-116): **Installed and verified on physical hardware (Samsung Galaxy A55 5G, `SM-A556E`).**
+
+| Claim | As of | How to check |
+|---|---|---|
+| Compiles | `53e0053` committed the wrapper; `.github/workflows/android.yml` (D-114) runs `:app:assembleDebug` on every PR | the Android check on the PR |
+| 56 JVM unit tests pass | same workflow, `:app:test` | `cd android && ./gradlew :app:test` |
+| CSV schema matches the harness loader | `tests/test_android_logger_schema.py` | `pytest tests/test_android_logger_schema.py` |
+| Installed on a device | **13 Sep 2026** | `Samsung SM-A556E` over wireless debugging |
+| Achieved rate and jitter per team device | **125.0 Hz, 8.1 ms Δt p95** | `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` (D-116) |
+
+The stationary recording deliverable ([HANDOVER.md](HANDOVER.md) §9 item 1) is closed for the team
+Galaxy A55 5G: STM LSM6DSVTR IMU delivers 125.0 Hz continuously with zero non-monotonic events,
+zero rate-limit warnings, and 8.1 ms median/p95 Δt jitter under `ELAPSED_REALTIME`. Real drive logging
+(item 2) remains to measure thermal throttling under sustained motion.
+
