@@ -652,18 +652,22 @@ def test_process_noise_psd_is_the_squares_of_the_measured_config_values():
     assert np.array_equal(np.diag(qc), expected)
 
 
-def test_the_mount_block_of_q_carries_no_process_noise_yet():
-    """D-048, asserted rather than left to a comment. The derivation names sigma_sv but no source
-    in the repo gives it a magnitude, so it is zero -- the mount is modelled as rigid until P-11
-    estimates R_sv and the bump detector re-inflates it. If P-11 sets a value, this test is the
-    thing that says so out loud."""
-    assert FilterConfig().mount_rw == 0.0
+def test_the_mount_block_of_q_carries_small_process_noise():
+    """D-111: mount_rw is non-zero to allow mount estimation (see D-048 comment).
+    The derivation names sigma_sv and P-11 now sets a small value so the mount 
+    can be estimated and tracked over time.
+    """
+    assert FilterConfig().mount_rw == 1e-3
     f = InEKF()
     before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
     for _ in range(50):
         f.propagate(np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1)
-    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], before)
+    # After 50 steps of dt=0.1, total time = 5.0s
+    # Variance should increase by mount_rw^2 * total_time
+    expected_increase = (1e-3)**2 * 5.0
+    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], before + expected_increase)
     assert f.P.shape == (ERROR_STATE_DIM, ERROR_STATE_DIM)
+
 
 
 # ------------------------------------------------------------------------------------------
