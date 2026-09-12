@@ -216,8 +216,8 @@ def truth_clock_offset_s(seq: Sequence) -> float:
 
 def fix_arrays(
     seq: Sequence, lat0: float, lon0: float
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """`(sample_idx, ned (n, 3), sigma_m (n,))` for the distinct `S-` GPS fixes.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    """`(sample_idx, ned (n, 3), sigma_m (n,), velocity_mps (n,)|None)` for the distinct `S-` GPS fixes.
 
     These are the **gated filter update**, not truth. `eval/loaders/io_vnbd.py` already reduces
     them to one row per position change; forward-filling them into a per-sample column is what the
@@ -226,6 +226,8 @@ def fix_arrays(
     `sigma_m` is the receiver's own reported `gps_accuracy_m` where the file carries it, so the
     covariance the gate reads is the phone's own statement about the fix rather than a constant.
     Where it is absent the config default stands.
+
+    Returns velocity_mps as None if not available, otherwise as array of speeds.
     """
     gnss = seq.gnss
     idx = gnss["sample_idx"].to_numpy(dtype=int)
@@ -246,7 +248,15 @@ def fix_arrays(
         sigma = np.where(np.isfinite(sigma) & (sigma > 0), sigma, default)
     else:
         sigma = np.full(idx.size, default)
-    return idx, ned, sigma
+
+    # Extract velocity if available for Doppler course updates
+    velocity_mps = None
+    if "gps_speed_mps" in gnss.columns:
+        velocity = gnss["gps_speed_mps"].to_numpy(dtype=float)
+        # Only keep valid velocities (non-negative and finite)
+        velocity_mps = np.where(np.isfinite(velocity) & (velocity >= 0), velocity, 0.0)
+
+    return idx, ned, sigma, velocity_mps
 
 
 # --------------------------------------------------------------------------------------------
@@ -347,6 +357,9 @@ def run_filter(
             f.update_nhc()
             counts["nhc"] += 1
 
+        # Dynamic mount estimation update (D-111)
+        f.update_mount_dynamics(gyro[k], accel[k])
+
         j = fix_at.get(k)
         if j is not None and gnss_open[k]:
             cov = np.eye(3) * float(fix_sigma[j]) ** 2
@@ -354,6 +367,10 @@ def run_filter(
                 counts["gnss_ok"] += 1
             else:
                 counts["gnss_no"] += 1
+
+            # Doppler course update (D-111)
+            if fix_velocity is not None and fix_velocity[j] > 0.5:  # Only update with significant speed
+                f.update_doppler_course(fix_velocity[j], fix_ned[j])
 
         pos[k] = f.state.p[:2]
         yaw[k] = f.state.yaw
@@ -638,7 +655,7 @@ def evaluate_sequence(
     # window by exactly that opening value -- up to 3.7 hours -- and grades the drive against a
     # stretch of road it never travelled.
     t_abs_s = t_rel_s + offset
-    fix_idx, fix_ned, fix_sigma = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    fix_idx, fix_ned, fix_sigma, fix_velocity = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
 
     n = gyro.shape[0]
     sweep = generate_sweep({seq.name: n}, tuple(lengths))
