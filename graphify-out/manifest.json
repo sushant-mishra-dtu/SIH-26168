@@ -1,0 +1,507 @@
+{
+  "android/app/build.gradle.kts": {
+    "mtime": 1788503728.4173818,
+    "ast_hash": "746eae09d3c4d3212567a54c95e2d92b",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/Channels.kt": {
+    "mtime": 1788502852.142801,
+    "ast_hash": "5b54fd9542905344ba81bc3fdf54aa65",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/GnssHub.kt": {
+    "mtime": 1788502852.1438005,
+    "ast_hash": "e7e04add53e80696050b71f30ecf2ff0",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/LineWriter.kt": {
+    "mtime": 1788502441.6627095,
+    "ast_hash": "75deb9d52ab05a39d4d701a05c6bbd26",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/LoggerService.kt": {
+    "mtime": 1788502441.6637096,
+    "ast_hash": "a9800b6c64f84890feb75d5308d5076e",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/LoggerState.kt": {
+    "mtime": 1788502441.6637096,
+    "ast_hash": "0edeb8e7056437138ca5adf9955827a4",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/MainActivity.kt": {
+    "mtime": 1788503672.5707722,
+    "ast_hash": "cce4e57230e494758d1e70434c88fce8",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/RateStats.kt": {
+    "mtime": 1788502441.6647096,
+    "ast_hash": "57f5248f2d63ba375160482e3b034f22",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/Records.kt": {
+    "mtime": 1788502852.1438005,
+    "ast_hash": "f1a99089c5a3e5180d28a0eba8bd3639",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/SensorHub.kt": {
+    "mtime": 1788502441.6657093,
+    "ast_hash": "2f2c1fa92facecb5a77cada4444d1011",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/Session.kt": {
+    "mtime": 1788502441.6667094,
+    "ast_hash": "efc1f8ad7e87e0786cf198ba3210cfa4",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/SessionClock.kt": {
+    "mtime": 1788502441.6667094,
+    "ast_hash": "e23c9f47932bbbe79eeb5d2875ce93c7",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/SessionExporter.kt": {
+    "mtime": 1788502765.015807,
+    "ast_hash": "fcf19af59056617e920dffa9bf768d58",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/replay/ReplayActivity.kt": {
+    "mtime": 1788503613.1947014,
+    "ast_hash": "3b42dff67a2c317ffec34ca373dbc8d8",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/replay/SensorTraceView.kt": {
+    "mtime": 1788502823.2723298,
+    "ast_hash": "3bcd7111f2483c093ffaac34d7edd2e2",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/replay/SeriesView.kt": {
+    "mtime": 1788502814.7694852,
+    "ast_hash": "6d666c19731b84568fa2d12957237f15",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/replay/TrajectoryMapView.kt": {
+    "mtime": 1788502806.9329572,
+    "ast_hash": "81e05e8b6c3a309f6ef8e7492f129a0a",
+    "semantic_hash": ""
+  },
+  "android/app/src/main/kotlin/org/idr26168/logger/replay/TrajectoryRecord.kt": {
+    "mtime": 1788502796.3008783,
+    "ast_hash": "7332440f80ffd8d15dceea1cec40444c",
+    "semantic_hash": ""
+  },
+  "android/app/src/test/kotlin/org/idr26168/logger/RateStatsTest.kt": {
+    "mtime": 1788502441.6692202,
+    "ast_hash": "31c6728dbc6d744a2767ca443e8b2f67",
+    "semantic_hash": ""
+  },
+  "android/app/src/test/kotlin/org/idr26168/logger/RecordsTest.kt": {
+    "mtime": 1788502852.146308,
+    "ast_hash": "590be8144f5faa21d5ddb172c8ff4e34",
+    "semantic_hash": ""
+  },
+  "android/app/src/test/kotlin/org/idr26168/logger/SessionClockTest.kt": {
+    "mtime": 1788502441.6702201,
+    "ast_hash": "71d42645ea8e0797de9a936454e8b99e",
+    "semantic_hash": ""
+  },
+  "android/app/src/test/kotlin/org/idr26168/logger/SessionExporterTest.kt": {
+    "mtime": 1788502774.4059756,
+    "ast_hash": "8282b07fce6ff4c11a401c5686016f97",
+    "semantic_hash": ""
+  },
+  "android/app/src/test/kotlin/org/idr26168/logger/replay/TrajectoryRecordTest.kt": {
+    "mtime": 1788503756.4232147,
+    "ast_hash": "1e0cd4174211a99dc7ce8a139061a0a7",
+    "semantic_hash": ""
+  },
+  "android/build.gradle.kts": {
+    "mtime": 1788502441.6712205,
+    "ast_hash": "b4373f3adbd033b850689cbd18070537",
+    "semantic_hash": ""
+  },
+  "android/gradlew": {
+    "mtime": 1788502441.6737292,
+    "ast_hash": "f2d3d383787f61a4a99710ee8d780434",
+    "semantic_hash": ""
+  },
+  "android/settings.gradle.kts": {
+    "mtime": 1788502441.674729,
+    "ast_hash": "111e44fc0fe8345830c049d052276783",
+    "semantic_hash": ""
+  },
+  "core/__init__.py": {
+    "mtime": 1787801855.106366,
+    "ast_hash": "5c745101ddcfdfb743e778fc666e62e2",
+    "semantic_hash": ""
+  },
+  "core/ffi/idr_core.h": {
+    "mtime": 1788276971.4511142,
+    "ast_hash": "0477da6a74018c150c8958b7644e02c4",
+    "semantic_hash": ""
+  },
+  "core/reference/__init__.py": {
+    "mtime": 1787801855.108366,
+    "ast_hash": "7746ecf15efc619638bf3e88db365343",
+    "semantic_hash": ""
+  },
+  "core/reference/inekf.py": {
+    "mtime": 1788502441.7103927,
+    "ast_hash": "d413b3f5f501fe1763c25de30fa65193",
+    "semantic_hash": ""
+  },
+  "eval/__init__.py": {
+    "mtime": 1787801855.113366,
+    "ast_hash": "3f19bc543b34c2563992c6f5b4337d36",
+    "semantic_hash": ""
+  },
+  "eval/allan.py": {
+    "mtime": 1787918064.154127,
+    "ast_hash": "1ac642e23e50db25eac0559eb55c6182",
+    "semantic_hash": ""
+  },
+  "eval/axis_check.py": {
+    "mtime": 1788502441.7123947,
+    "ast_hash": "ffb39e58f9426e92252e6930add5884a",
+    "semantic_hash": ""
+  },
+  "eval/baselines.py": {
+    "mtime": 1788276971.4586225,
+    "ast_hash": "fce3f365f6f32dbef2afa726c6ee3d29",
+    "semantic_hash": ""
+  },
+  "eval/cadence.py": {
+    "mtime": 1788456795.0544305,
+    "ast_hash": "ba4ed0a668cc3ab98f5265cd19159449",
+    "semantic_hash": ""
+  },
+  "eval/fetch.py": {
+    "mtime": 1788456795.055459,
+    "ast_hash": "e31be6ae69f3c6dac38a3201176d53f4",
+    "semantic_hash": ""
+  },
+  "eval/figures/allan_stamp.json": {
+    "mtime": 1787918119.040921,
+    "ast_hash": "6d223b2b9d79a478bcf913f6002f51d3",
+    "semantic_hash": ""
+  },
+  "eval/figures/allan_summary.json": {
+    "mtime": 1787918119.0429196,
+    "ast_hash": "e20195765ee151afd75ab58288b4d2fa",
+    "semantic_hash": ""
+  },
+  "eval/figures/summary.json": {
+    "mtime": 1788692683.0209365,
+    "ast_hash": "dff12b57989993e6153d29034c9b1cbb",
+    "semantic_hash": ""
+  },
+  "eval/loaders/__init__.py": {
+    "mtime": 1787801855.1143656,
+    "ast_hash": "b8b3bc73b24c22e925a8cb630e3ace2b",
+    "semantic_hash": ""
+  },
+  "eval/loaders/columns.py": {
+    "mtime": 1788502441.713392,
+    "ast_hash": "f72e3047380c9948816659199c804be1",
+    "semantic_hash": ""
+  },
+  "eval/loaders/io_vnbd.py": {
+    "mtime": 1788276971.4596198,
+    "ast_hash": "c0810099170d7eca2a631b370b0ec2c9",
+    "semantic_hash": ""
+  },
+  "eval/loaders/truth.py": {
+    "mtime": 1788502538.0730414,
+    "ast_hash": "8ac43ecdc29917cc37e4e2b11ca15c47",
+    "semantic_hash": ""
+  },
+  "eval/metrics/__init__.py": {
+    "mtime": 1787801855.1153686,
+    "ast_hash": "0635b6a9961aef21096902b030937ac0",
+    "semantic_hash": ""
+  },
+  "eval/metrics/core.py": {
+    "mtime": 1788456795.0570161,
+    "ast_hash": "6f5766ff7bfcd564c7d12e05cb40ce39",
+    "semantic_hash": ""
+  },
+  "eval/outages/__init__.py": {
+    "mtime": 1787801855.116366,
+    "ast_hash": "a238a3c2a617347c0ea43f06e26f7a67",
+    "semantic_hash": ""
+  },
+  "eval/outages/inject.py": {
+    "mtime": 1787801855.116366,
+    "ast_hash": "8c4d58b2b5da0204a39acd23a1b87a66",
+    "semantic_hash": ""
+  },
+  "eval/run.py": {
+    "mtime": 1788692629.2001297,
+    "ast_hash": "25410618cb6311899921d3e472cb508d",
+    "semantic_hash": ""
+  },
+  "eval/splits.py": {
+    "mtime": 1788502441.714392,
+    "ast_hash": "8024f95dcb6889b928ce06486e3bc3c9",
+    "semantic_hash": ""
+  },
+  "idr/__init__.py": {
+    "mtime": 1787801855.1173654,
+    "ast_hash": "e226b609c26f848b0d3dbdf978095ab5",
+    "semantic_hash": ""
+  },
+  "idr/geo.py": {
+    "mtime": 1787801855.1173654,
+    "ast_hash": "f0acde43b2cf7204961e403bbe196cd7",
+    "semantic_hash": ""
+  },
+  "idr/stamp.py": {
+    "mtime": 1787801855.1183662,
+    "ast_hash": "6479e5e3a1c95b0e3aa5e21c924cde60",
+    "semantic_hash": ""
+  },
+  "models/__init__.py": {
+    "mtime": 1787801855.119367,
+    "ast_hash": "ecef180826da1def19eb390a5ebe4fb6",
+    "semantic_hash": ""
+  },
+  "models/baseline_rnn.py": {
+    "mtime": 1787801855.119367,
+    "ast_hash": "a8b23076d023dca57a714c69ddbd632e",
+    "semantic_hash": ""
+  },
+  "models/speed_head.py": {
+    "mtime": 1787801855.1203654,
+    "ast_hash": "771d421ed2b925bf57e74dbd1a8d2bcc",
+    "semantic_hash": ""
+  },
+  "models/train_baseline_rnn.py": {
+    "mtime": 1788456795.062526,
+    "ast_hash": "79ce5b15e6b34bb48a4dbf47a38334ed",
+    "semantic_hash": ""
+  },
+  "pyproject.toml": {
+    "mtime": 1787801855.1203654,
+    "ast_hash": "d0f14938ee5015b988f257d2024beefb",
+    "semantic_hash": ""
+  },
+  "tests/__init__.py": {
+    "mtime": 1787801855.1203654,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "tests/test_allan.py": {
+    "mtime": 1787915939.3185594,
+    "ast_hash": "d950f4904b0c0f5da2ed1669c82c2482",
+    "semantic_hash": ""
+  },
+  "tests/test_android_logger_schema.py": {
+    "mtime": 1788502887.472442,
+    "ast_hash": "2f6159abcbdea7b1f4be0eca9e8d8a20",
+    "semantic_hash": ""
+  },
+  "tests/test_axis_check.py": {
+    "mtime": 1788456795.0645344,
+    "ast_hash": "ce7da16f8fed9e84bfca2b22f5b54d3c",
+    "semantic_hash": ""
+  },
+  "tests/test_baseline_audit.py": {
+    "mtime": 1788456795.0655346,
+    "ast_hash": "5eb4fe9b5ae94f7beb52fa4d4d77574a",
+    "semantic_hash": ""
+  },
+  "tests/test_baseline_training.py": {
+    "mtime": 1788456795.0665348,
+    "ast_hash": "3f717f0756aaa4809dd31f678ac3c67c",
+    "semantic_hash": ""
+  },
+  "tests/test_baselines.py": {
+    "mtime": 1788276971.4646208,
+    "ast_hash": "d7c621f7b5b7fec5794084301ad4a6dc",
+    "semantic_hash": ""
+  },
+  "tests/test_ffi_contract.py": {
+    "mtime": 1788276971.4646208,
+    "ast_hash": "fc81f81f9c25cc28f1401fcd099d673d",
+    "semantic_hash": ""
+  },
+  "tests/test_filter.py": {
+    "mtime": 1788276971.4656205,
+    "ast_hash": "a62da7278441b3afbb445f2276bd6d18",
+    "semantic_hash": ""
+  },
+  "tests/test_geo.py": {
+    "mtime": 1787801855.121366,
+    "ast_hash": "e560305a35708fba78d4fd7485f19d89",
+    "semantic_hash": ""
+  },
+  "tests/test_harness_wiring.py": {
+    "mtime": 1788502441.7153924,
+    "ast_hash": "9f350eefa67bffbf4e2c3c38627aaa48",
+    "semantic_hash": ""
+  },
+  "tests/test_leakage.py": {
+    "mtime": 1788502441.7153924,
+    "ast_hash": "38b61a7f27d5662517002ac83e377e14",
+    "semantic_hash": ""
+  },
+  "tests/test_metrics.py": {
+    "mtime": 1788276971.4681287,
+    "ast_hash": "9bdce0a52f28ecb1f6401fb5fd387138",
+    "semantic_hash": ""
+  },
+  "tests/test_mount.py": {
+    "mtime": 1788276971.4681287,
+    "ast_hash": "e892c153c803d98730df4322d2eb7c84",
+    "semantic_hash": ""
+  },
+  "tests/test_protocol.py": {
+    "mtime": 1788502441.7168953,
+    "ast_hash": "ede0dfdb7597d84ed20146f558183cc0",
+    "semantic_hash": ""
+  },
+  "tests/test_replay.py": {
+    "mtime": 1788276971.4691331,
+    "ast_hash": "33f4a0b649c04fdf06b92856cee48750",
+    "semantic_hash": ""
+  },
+  "tests/test_se23_derivation.py": {
+    "mtime": 1788276971.4691331,
+    "ast_hash": "4d1592f805121d0ac03559a640481d3e",
+    "semantic_hash": ""
+  },
+  "tests/test_truth.py": {
+    "mtime": 1788456795.070058,
+    "ast_hash": "9976c707dd085d3e6eacb431de9594b1",
+    "semantic_hash": ""
+  },
+  ".github/workflows/ci.yml": {
+    "mtime": 1787801855.1023653,
+    "ast_hash": "247862e56531202df1fceb77d0192953",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1787805340.4683797,
+    "ast_hash": "467450242fd48cc26d841268ea140fe3",
+    "semantic_hash": ""
+  },
+  "CONTRIBUTING.md": {
+    "mtime": 1787801855.1033647,
+    "ast_hash": "bb2cf042fce67c2c81513870081f8b1a",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1788276971.4501133,
+    "ast_hash": "367b60c704587483ff479e90212969a8",
+    "semantic_hash": ""
+  },
+  "android/HANDOVER.md": {
+    "mtime": 1788502441.6587093,
+    "ast_hash": "10097e827f2114ddd97e58a5ff6ac79a",
+    "semantic_hash": ""
+  },
+  "android/README.md": {
+    "mtime": 1788502852.146308,
+    "ast_hash": "c733661645ad8f77c947109fb69493ba",
+    "semantic_hash": ""
+  },
+  "compass_artifact_wf-14fbcdf8-2ce2-5c03-ab39-5e301e60488f_text_markdown.md": {
+    "mtime": 1787801855.106366,
+    "ast_hash": "c44c2fd0ecdf669df0e42dd284430915",
+    "semantic_hash": ""
+  },
+  "core/README.md": {
+    "mtime": 1788276971.4511142,
+    "ast_hash": "afc430265c6153ad08597fd5c5ed456c",
+    "semantic_hash": ""
+  },
+  "data/README.md": {
+    "mtime": 1788456795.0488913,
+    "ast_hash": "430a10a1696e216048c8d1c73976d873",
+    "semantic_hash": ""
+  },
+  "data/manifest/allan_segments_input.txt": {
+    "mtime": 1787915773.129391,
+    "ast_hash": "e4e5bef42d96592e17911c145a6ba9d8",
+    "semantic_hash": ""
+  },
+  "docs/DATASETS.md": {
+    "mtime": 1787915841.990901,
+    "ast_hash": "fb566da8472efef0f4ecdd612aa0e10b",
+    "semantic_hash": ""
+  },
+  "docs/DECISION_LOG.md": {
+    "mtime": 1788694225.225524,
+    "ast_hash": "d0db94b04413d83f50c83ad1c09a647c",
+    "semantic_hash": ""
+  },
+  "docs/ERROR_BUDGET.md": {
+    "mtime": 1788276971.4541128,
+    "ast_hash": "98f609182f90ea736372f1851aacfddc",
+    "semantic_hash": ""
+  },
+  "docs/EVALUATION.md": {
+    "mtime": 1788502441.7113926,
+    "ast_hash": "30864803125c8733a3aeb63ca24d3481",
+    "semantic_hash": ""
+  },
+  "docs/GLOSSARY.md": {
+    "mtime": 1788276971.4561136,
+    "ast_hash": "58f91ddd1ad078820e8efb7c8fffc010",
+    "semantic_hash": ""
+  },
+  "docs/IMPLEMENTATION_PLAN.md": {
+    "mtime": 1787805771.1500301,
+    "ast_hash": "bf43ead332e8371eb722847aa96b6f4a",
+    "semantic_hash": ""
+  },
+  "docs/METHOD.md": {
+    "mtime": 1788276971.4571133,
+    "ast_hash": "26aa42d29a464679ae7ac12e1b703061",
+    "semantic_hash": ""
+  },
+  "docs/SE23_PROPAGATION.md": {
+    "mtime": 1787801855.1123662,
+    "ast_hash": "69266ba139acc4c4b26f1bb0854f9ce2",
+    "semantic_hash": ""
+  },
+  "docs/SPRINT_BOARD.md": {
+    "mtime": 1787805336.87016,
+    "ast_hash": "d45126067b2bb86c3012e9ce476f6fae",
+    "semantic_hash": ""
+  },
+  "docs/SUBMISSION_AUDIT.md": {
+    "mtime": 1788276971.4576159,
+    "ast_hash": "cbacdb71cd2ebaa011f7c61da877b826",
+    "semantic_hash": ""
+  },
+  "eval/README.md": {
+    "mtime": 1788276971.4576159,
+    "ast_hash": "c6a9774bbd56bb0adf75bbbd125021ce",
+    "semantic_hash": ""
+  },
+  "eval/replay/replay.html": {
+    "mtime": 1788276971.46162,
+    "ast_hash": "ad5417bdea1840134a029b0edb66d057",
+    "semantic_hash": ""
+  },
+  "maps/README.md": {
+    "mtime": 1787801855.1183662,
+    "ast_hash": "5c9d2b7265667e3bf7196fe1556122c1",
+    "semantic_hash": ""
+  },
+  "models/README.md": {
+    "mtime": 1788456795.0610206,
+    "ast_hash": "b36f0c7e77c14c18de73e9b96563e312",
+    "semantic_hash": ""
+  },
+  "phases.md": {
+    "mtime": 1788456795.0645344,
+    "ast_hash": "7e1430fc94050e0445be533f23abf896",
+    "semantic_hash": ""
+  },
+  "IDR_SIH26168_Research_Brief.pdf": {
+    "mtime": 1787801855.1043675,
+    "ast_hash": "268a6bc580e78a5efba7e96e57410b97",
+    "semantic_hash": ""
+  }
+}
