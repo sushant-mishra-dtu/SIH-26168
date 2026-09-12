@@ -54,12 +54,12 @@ dependencies {
     // Compose Animation
     implementation("androidx.compose.animation:animation")
 
-    // Google Fonts for Compose
-    implementation("androidx.compose.ui:ui-text-google-fonts:1.7.6")
-
-    // OSMDroid for free map tiles (no API key required)
-    implementation("org.osmdroid:osmdroid-android:6.1.18")
-    implementation("androidx.compose.ui:ui-viewbinding")
+    // --- what is deliberately NOT here ----------------------------------------------------
+    // `ui-text-google-fonts` downloads its faces through the Play Services font provider, and
+    // `osmdroid-android` fetches raster tiles from a tile server. Both are network calls at
+    // runtime, and both were in this file. D-041 claims 100% offline and D-080 forbids the demo
+    // surface any fetch -- a judging venue's wifi is not a dependency worth having. The map is a
+    // Compose canvas over the recorded track instead; see MapView.kt.
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

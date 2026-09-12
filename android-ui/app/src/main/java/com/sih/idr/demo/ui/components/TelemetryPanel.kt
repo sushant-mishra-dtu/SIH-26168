@@ -19,7 +19,19 @@ import com.sih.idr.demo.ui.IDRColors
 import kotlin.math.roundToInt
 
 /**
- * Bottom info panel showing 3 metrics in rounded square cards, matching the screenshot style.
+ * Bottom info panel showing 3 metrics in rounded square cards.
+ *
+ * **Nothing here is computed and nothing here is invented (D-079, D-080).** Every value is a field
+ * of [TelemetryState] as the recording service reported it; the only arithmetic is m/s to km/h,
+ * which is a unit, not a quantity. Before a recording starts there is nothing to report, so the
+ * cards read "--" rather than a well-formed zero -- a zero is a reading, and this is the absence
+ * of one.
+ *
+ * The middle card was labelled **"m drift"**, which it is not. `uncertaintyM` is the demo
+ * estimator's own uncertainty figure; drift is error against a truth trajectory as a percentage of
+ * distance travelled, it is the metric PS 26168 is graded on, and this app cannot produce it --
+ * there is no truth on a phone. Labelling one as the other puts the graded metric on screen with a
+ * number that was never measured against truth behind it.
  */
 @Composable
 fun TelemetryPanel(
@@ -32,30 +44,40 @@ fun TelemetryPanel(
             .padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Card 1: Speed
+        // Card 1: Speed, as reported.
         val speedKmh = (telemetry.speedMps * 3.6f)
         MetricCard(
             modifier = Modifier.weight(1f),
-            value = if (speedKmh < 100) "%.1f".format(speedKmh) else speedKmh.roundToInt().toString(),
+            value = when {
+                !telemetry.running -> NO_READING
+                speedKmh < 100 -> "%.1f".format(speedKmh)
+                else -> speedKmh.roundToInt().toString()
+            },
             unit = "km/h"
         )
 
-        // Card 2: Drift / Uncertainty
+        // Card 2: the estimator's own uncertainty. Not drift -- see the note on this file.
         MetricCard(
             modifier = Modifier.weight(1f),
-            value = "±${telemetry.uncertaintyM.roundToInt()}",
-            unit = "m drift"
+            value = if (telemetry.running) "±${telemetry.uncertaintyM.roundToInt()}" else NO_READING,
+            unit = "m est. σ"
         )
 
         // Card 3: Satellites
-        val satValue = if (telemetry.gnssAvailable) telemetry.satellites.toString() else "0"
         MetricCard(
             modifier = Modifier.weight(1f),
-            value = satValue,
+            value = when {
+                !telemetry.running -> NO_READING
+                telemetry.gnssAvailable -> telemetry.satellites.toString()
+                else -> "0"
+            },
             unit = "Sats"
         )
     }
 }
+
+/** What a card shows when there is no recording behind it. */
+private const val NO_READING = "--"
 
 @Composable
 private fun MetricCard(
