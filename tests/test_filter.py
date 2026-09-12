@@ -28,6 +28,8 @@ from core.reference.inekf import (
     initial_covariance,
     is_stationary,
     nhc_is_valid,
+    right_invariant_from_plain,
+    skew,
 )
 
 CFG = FilterConfig()
@@ -202,16 +204,16 @@ def test_p0_velocity_is_two_gnss_fixes_differenced():
 
 
 def test_p0_roll_and_pitch_are_bounded_by_what_the_stop_detector_admits():
-    """sqrt(0.05) / 9.80665 = 0.0228 rad = 1.31 deg.
+    """sqrt(0.02) / 9.80665 = 0.0144 rad = 0.83 deg (1.31 deg at the pre-D-115 threshold of 0.05).
 
     Levelling from gravity is only as good as the residual specific force at the epoch it is done,
     and `zupt_accel_var_thresh` is exactly how much of that the stop detector still admits. The
-    *sensor* floor is 60x tighter -- 0.34 mg of accel bias instability is 0.019 deg -- and using
+    *sensor* floor is 40x tighter -- 0.34 mg of accel bias instability is 0.019 deg -- and using
     the floor would assert an alignment accuracy the detector does not guarantee.
     """
     expected = np.sqrt(CFG.zupt_accel_var_thresh) / 9.80665
     assert _sd(slice(0, 2)) == pytest.approx(expected)
-    assert np.rad2deg(expected) == pytest.approx(1.306, abs=1e-3)
+    assert np.rad2deg(expected) == pytest.approx(0.826, abs=1e-3)
     assert np.rad2deg(0.34e-3 * 9.80665 / 9.80665) == pytest.approx(0.0195, abs=1e-3)
 
 
@@ -228,11 +230,23 @@ def test_p0_yaw_is_gnss_course_over_ground_at_the_reference_speed():
     assert np.rad2deg(expected) == pytest.approx(14.556, abs=1e-3)
 
 
-def test_p0_bias_blocks_are_the_allan_runs_measured_bias_instabilities():
-    """docs/ERROR_BUDGET.md section 9.1 (D-045): gyro 42 deg/hr, accel 0.34 mg. Measured on
-    IO-VNBD's own stationary segments, on the phones that produced the graded data."""
-    assert _sd(IDX_GYRO_BIAS) == pytest.approx(42.0 * (np.pi / 180.0) / 3600.0)
-    assert _sd(IDX_GYRO_BIAS)[0] == pytest.approx(2.0362e-4, abs=1e-8)
+def test_p0_gyro_bias_block_is_the_measured_turn_on_bias_not_the_instability():
+    """D-115 supersedes the D-045 entry here. `P0` carries the uncertainty of a bias nothing has
+    estimated yet, which is the *turn-on* bias -- measured at 0.14 deg/s RMS, 0.20 deg/s worst
+    axis, over 638 s of standstill on the TRAIN stems -- and not the bias *instability* (42
+    deg/hr = 0.012 deg/s), which is how far an already-estimated bias wanders. With 42 deg/hr in
+    the block a real 0.1 deg/s bias was a nine-sigma event and every ZARU on every held-out stem
+    was rejected at its gate: 0 of 103 on Vta1a."""
+    assert _sd(IDX_GYRO_BIAS) == pytest.approx(CFG.gyro_bias_turn_on)
+    assert np.rad2deg(_sd(IDX_GYRO_BIAS)[0]) == pytest.approx(0.2)
+    assert CFG.gyro_bias_turn_on > 42.0 * (np.pi / 180.0) / 3600.0
+
+
+def test_p0_accel_bias_block_is_the_allan_runs_measured_bias_instability():
+    """docs/ERROR_BUDGET.md section 9.1 (D-045): 0.34 mg, measured on IO-VNBD's own stationary
+    segments. Still the instability rather than a turn-on figure, and D-115 records why: at a
+    standstill an accelerometer offset is confounded with the levelling derived from the same
+    sensor, so there is no clean measurement of one to put here."""
     assert _sd(IDX_ACCEL_BIAS) == pytest.approx(0.34e-3 * 9.80665)
     assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(3.3343e-3, abs=1e-7)
 
@@ -366,3 +380,122 @@ def test_a_rejected_gnss_fix_changes_absolutely_nothing():
     ):
         assert np.array_equal(before, after), "a rejected fix must not move the state at all"
     assert np.array_equal(p_before, f.P), "a rejected fix must not move the covariance either"
+
+
+# ------------------------------------------------------------------------------------------
+# D-115: the Doppler velocity update, the right-invariant prior, and the caller's override
+# ------------------------------------------------------------------------------------------
+
+
+def _aided_filter() -> InEKF:
+    """A filter mid-drive: heading north-east at 12 m/s, 200 m from the origin, with its prior
+    re-expressed in right-invariant coordinates as the harness does at alignment, then
+    propagated for two seconds so the covariance has real cross terms rather than a prior's."""
+    f = InEKF()
+    f.state.v = np.array([12.0 * np.cos(0.7), 12.0 * np.sin(0.7), 0.0])
+    f.state.p = np.array([150.0, -130.0, 2.0])
+    f.P = right_invariant_from_plain(f.P, f.state.p, f.state.v)
+    for _ in range(20):
+        f.propagate(np.array([0.0, 0.0, 0.05]), np.array([0.2, 0.0, -9.75]), 0.1)
+    return f
+
+
+def test_gnss_velocity_update_pulls_the_velocity_onto_the_measurement():
+    """`z = v_hat[:2] - v_gnss`, `H = [-v_hat^, I, 0...]` on the horizontal rows, with the same
+    subtract-the-correction retraction as every other update (D-050). A 3 m/s speed error
+    against a 0.5 m/s Doppler is corrected almost entirely -- the gain on the velocity block is
+    close to one -- and the vertical velocity, which the update does not observe, is left with
+    whatever the propagation gave it."""
+    f = _aided_filter()
+    true_v = f.state.v.copy()
+    f.state.v = true_v + np.array([2.5, -1.7, 0.0])
+    v_before = f.state.v.copy()
+    accepted = f.update_gnss_velocity(true_v[:2], np.eye(2) * 0.25)
+    assert accepted is True
+    err_before = np.linalg.norm(v_before[:2] - true_v[:2])
+    err_after = np.linalg.norm(f.state.v[:2] - true_v[:2])
+    assert err_after < 0.1 * err_before, (err_before, err_after)
+
+
+def test_gnss_velocity_update_is_ungated_by_default_and_gated_at_two_dof_on_request():
+    """Ungated by default, for D-057's reason applied to the velocity: a refused Doppler fix is
+    the first step of every runaway the aided pass has recorded (D-115). When the gate is
+    switched on it is `chi2_gate_2dof`, not the 3-DOF one: a 2-vector innovation tested against
+    the 3-DOF threshold would be 24% too permissive at 99%."""
+    assert FilterConfig().gate_gnss_velocity is False
+    f = _aided_filter()
+    assert f.update_gnss_velocity(f.state.v[:2] + np.array([200.0, 0.0]), np.eye(2) * 0.25) is True
+
+    f = _aided_filter()
+    f.cfg = dataclasses.replace(f.cfg, gate_gnss_velocity=True)
+    assert f.cfg.chi2_gate_2dof == pytest.approx(9.210)
+    p_before = f.P.copy()
+    v_before = f.state.v.copy()
+    assert f.update_gnss_velocity(f.state.v[:2] + np.array([200.0, 0.0]), np.eye(2) * 0.25) is False
+    assert np.array_equal(f.P, p_before)
+    assert np.array_equal(f.state.v, v_before)
+    with pytest.raises(ValueError):
+        f.update_gnss_velocity(np.zeros(3), np.eye(2))
+    with pytest.raises(ValueError):
+        f.update_gnss_velocity(np.zeros(2), np.eye(3))
+
+
+def test_the_caller_can_override_the_position_gate():
+    """`gate=False` applies a fix the gate would refuse. The harness uses it after three
+    consecutive rejections (`eval.run.GNSS_REJECTIONS_BEFORE_REANCHOR`), on the argument that
+    three 1% events in a row are evidence against the covariance, not against the fixes.
+
+    The fixture's prior is right-invariant-consistent, and that is not incidental: with the
+    constructor's diagonal `P0` left as it is at 200 m from the origin, the same forced fix
+    *rotates* the state by 80 degrees about the origin instead of translating it, because a
+    diagonal RI prior claims a 50 m position uncertainty is attributable to the 14.6 deg yaw
+    block. That is the failure `right_invariant_from_plain` exists to prevent."""
+    f = _aided_filter()
+    target = f.state.p + np.array([500.0, 0.0, 0.0])
+    yaw_before = f.state.yaw
+    assert f.update_gnss(target, np.eye(3) * 4.0) is False
+    assert f.update_gnss(target, np.eye(3) * 4.0, gate=False) is True
+    assert np.linalg.norm(f.state.p - target) < 0.05 * 500.0
+    assert abs(f.state.yaw - yaw_before) < np.deg2rad(5.0)
+
+
+def test_right_invariant_prior_makes_the_position_innovation_covariance_the_plain_one():
+    """A diagonal `P0` in right-invariant coordinates is not a diagonal plain prior. With
+    `xi_p = dp + p^ dtheta`, the GNSS innovation `z = xi_p - p^ dtheta` has covariance
+    `H P H^T`; re-expressed through `right_invariant_from_plain` that is exactly the plain
+    position block, and the height-to-tilt correlation that a diagonal RI prior implies at
+    500 m from the origin -- `|p| sigma_tilt`, 8.7 m at 1 deg -- is gone."""
+    cfg = FilterConfig()
+    plain = initial_covariance(cfg, yaw_sigma_rad=np.deg2rad(9.0), level_sigma_rad=np.deg2rad(1.0))
+    p = np.array([300.0, -400.0, 5.0])
+    v = np.array([10.0, 5.0, 0.0])
+    ri = right_invariant_from_plain(plain, p, v)
+
+    h = np.zeros((3, ERROR_STATE_DIM))
+    h[:, IDX_ATTITUDE] = -skew(p)
+    h[:, IDX_POSITION] = np.eye(3)
+    assert np.allclose(h @ ri @ h.T, plain[IDX_POSITION, IDX_POSITION])
+
+    hv = np.zeros((3, ERROR_STATE_DIM))
+    hv[:, IDX_ATTITUDE] = -skew(v)
+    hv[:, IDX_VELOCITY] = np.eye(3)
+    assert np.allclose(hv @ ri @ hv.T, plain[IDX_VELOCITY, IDX_VELOCITY])
+
+    # Left diagonal, the same innovation covariance carries |p|^2 sigma^2 of attitude leakage.
+    assert h @ plain @ h.T[:, :] is not None
+    leaked = np.diag(h @ plain @ h.T) - np.diag(plain[IDX_POSITION, IDX_POSITION])
+    assert leaked.max() > (500.0 * np.deg2rad(1.0)) ** 2
+
+    assert np.allclose(ri, ri.T)
+    assert np.all(np.linalg.eigvalsh(ri) > 0)
+    assert np.array_equal(plain, initial_covariance(
+        cfg, yaw_sigma_rad=np.deg2rad(9.0), level_sigma_rad=np.deg2rad(1.0)
+    )), "the input must not be modified"
+
+
+def test_right_invariant_prior_is_the_identity_map_at_the_origin_at_rest():
+    plain = initial_covariance(FilterConfig())
+    assert np.array_equal(right_invariant_from_plain(plain, np.zeros(3), np.zeros(3)), plain)
+    with pytest.raises(ValueError):
+        right_invariant_from_plain(np.eye(4), np.zeros(3), np.zeros(3))
+

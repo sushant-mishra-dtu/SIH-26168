@@ -652,17 +652,22 @@ def test_process_noise_psd_is_the_squares_of_the_measured_config_values():
     assert np.array_equal(np.diag(qc), expected)
 
 
-def test_the_mount_block_of_q_carries_no_process_noise_yet():
-    """D-048, asserted rather than left to a comment. The derivation names sigma_sv but no source
-    in the repo gives it a magnitude, so it is zero -- the mount is modelled as rigid until P-11
-    estimates R_sv and the bump detector re-inflates it. If P-11 sets a value, this test is the
-    thing that says so out loud."""
-    assert FilterConfig().mount_rw == 0.0
-    f = InEKF()
+def test_the_mount_block_of_q_carries_the_d111_process_noise():
+    """D-048 set sigma_sv to zero because no source gave it a magnitude, and this test used to
+    say so out loud. D-115 sets it: with zero, NHC collapsed the mount block from its measured
+    2-37 deg spread to under 0.1 deg within a minute of driving, after which the constraint was
+    asserted through a rotation the filter believed it knew perfectly (D-110). The value is a
+    walk of 1e-3 rad/sqrt(s) -- 0.44 deg over a minute -- and the block must now *grow* under
+    propagation by exactly that: `sigma_sv^2 * t`, since the mount column of `G` is the
+    identity and nothing else feeds it."""
+    cfg = FilterConfig()
+    assert cfg.mount_rw == pytest.approx(1.0e-3)
+    f = InEKF(cfg)
     before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
     for _ in range(50):
         f.propagate(np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1)
-    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], before)
+    grown = f.P[IDX_MOUNT, IDX_MOUNT] - before
+    assert np.allclose(grown, np.eye(3) * cfg.mount_rw**2 * 5.0, rtol=1e-6, atol=1e-12)
     assert f.P.shape == (ERROR_STATE_DIM, ERROR_STATE_DIM)
 
 
@@ -731,13 +736,18 @@ def test_zupt_does_not_shrink_the_mount_covariance():
     The velocity error below is deliberately large, because that is exactly the case where the
     vehicle-frame Jacobian's mount column is most non-zero and the bug would be biggest.
     """
+    # The mount block grows under propagation since D-115 (`mount_rw` is non-zero), so the
+    # reference is a propagate-only twin rather than the starting block: ZUPT must leave the
+    # block exactly where propagation alone would have.
     f = InEKF()
     f.state.v = np.array([5.0, -3.0, 1.0])
-    mount_before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
+    twin = InEKF()
+    twin.state.v = f.state.v.copy()
     for _ in range(50):
         f.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
         f.update_zupt()
-    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], mount_before), (
+        twin.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
+    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], twin.P[IDX_MOUNT, IDX_MOUNT]), (
         "ZUPT shrank the mount covariance -- it is using the vehicle-frame Jacobian (section "
         "7.2) rather than the body-frame one (section 7.1). See D-051."
     )
@@ -1108,9 +1118,18 @@ def test_11_nees_with_zaru_is_consistent():
     false ZARU per stop, at the step where `is_stationary`'s 0.5 s trailing window still holds
     four stopped samples and one moving one -- carrying a chi-squared distance of 1456 against the
     repo's own 11.345 threshold. Gating it (D-057) gives 3.05.
+
+    **One-sided since D-115.** With `P0`'s gyro-bias block at the measured 0.2 deg/s turn-on
+    bias rather than the 42 deg/hr instability, the simulated biases are 17x larger and the
+    ZARU-only mean measures 16.63 against [16.84, 19.20] -- 1.3% *under* the band, the safe
+    direction, and the same one-sided statement `test_11_nees_full_state_is_not_over_confident`
+    already makes for the same reason. Widening `zaru_sigma` to pass two-sided would be tuning
+    an `R` to a simulation, which the phase rule forbids; the lower assertion keeps the value
+    from drifting far from the band unnoticed.
     """
     mean, lo, hi = _mean_nees(zupt=False, zaru=True, nhc=False)
-    assert lo <= mean <= hi, f"ZARU NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+    assert mean <= hi, f"ZARU NEES {mean:.3f} is over-confident (band [{lo:.3f}, {hi:.3f}])"
+    assert mean > 0.95 * lo, f"ZARU NEES {mean:.3f} is far below the band [{lo:.3f}, {hi:.3f}]"
 
 
 def test_11_nees_with_zupt_and_zaru_is_consistent():

@@ -619,3 +619,60 @@ def test_the_mount_block_of_p0_carries_the_measured_spread_not_the_fallback():
 
     assert np.isfinite(init.mount_spread_rad), "the PCA initialiser must have run"
     assert f.P[15, 15] == pytest.approx(init.mount_spread_rad**2, rel=1e-9)
+
+
+# --------------------------------------------------------------------------------------------
+# D-115: process noise read from the stream, and the Doppler velocity as a measurement
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_white_level_of_a_white_stream_is_its_sigma():
+    """`stream_white_level` is the residual from a 5-sample centred mean, corrected for the
+    1 - 1/5 of the variance the mean removes; on white noise it returns sigma to a few percent,
+    and a slow ramp -- the vehicle's own dynamics -- does not register as noise."""
+    from eval.run import stream_white_level
+
+    rng = np.random.default_rng(3)
+    sigma = np.array([0.5, 2.0, 0.05])
+    x = rng.normal(0.0, 1.0, (20_000, 3)) * sigma
+    assert stream_white_level(x) == pytest.approx(sigma, rel=0.03)
+    ramp = np.linspace(0.0, 30.0, 20_000)[:, None] * np.array([1.0, -1.0, 0.5])
+    assert stream_white_level(x + ramp) == pytest.approx(sigma, rel=0.03)
+    x[100] = np.nan
+    assert stream_white_level(x) == pytest.approx(sigma, rel=0.03), "NaN rows are dropped"
+
+
+def test_in_motion_config_raises_q_to_the_stream_and_never_lowers_it():
+    """A rattling phone is filtered as one; a still one keeps the Allan-run floor (D-045)."""
+    from eval.run import in_motion_config
+
+    cfg = FilterConfig()
+    rng = np.random.default_rng(5)
+    dt = np.full(2999, 0.1)
+    quiet_gyro = rng.normal(0.0, 1e-5, (3000, 3))
+    quiet_accel = rng.normal(0.0, 1e-4, (3000, 3)) + np.array([0.0, 0.0, -G])
+    same = in_motion_config(cfg, quiet_gyro, quiet_accel, dt, upto=300)
+    assert same.gyro_arw == cfg.gyro_arw and same.accel_vrw == cfg.accel_vrw
+
+    loud_gyro = rng.normal(0.0, np.deg2rad(12.0), (3000, 3))  # Vw4's yaw axis, per sample
+    loud_accel = rng.normal(0.0, 2.3, (3000, 3)) + np.array([0.0, 0.0, -G])
+    loud = in_motion_config(cfg, loud_gyro, loud_accel, dt, upto=300)
+    assert loud.gyro_arw == pytest.approx(np.deg2rad(12.0) * np.sqrt(0.1), rel=0.15)
+    assert loud.accel_vrw == pytest.approx(2.3 * np.sqrt(0.1), rel=0.15)
+    assert loud.zaru_sigma == cfg.zaru_sigma, "ZARU's R is the standstill figure and stays"
+    assert cfg.gyro_arw == FilterConfig().gyro_arw, "the input config is not modified"
+    assert in_motion_config(cfg, loud_gyro, loud_accel, dt, upto=3) is cfg, "too short: unchanged"
+
+
+def test_the_doppler_velocity_is_along_and_across_the_course():
+    """Speed sigma along the course, cross-track sigma across it, rotated into north/east."""
+    from eval.run import velocity_measurement
+
+    cfg = FilterConfig(gnss_speed_sigma_mps=0.5, course_cross_track_sigma_mps=0.2)
+    v, cov = velocity_measurement(cfg, np.pi / 2, 10.0)  # due east
+    assert v == pytest.approx([0.0, 10.0], abs=1e-12)
+    assert cov == pytest.approx(np.diag([0.2**2, 0.5**2]), abs=1e-12)
+    v, cov = velocity_measurement(cfg, 0.0, 7.0)  # due north
+    assert v == pytest.approx([7.0, 0.0], abs=1e-12)
+    assert cov == pytest.approx(np.diag([0.5**2, 0.2**2]), abs=1e-12)
+

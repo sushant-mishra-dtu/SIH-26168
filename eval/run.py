@@ -11,6 +11,17 @@ Three trajectories are produced per outage window and scored through the same me
     strapdown        the naive strapdown baseline (eval/baselines.py)
     gnss_available   the zero-order-hold GNSS baseline, the Gate 1 denominator
 
+**Every window is entered aided.** The filter makes one GNSS-aided pass over the sequence, its
+state is snapshotted at the first sample of every window, and each window is dead-reckoned from
+its own snapshot with the GNSS update never called. That is exactly one filter pass per window
+with GNSS open everywhere except inside that window -- the outage the protocol describes, with a
+re-acquisition on the far side of it (docs/EVALUATION.md section 3 and section 6) -- at the cost
+of two passes rather than one per window. Until D-115 the harness masked *every* window of a
+length in a single pass, which left GNSS closed from the end of warmup to the end of the
+recording: the filter entered its second window having been unaided for the whole of the first,
+its tenth having been unaided for nine, while the strapdown baseline was re-initialised from
+truth at each. The 19.4x Gate 1 ratio in D-110 was measured under that mask.
+
 **Gate 1 is the ratio of the first to the third, on median drift-%, at 60 s. The gate is 3-5x.**
 It is reported here as a measured number and it is not this file's job to decide whether it passed.
 """
@@ -18,21 +29,27 @@ It is reported here as a measured number and it is not this file's job to decide
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 
 from core.reference.inekf import (
+    UNALIGNED_YAW_SIGMA_RAD,
     FilterConfig,
     InEKF,
+    MountInit,
+    NavState,
     initial_covariance,
     is_stationary,
+    mount_yaw_from_dynamics,
     nhc_is_valid,
     pca_mount_yaw,
+    right_invariant_from_plain,
 )
 from eval.baselines import (
     MIN_HEADING_DISPLACEMENT_M,
@@ -63,7 +80,6 @@ from eval.outages.inject import (
     Outage,
     assert_non_overlapping,
     generate_sweep,
-    mask_gnss,
 )
 from eval.splits import (
     LONG_OUTAGE,
@@ -225,7 +241,8 @@ def fix_arrays(
 
     `sigma_m` is the receiver's own reported `gps_accuracy_m` where the file carries it, so the
     covariance the gate reads is the phone's own statement about the fix rather than a constant.
-    Where it is absent the config default stands.
+    Where it is absent the config default stands. It is a *horizontal* accuracy; the vertical is
+    `GNSS_VERTICAL_SIGMA_RATIO` times it (see there), and `fix_covariance` builds the 3x3.
     """
     gnss = seq.gnss
     idx = gnss["sample_idx"].to_numpy(dtype=int)
@@ -249,9 +266,156 @@ def fix_arrays(
     return idx, ned, sigma
 
 
+#: GNSS altitude is worse than the horizontal fix by about this factor on a phone receiver, and
+#: `gps_accuracy_m` is the horizontal figure. It matters here for a reason specific to the
+#: right-invariant filter: `H_gnss = [-p^, 0, I]` couples the *down* innovation to roll and pitch
+#: through the lever arm, so an altitude trusted to 3 m tells the filter its tilt to 0.3 deg
+#: after one fix -- measured on S3a -- when the levelling it started from was good to 2 deg. A
+#: tilt the filter believes it knows is a tilt it will not correct, and 2 deg is 0.3 m/s^2 of
+#: gravity in the horizontal (D-115). 3 is the ratio the receiver literature gives for VDOP over
+#: HDOP in the open; it is stated, not measured on this dataset, which carries no vertical truth.
+GNSS_VERTICAL_SIGMA_RATIO = 3.0
+
+
+def fix_covariance(sigma_m: float) -> np.ndarray:
+    """3x3 fix covariance from the receiver's horizontal accuracy."""
+    s2 = float(sigma_m) ** 2
+    return np.diag([s2, s2, (GNSS_VERTICAL_SIGMA_RATIO**2) * s2])
+
+
+def fix_course_arrays(seq: Sequence) -> tuple[np.ndarray, np.ndarray] | None:
+    """`(course_rad, speed_mps)` per distinct fix, or None when the stream carries neither.
+
+    `gps_orientation_deg` is the receiver's Doppler course over ground, degrees clockwise from
+    north, and `gps_speed_mps` its speed (D-102). They are the heading the phone actually has:
+    a fix-to-fix chord at the measured 9 s cadence turns through whatever the road did in those
+    nine seconds, and against the paired `V-` course its p90 error is 18-38 deg on the 9 s stems
+    where the receiver's own course is under 2 deg (D-115). Entries the file leaves non-finite
+    stay NaN, and the caller must check both the value and the speed threshold before reading a
+    course, because a stationary receiver reports its last one.
+    """
+    gnss = seq.gnss
+    if "gps_orientation_deg" not in gnss.columns or "gps_speed_mps" not in gnss.columns:
+        return None
+    course = np.deg2rad(gnss["gps_orientation_deg"].to_numpy(dtype=float))
+    speed = gnss["gps_speed_mps"].to_numpy(dtype=float)
+    return wrap_to_pi(course), speed
+
+
+def course_sigma_rad(cfg: FilterConfig, speed_mps: float) -> float:
+    """1-sigma heading accuracy of the receiver's course at this speed.
+
+    A Doppler course is a velocity direction, so its angular error is a cross-track velocity
+    error over the speed: `atan(sigma_ct / v)`. `FilterConfig.course_cross_track_sigma_mps`
+    records where the 0.5 m/s came from and what it reproduces.
+    """
+    return float(np.arctan2(cfg.course_cross_track_sigma_mps, max(float(speed_mps), 1e-6)))
+
+
+def velocity_measurement(
+    cfg: FilterConfig, course_rad: float, speed_mps: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """The receiver's Doppler course and speed as a horizontal NED velocity with its 2x2
+    covariance: `gnss_speed_sigma_mps` along the course, `course_cross_track_sigma_mps` across
+    it, rotated into north/east. Both sigmas are measured against the paired `V-` track
+    (`FilterConfig`, D-115).
+
+    Why a velocity update at all, when the protocol's aiding is the position fix: ten of the
+    twelve held-out stems carry GNSS at 9 s, and over 9 s a phone's tilt error, its accelerometer
+    offset and its heading error all reach the position through the same double integral. The
+    filter cannot tell them apart from position alone, and with a 0.2 deg/s turn-on prior the
+    gyro bias is the explanation it prefers -- on S3a a single 13 m innovation moved `b_g` by
+    0.25 deg/s, the wrong bias tilted the attitude a further 2 deg by the next fix, and the run
+    left physical bounds at 59 s *with every fix available*. One Doppler velocity per fix pins
+    speed and heading directly; the same run then holds to 0.8-11 m for six minutes.
+    """
+    c, s = np.cos(course_rad), np.sin(course_rad)
+    rot = np.array([[c, -s], [s, c]])  # (along, cross) -> (north, east)
+    cov = rot @ np.diag([cfg.gnss_speed_sigma_mps**2, cfg.course_cross_track_sigma_mps**2]) @ rot.T
+    return np.array([speed_mps * c, speed_mps * s]), cov
+
+
+#: `in_motion_config` reads the white level of each stream as its residual from a centred
+#: moving average this many samples wide -- 0.5 s at 10 Hz, above which the vehicle's own
+#: rigid-body motion lives and below which what is left is vibration, aliased or not, that the
+#: integration cannot tell from noise.
+NOISE_SMOOTH_SAMPLES = 5
+
+
+def stream_white_level(x: np.ndarray, smooth: int = NOISE_SMOOTH_SAMPLES) -> np.ndarray:
+    """Per-axis per-sample white noise sigma of an (n, 3) stream: the standard deviation of its
+    residual from a `smooth`-sample centred moving average, corrected for the `1 - 1/smooth` of
+    a white process's variance that the average removes. NaN rows are dropped."""
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x).all(axis=1)]
+    if x.shape[0] < smooth + 2:
+        return np.zeros(3)
+    kernel = np.ones(smooth)
+    count = np.convolve(np.ones(x.shape[0]), kernel, mode="same")
+    residual = x - np.column_stack(
+        [np.convolve(x[:, i], kernel, mode="same") / count for i in range(3)]
+    )
+    return np.sqrt(np.var(residual, axis=0) / (1.0 - 1.0 / smooth))
+
+
+def in_motion_config(
+    cfg: FilterConfig, gyro: np.ndarray, accel: np.ndarray, dt: np.ndarray, *, upto: int
+) -> FilterConfig:
+    """`cfg` with `gyro_arw` and `accel_vrw` raised to the white level the stream actually
+    carries over its first `upto` samples, never lowered below the Allan-run defaults.
+
+    The D-045 process noise is a stationary phone's floor: 1.41 deg/sqrt(hr), 0.074 deg/s per
+    10 Hz sample. Measured in motion against the paired `V-` truth (D-115), the same phone's
+    tilt random-walks at about 0.5 deg/sqrt(s) on S3a -- 3.7 deg over 60 s, 20x the Allan
+    figure in sigma -- and its 10 Hz gyro carries a per-sample white level of 1.7-1.9 deg/s.
+    On the Vta/Vw stems the level is 4-20 deg/s and the heading random-walks 20-45 deg per
+    60 s. A `Q` twenty to two hundred times too small in variance is why the filter believed its
+    tilt to 0.3 deg after a minute of driving and could not re-level from either the
+    accelerometer or the fixes (D-110's "process noise under-predicts by about 100x").
+
+    Read from the warmup, causally, on the stream itself -- the same window the mount and the
+    levelling come from -- so that a recording whose phone rattles is filtered as one, and one
+    that sits still is not made to carry its noise. The worst axis is taken, as the Allan run
+    did. It is an overestimate of the *random walk* where part of the high-frequency energy is
+    bounded rattling rather than white noise -- by about 1.4x on S3a and 2x on Vta1a against the
+    end-to-end heading drift -- which is the conservative direction, and the one D-045 chose.
+    """
+    upto = max(0, min(int(upto), gyro.shape[0]))
+    if upto < NOISE_SMOOTH_SAMPLES + 2:
+        return cfg
+    step = float(np.median(dt[: max(1, upto - 1)]))
+    if not np.isfinite(step) or step <= 0:
+        return cfg
+    sigma_g = float(np.max(stream_white_level(gyro[:upto])))
+    sigma_a = float(np.max(stream_white_level(accel[:upto])))
+    return replace(
+        cfg,
+        gyro_arw=max(cfg.gyro_arw, sigma_g * np.sqrt(step)),
+        accel_vrw=max(cfg.accel_vrw, sigma_a * np.sqrt(step)),
+    )
+
+
+def vehicle_yaw(state: NavState) -> float:
+    """Heading of the *vehicle's* forward axis in NED, which is what a GNSS course measures.
+
+    `state.R` is phone->NED and `state.R_sv` phone->vehicle, so vehicle->NED is `R @ R_sv.T`
+    and its yaw is the course. `state.yaw` is the phone's, which differs by the mount angle.
+    """
+    r_vn = state.R @ state.R_sv.T
+    return float(np.arctan2(r_vn[1, 0], r_vn[0, 0]))
+
+
 # --------------------------------------------------------------------------------------------
 # The filter run -- one pass per sequence per outage length
 # --------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Snapshot:
+    """The aided filter at the top of a sample, with whether it had aligned by then."""
+
+    filter: InEKF
+    aligned: bool
 
 
 @dataclass
@@ -270,6 +434,47 @@ class FilterRun:
     #: How the filter was started (D-094), or None when `run_filter` was called without a
     #: `Sequence` -- which only the unit tests do, on fixtures where `R_sv = I` is correct.
     init: FilterInit | None = None
+    #: The Doppler velocity update (`InEKF.update_gnss_velocity`), offered at every open fix
+    #: that carries a course and is moving; zero on streams without a course column.
+    n_gnss_velocity_applied: int = 0
+    n_gnss_velocity_rejected: int = 0
+    #: Position fixes applied with the gate overridden after `GNSS_REJECTIONS_BEFORE_REANCHOR`
+    #: consecutive rejections. Counted within `n_gnss_applied` as well; this says how many of
+    #: those were re-anchors rather than ordinary accepted fixes.
+    n_gnss_reanchored: int = 0
+    #: The process noise the pass actually ran with -- `in_motion_config` measured on the
+    #: warmup -- so a number can be read next to the stem it came from.
+    gyro_arw_used: float = float("nan")
+    accel_vrw_used: float = float("nan")
+
+    def aided_pass_summary(self) -> dict[str, object]:
+        """What the aided pass did, for `summary.json`: how it aligned, what it was fed, and
+        how many of each update it applied -- the numbers every D-115 claim rests on."""
+        init = self.init
+        return {
+            "aligned_at_sample": self.aligned_at_sample,
+            "heading_source": None if init is None else init.heading_source,
+            "mount_source": None if init is None else init.mount_source,
+            "mount_yaw_deg": None if init is None else float(np.degrees(init.mount_yaw_rad)),
+            "mount_spread_deg": None if init is None else float(np.degrees(init.mount_spread_rad)),
+            "gyro_arw_used": self.gyro_arw_used,
+            "accel_vrw_used": self.accel_vrw_used,
+            "n_gnss_applied": self.n_gnss_applied,
+            "n_gnss_rejected": self.n_gnss_rejected,
+            "n_gnss_reanchored": self.n_gnss_reanchored,
+            "n_gnss_velocity_applied": self.n_gnss_velocity_applied,
+            "n_gnss_velocity_rejected": self.n_gnss_velocity_rejected,
+            "n_zupt": self.n_zupt,
+            "n_zaru_applied": self.n_zaru_applied,
+            "n_zaru_rejected": self.n_zaru_rejected,
+            "n_nhc": self.n_nhc,
+        }
+    #: The filter, copied whole, at the top of each sample index in `snapshot_at` -- the aided
+    #: state a window starting there is dead-reckoned from (`replay_window`).
+    snapshots: dict[int, Snapshot] = field(default_factory=dict)
+    #: Sample at which `align_heading` ran, or None if the heading was aligned from the outset
+    #: (or never could be: no course column, or the vehicle never moved with GNSS open).
+    aligned_at_sample: int | None = None
 
 
 def run_filter(
@@ -283,14 +488,20 @@ def run_filter(
     *,
     cfg: FilterConfig | None = None,
     seq: Sequence | None = None,
+    snapshot_at: set[int] | None = None,
 ) -> FilterRun:
     """Drive the InEKF across one whole sequence, applying GNSS only where `gnss_open` is True.
 
     **There is no outage branch here, and that absence is the architectural claim.** During an
-    injected outage the GNSS update is simply not called, exactly as `mask_gnss` describes; nothing
-    switches mode, nothing re-initialises, and re-acquisition is an ordinary gated update. A
-    rejected fix (multipath on tunnel exit) takes the same path as a masked one -- see D-001 and
-    `InEKF.update_gnss`.
+    injected outage the GNSS updates are simply not called; nothing switches mode, nothing
+    re-initialises, and re-acquisition is an ordinary gated update. A rejected fix (multipath on
+    tunnel exit) takes the same path as a masked one -- see D-001 and `InEKF.update_gnss`. The
+    one exception is deliberate and counted: a fix rejected `GNSS_REJECTIONS_BEFORE_REANCHOR`
+    times running is applied, because that many rejections is evidence against the covariance
+    and not against the fixes (D-115).
+
+    Two GNSS updates per open fix: the position, gated, and the receiver's Doppler velocity,
+    ungated -- `velocity_measurement` and `FilterConfig.gate_gnss_velocity` say why each.
 
     Gating is the caller's job, per the filter's own contract: `is_stationary` and `nhc_is_valid`
     read the raw IMU stream, which is not a property of the state. ZUPT and ZARU are **offered
@@ -298,62 +509,79 @@ def run_filter(
     is counted separately so a run can be read for how often that happens.
     """
     cfg = cfg or FilterConfig()
-    f = InEKF(cfg)
     n = gyro.shape[0]
+    if seq is not None:
+        cfg = in_motion_config(cfg, gyro, accel, dt, upto=min(n, WARMUP_S * SAMPLE_RATE_HZ))
+    f = InEKF(cfg)
 
     # **Before the first propagate, not after it.** See `initialise_filter`: starting from
     # R = R_sv = I integrates gravity into the horizontal axes and the run diverges (D-094).
-    init = None if seq is None else initialise_filter(f, seq, accel, fix_idx, fix_ned)
+    init = None if seq is None else initialise_filter(
+        f, seq, accel, fix_idx, fix_ned, gyro=gyro
+    )
+    aligned = init is None or init.heading_aligned
+    aligned_at: int | None = None
+    course = None if seq is None else fix_course_arrays(seq)
 
     fix_at = {int(i): k for k, i in enumerate(fix_idx)}
     window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
+    snapshot_at = set() if snapshot_at is None else set(int(i) for i in snapshot_at)
+    snapshots: dict[int, InEKF] = {}
 
     pos = np.zeros((n, 2))
     yaw = np.zeros(n)
     pvar = np.zeros((n, 2))
-    counts = dict(gnss_ok=0, gnss_no=0, zupt=0, zaru_ok=0, zaru_no=0, nhc=0)
+    counts = dict(
+        gnss_ok=0, gnss_no=0, zupt=0, zaru_ok=0, zaru_no=0, nhc=0, vel_ok=0, vel_no=0, reanchor=0
+    )
+    rejected_run = 0
 
     for k in range(n):
-        if k > 0:
-            f.propagate(gyro[k], accel[k], float(dt[k - 1]))
-            speed = float(np.linalg.norm(f.state.v))
-            if (
-                not np.isfinite(speed)
-                or not np.isfinite(f.state.p).all()
-                or speed > DIVERGENCE_SPEED_MPS
-            ):
-                raise FilterDivergedError(
-                    f"{seq.name if seq is not None else '<unnamed>'}: filter state left physical "
-                    f"bounds at sample {k} ({k / SAMPLE_RATE_HZ:.1f} s into this pass) -- "
-                    f"|v| = {speed:.3g} m/s (limit {DIVERGENCE_SPEED_MPS:g}), p = {f.state.p}. "
-                    "GNSS is not correcting the state (see D-094); nothing downstream of this "
-                    "sample is a navigation solution."
-                )
+        if k in snapshot_at:
+            # The state a window opening at `k` starts from: everything up to and including
+            # sample k-1 applied, sample k not yet propagated. `replay_window` takes it from here.
+            snapshots[k] = Snapshot(filter=copy.deepcopy(f), aligned=aligned)
 
-        lo = max(0, k - window + 1)
-        if k + 1 >= window and is_stationary(accel[lo : k + 1], gyro[lo : k + 1], cfg):
-            f.update_zupt()
-            counts["zupt"] += 1
-            if f.update_zaru(gyro[k]):
-                counts["zaru_ok"] += 1
-            else:
-                counts["zaru_no"] += 1
-        elif nhc_is_valid(
-            float(np.linalg.norm(f.state.v)),
-            float(gyro[k][2] - f.state.b_g[2]),
-            float(accel[k][1] - f.state.b_a[1]),
-            cfg,
-        ):
-            f.update_nhc()
-            counts["nhc"] += 1
+        # **Before alignment the filter is not running.** It has no heading and no mount, so
+        # there is nothing to integrate the accelerometer through; it holds the last open fix
+        # and waits (D-115). Propagating anyway integrated gravity through an unknown yaw and
+        # took S3a to 3.5 km from its fix before the alignment window had filled.
+        if aligned and k > 0:
+            f.propagate(gyro[k], accel[k], float(dt[k - 1]))
+            _check_physical(f, k, seq.name if seq is not None else "<unnamed>", "this pass")
+        if aligned:
+            _step_constraints(f, k, gyro, accel, cfg, window, counts)
 
         j = fix_at.get(k)
         if j is not None and gnss_open[k]:
-            cov = np.eye(3) * float(fix_sigma[j]) ** 2
-            if f.update_gnss(fix_ned[j], cov):
-                counts["gnss_ok"] += 1
+            if aligned:
+                cov = fix_covariance(fix_sigma[j])
+                force = rejected_run + 1 >= GNSS_REJECTIONS_BEFORE_REANCHOR
+                if f.update_gnss(fix_ned[j], cov, gate=not force):
+                    counts["gnss_ok"] += 1
+                    counts["reanchor"] += int(force)
+                    rejected_run = 0
+                else:
+                    counts["gnss_no"] += 1
+                    rejected_run += 1
+                # The receiver's own velocity, at the same epoch and the same availability as
+                # its position -- see `velocity_measurement` for why the position alone was
+                # not enough to keep the filter on the road at a 9 s cadence.
+                if course is not None:
+                    c, v = float(course[0][j]), float(course[1][j])
+                    if np.isfinite(c) and np.isfinite(v) and v >= cfg.course_min_speed_mps:
+                        v_ne, r_ne = velocity_measurement(cfg, c, v)
+                        if f.update_gnss_velocity(v_ne, r_ne):
+                            counts["vel_ok"] += 1
+                        else:
+                            counts["vel_no"] += 1
             else:
-                counts["gnss_no"] += 1
+                f.state.p = np.asarray(fix_ned[j], dtype=float).copy()
+                if course is not None:
+                    c, v = float(course[0][j]), float(course[1][j])
+                    if np.isfinite(c) and np.isfinite(v) and v >= cfg.course_min_speed_mps:
+                        if attempt_alignment(f, seq, gyro, accel, fix_idx, k, c, v):
+                            aligned, aligned_at = True, k
 
         pos[k] = f.state.p[:2]
         yaw[k] = f.state.yaw
@@ -370,6 +598,162 @@ def run_filter(
         n_zaru_applied=counts["zaru_ok"],
         n_zaru_rejected=counts["zaru_no"],
         n_nhc=counts["nhc"],
+        snapshots=snapshots,
+        aligned_at_sample=aligned_at,
+        n_gnss_velocity_applied=counts["vel_ok"],
+        n_gnss_velocity_rejected=counts["vel_no"],
+        n_gnss_reanchored=counts["reanchor"],
+        gyro_arw_used=cfg.gyro_arw,
+        accel_vrw_used=cfg.accel_vrw,
+    )
+
+
+def _check_physical(f: InEKF, k: int, name: str, where: str) -> None:
+    speed = float(np.linalg.norm(f.state.v))
+    if not np.isfinite(speed) or not np.isfinite(f.state.p).all() or speed > DIVERGENCE_SPEED_MPS:
+        raise FilterDivergedError(
+            f"{name}: filter state left physical bounds at sample {k} "
+            f"({k / SAMPLE_RATE_HZ:.1f} s into {where}) -- |v| = {speed:.3g} m/s "
+            f"(limit {DIVERGENCE_SPEED_MPS:g}), p = {f.state.p}. Nothing downstream of this "
+            "sample is a navigation solution."
+        )
+
+
+#: A position fix rejected at the chi-squared gate is applied anyway when it is the N-th
+#: consecutive rejection. The gate exists for the single multipath fix on tunnel exit; under
+#: the filter's own model a rejection is a 1% event and three in a row are a 1e-6 one, so a
+#: run of them is evidence that the *model* is wrong -- a tilt excursion the covariance did not
+#: carry, a receiver whose reported accuracy is a third of its error (S3c: 21% of fixes beyond
+#: 3 sigma of `gps_accuracy_m`) -- and not that three fixes were. Without this the position
+#: block never re-admits a fix once it has drifted past the gate, because the velocity updates
+#: keep the velocity right and `P_pp` grows at (0.5 m/s x 9 s)^2 per fix: S3a spent 100 of
+#: 254 fixes locked out at 200-800 m with a 3 m fix in hand (D-115). Counted and reported as
+#: `n_gnss_reanchored`; a stem that needs many of them is a stem whose aided pass is not
+#: tracking, and the number says so.
+GNSS_REJECTIONS_BEFORE_REANCHOR = 3
+
+#: See `_step_constraints`: a detected stop is refused when the filter's own speed exceeds both
+#: of these -- an absolute floor, and this many sigma of its velocity block.
+ZUPT_VETO_MIN_SPEED_MPS = 1.0
+ZUPT_VETO_NSIGMA = 3.0
+
+
+def _step_constraints(
+    f: InEKF, k: int, gyro: np.ndarray, accel: np.ndarray, cfg: FilterConfig, window: int,
+    counts: dict[str, int],
+) -> None:
+    """ZUPT+ZARU at a detected stop, else NHC where it is valid -- the same step for the aided
+    pass and for every window replayed from it, so the two cannot drift apart.
+
+    `nhc_is_valid` wants the *vehicle's* yaw rate and lateral acceleration. The raw sample is in
+    the phone frame, and a phone yawed 90 deg in its cradle has the vehicle's forward
+    acceleration on its own y axis -- so the gate used to read braking as cornering and
+    cornering as nothing on every stem whose mount is not near zero (D-115). `R_sv` takes both
+    into the vehicle frame first.
+    """
+    lo = max(0, k - window + 1)
+    st = f.state
+    if k + 1 >= window and is_stationary(accel[lo : k + 1], gyro[lo : k + 1], cfg):
+        # **A steady cruise looks stationary to an IMU.** `is_stationary` reads accelerometer
+        # variance and gyro magnitude, and a quiet phone at a constant 3.5 m/s on a smooth road
+        # is under both thresholds -- S3a, 2 s in, on the first run this harness made with a
+        # working alignment. A ZUPT there is not a small error: it sets the velocity to zero at
+        # sigma 0.02 m/s and the filter rebuilds its speed from the accelerometer alone, 3 m/s
+        # behind, until nothing passes the gate. The filter's own state is the one thing that
+        # can refute the detector: a stop is vetoed when the estimated speed is more than
+        # `ZUPT_VETO_MIN_SPEED_MPS` *and* more than three sigma from zero. Early, when the
+        # velocity is worth 0.5 m/s, that vetoes anything over 1.5 m/s; deep into an outage,
+        # when the velocity block has grown, it vetoes only what the filter is sure of, so a real
+        # stop the dead-reckoned speed has drifted 2 m/s from still gets its ZUPT (D-115).
+        speed = float(np.linalg.norm(st.v))
+        sigma_v = float(np.sqrt(np.max(np.linalg.eigvalsh(f.P[3:6, 3:6]))))
+        if speed > ZUPT_VETO_MIN_SPEED_MPS and speed > ZUPT_VETO_NSIGMA * sigma_v:
+            counts["zupt_vetoed"] = counts.get("zupt_vetoed", 0) + 1
+            return
+        f.update_zupt()
+        counts["zupt"] += 1
+        if f.update_zaru(gyro[k]):
+            counts["zaru_ok"] += 1
+        else:
+            counts["zaru_no"] += 1
+        return
+    omega_veh = st.R_sv @ (gyro[k] - st.b_g)
+    accel_veh = st.R_sv @ (accel[k] - st.b_a)
+    if nhc_is_valid(
+        float(np.linalg.norm(st.v)), float(omega_veh[2]), float(accel_veh[1]), cfg
+    ):
+        f.update_nhc()
+        counts["nhc"] += 1
+
+
+@dataclass
+class WindowRun:
+    """One outage window, dead-reckoned from the aided state at its first sample.
+
+    Row `i` of each array is sample `start_idx + i`; there are `n_samples + 1` rows, the last
+    being the sample at which the outage ends and the window's final epoch is read.
+    """
+
+    start_idx: int
+    position_ned: np.ndarray  # (n_samples + 1, 2)
+    yaw_rad: np.ndarray  # (n_samples + 1,)
+    position_var: np.ndarray  # (n_samples + 1, 2)
+    n_zupt: int
+    n_zaru_applied: int
+    n_zaru_rejected: int
+    n_nhc: int
+    #: Whether the filter had aligned -- levelled, mount resolved, heading set -- when this
+    #: window opened. A window from an unaligned snapshot is scored like any other and is
+    #: exactly what a phone that had not yet moved would have produced; the flag travels to
+    #: `windows.csv` so the count can be read.
+    aligned: bool = True
+
+
+def replay_window(
+    snapshot: Snapshot, gyro: np.ndarray, accel: np.ndarray, dt: np.ndarray, outage: Outage,
+    *, name: str = "<unnamed>",
+) -> WindowRun:
+    """Dead-reckon one window from the aided filter state at its first sample.
+
+    The GNSS update is never called here -- there is no mask to consult, because inside an
+    outage there is nothing to consult it about. Propagation, ZUPT, ZARU and NHC run exactly as
+    in the aided pass, through `_step_constraints`. The snapshot is copied before use so a
+    window cannot leave its state in the one the next window of the same start reads.
+
+    Runs through `outage.end_idx` inclusive: `pos[end_idx]` is the position at the instant the
+    outage ends, which is the window's last epoch, and it is read *before* any fix at that sample
+    could be applied -- a re-acquisition belongs to the aided pass, not to the outage it closes.
+    """
+    f = copy.deepcopy(snapshot.filter)
+    cfg = f.cfg
+    window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
+    n_rows = outage.n_samples + 1
+    pos = np.zeros((n_rows, 2))
+    yaw = np.zeros(n_rows)
+    pvar = np.zeros((n_rows, 2))
+    counts = dict(zupt=0, zaru_ok=0, zaru_no=0, nhc=0)
+    for i, k in enumerate(range(outage.start_idx, outage.end_idx + 1)):
+        # An unaligned snapshot has no dead-reckoning solution: the filter was holding its last
+        # fix when the outage opened and it keeps holding it. Scored like any other window --
+        # the error is the distance the vehicle drove -- and flagged (`WindowRun.aligned`).
+        if snapshot.aligned and k > 0:
+            f.propagate(gyro[k], accel[k], float(dt[k - 1]))
+            _check_physical(f, k, name, f"the {outage.length_s} s window at {outage.start_idx}")
+        if snapshot.aligned:
+            _step_constraints(f, k, gyro, accel, cfg, window, counts)
+        pos[i] = f.state.p[:2]
+        yaw[i] = f.state.yaw
+        pvar[i] = np.diag(f.P)[6:8]
+    return WindowRun(
+        start_idx=outage.start_idx,
+        position_ned=pos,
+        yaw_rad=yaw,
+        position_var=pvar,
+        n_zupt=counts["zupt"],
+        n_zaru_applied=counts["zaru_ok"],
+        n_zaru_rejected=counts["zaru_no"],
+        n_nhc=counts["nhc"],
+        aligned=snapshot.aligned,
     )
 
 
@@ -389,38 +773,263 @@ class FilterInit:
     mount_spread_rad: float
     mount_sign_resolved: bool
     n_warmup_fixes: int
+    #: Whether the filter was aligned when it started -- levelled, mount resolved, heading set.
+    #: False means the yaw block of `P0` is `UNALIGNED_YAW_SIGMA_RAD`, NHC is withheld, and
+    #: `run_filter` completes the alignment at the first open fix where the data allow it.
+    heading_aligned: bool = True
+    heading_source: str = "chord"  # "course" | "chord" | "none"
+    mount_source: str = "none"  # "dynamics" | "pca" | "none"
+    yaw_sigma_rad: float = float("nan")
+    level_sigma_rad: float = float("nan")
 
 
-def _forward_reference(seq: Sequence, n: int) -> np.ndarray | None:
-    """A per-sample signed scalar that grows with forward acceleration, from `gps_speed_mps`.
+# --------------------------------------------------------------------------------------------
+# Alignment -- levelling, mount and heading, from what the phone has (D-115)
+#
+# Three things have to be known before the accelerometer can be integrated: which way is up
+# (levelling), which way the vehicle points in the phone (the mount), and which way the vehicle
+# points in the world (the heading). Each comes from a different source and each can be
+# unavailable when the recording opens, so alignment is an *attempt* that either completes or
+# reports what it is still missing, and it is retried at every open fix until it completes.
+# --------------------------------------------------------------------------------------------
 
-    `pca_mount_yaw` returns an *axis*, and forward and backward share it. This resolves the sign,
-    and it has to be resolved rather than assumed: a 180-degree mount error is a vehicle driving
-    backwards and NHC will not converge it out.
+#: Trailing window an in-motion alignment attempt reads, in seconds. `mount_yaw_from_dynamics`
+#: needs the vehicle to have accelerated and, ideally, turned; 60 s of driving usually holds
+#: both. The initial attempt reads the warmup instead, which is `WARMUP_S`.
+ALIGN_WINDOW_S = 60
 
-    The fixes are ~9 s apart, so this is a step function -- the mean forward acceleration across
-    each fix interval, held over that interval's samples. That is coarse for a magnitude and
-    entirely adequate for a sign, which is all `pca_mount_yaw` uses it for.
+#: Levelling at a detected stop is bounded by `sqrt(zupt_accel_var_thresh) / g` (D-055; 0.83 deg
+#: at the D-115 threshold);
+#: a moving window's levelling is that plus the window's mean dynamic acceleration over g, which
+#: `_level_sigma` adds from the reference.
+LEVEL_SIGMA_STATIONARY_RAD = float(np.sqrt(FilterConfig().zupt_accel_var_thresh) / 9.80665)
+
+
+@dataclass(frozen=True)
+class VehicleReference:
+    """Per-sample vehicle-frame acceleration built from the receiver's speed and the gyro."""
+
+    forward: np.ndarray  # m/s^2, finite-differenced GNSS speed held over each fix interval
+    right: np.ndarray  # m/s^2, speed * yaw rate about down
+    speed: np.ndarray  # m/s, the last fix's speed held forward
+
+
+def vehicle_reference(
+    seq: Sequence, gyro: np.ndarray, up: np.ndarray, fix_idx: np.ndarray, n: int, *, upto: int
+) -> VehicleReference | None:
+    """The vehicle's own acceleration, per sample, from what the phone has -- or None when the
+    stream carries no `gps_speed_mps` (the unit-test fixtures).
+
+    **Causal to `upto`.** A fix interval's forward acceleration is known only once its later
+    fix has arrived, so intervals ending after `upto` contribute nothing; the speed is the
+    last fix at or before each sample, held. Both would otherwise read a window's own future,
+    which is the leak `initialise_filter`'s docstring rules out.
+
+    The fixes are ~9 s apart on most stems, so `forward` is a step function -- coarse for a
+    magnitude, adequate for a sign. `right` is at the full 10 Hz: centripetal force is
+    `speed * omega_down`, and `omega_down` is the gyro projected on `-up`. Between them they
+    carry every acceleration and every turn the vehicle made, each with its sign.
     """
     gnss = seq.gnss
     if "gps_speed_mps" not in gnss.columns:
         return None
     idx = gnss["sample_idx"].to_numpy(dtype=int)
-    # The column is in m/s directly (D-096, D-102); dividing by 3.6 was the unit defect.
     speed = gnss["gps_speed_mps"].to_numpy(dtype=float)
-    ok = np.isfinite(speed) & (idx >= 0) & (idx < n)
+    ok = np.isfinite(speed) & (idx >= 0) & (idx < n) & (idx <= upto)
     idx, speed = idx[ok], speed[ok]
-    if idx.size < 2:
+    if idx.size == 0:
         return None
 
-    out = np.zeros(n)
-    dt_s = np.diff(idx) / SAMPLE_RATE_HZ
-    accel_fwd = np.divide(
-        np.diff(speed), dt_s, out=np.zeros(dt_s.shape), where=dt_s > 0
+    last = np.searchsorted(idx, np.arange(n), side="right") - 1
+    held = np.where(last >= 0, speed[np.clip(last, 0, None)], np.nan)
+
+    forward = np.zeros(n)
+    if idx.size >= 2:
+        dt_s = np.diff(idx) / SAMPLE_RATE_HZ
+        accel_fwd = np.divide(np.diff(speed), dt_s, out=np.zeros(dt_s.shape), where=dt_s > 0)
+        for a, lo, hi in zip(accel_fwd, idx[:-1], idx[1:], strict=True):
+            forward[lo:hi] = a
+
+    omega_down = -(gyro @ up)
+    return VehicleReference(forward=forward, right=held * omega_down, speed=held)
+
+
+@dataclass(frozen=True)
+class Alignment:
+    """One attempt's result: the vertical, the mount, and how well each is known."""
+
+    up: np.ndarray  # unit, phone frame
+    mount: MountInit
+    mount_source: str  # "dynamics" | "pca" | "none"
+    level_sigma_rad: float
+
+    @property
+    def mount_resolved(self) -> bool:
+        return self.mount.sign_resolved
+
+
+def level_and_mount(
+    seq: Sequence, gyro: np.ndarray, accel: np.ndarray, fix_idx: np.ndarray, lo: int, hi: int,
+    *, upto: int,
+) -> Alignment | None:
+    """Levelling and mount over samples `[lo, hi)`, reading nothing after `upto`.
+
+    **Up is the accelerometer's mean.** The stream's `gravity_*` channel is not a sensor: it is
+    `(0, 0, 9.807)` to within 0.05 m/s^2 for the whole of every held-out recording, while the
+    accelerometer's own mean direction drifts up to 6 deg from it over 35 min (Vta1a). A vertical
+    that never moves cannot level a phone that does; the mean specific force over a window can,
+    to the window's mean dynamic acceleration over g.
+
+    **The mount comes from `mount_yaw_from_dynamics`** when the stream carries GNSS speed -- a
+    signed fit with no 180-degree ambiguity -- and from `pca_mount_yaw` otherwise, which is the
+    fixtures' path. The dynamics fit reports itself unresolved when its correlation or sample
+    count is below its bar, and the caller then withholds NHC and tries again at the next fix,
+    rather than constraining velocity through an axis it does not have.
+    """
+    hi = min(hi, accel.shape[0])
+    if hi - lo < 3:
+        return None
+    window = accel[lo:hi]
+    finite = np.isfinite(window).all(axis=1)
+    if finite.sum() < 3:
+        return None
+    mean = window[finite].mean(axis=0)
+    norm = float(np.linalg.norm(mean))
+    if norm < 1e-6:
+        return None
+    up = mean / norm
+
+    ref = vehicle_reference(seq, gyro, up, fix_idx, accel.shape[0], upto=upto)
+    if ref is None:
+        mount = pca_mount_yaw(window[finite], up)
+        return Alignment(
+            up=up, mount=mount, mount_source="pca",
+            level_sigma_rad=_level_sigma(ref, lo, hi, residual=0.0),
+        )
+
+    mount = mount_yaw_from_dynamics(
+        window[finite], up, ref.forward[lo:hi][finite], ref.right[lo:hi][finite]
     )
-    for a, lo, hi in zip(accel_fwd, idx[:-1], idx[1:], strict=True):
-        out[lo:hi] = a
-    return out
+    residual = 0.0
+    if mount.sign_resolved:
+        # The mean specific force over a window that accelerated is not vertical: it leans
+        # forward by the window's mean acceleration over g, and taking it as up puts that
+        # acceleration back into the filter as a standing deceleration. S3a's warmup runs 3 to
+        # 12 m/s, a 0.3 m/s^2 mean that levelling alone got 1.8 deg wrong. With the mount known,
+        # the mean acceleration is known in the phone frame -- the speed change over the window
+        # along the fitted forward axis -- and is taken out before the vertical is read. What is
+        # left in the levelling is the part the speed samples cannot see, which `_level_sigma`
+        # carries as their own residual.
+        mean_dynamic, residual = _mean_forward_acceleration(ref, lo, hi)
+        forward_phone = mount.r_sv[0]
+        corrected = mean - mean_dynamic * forward_phone
+        norm = float(np.linalg.norm(corrected))
+        if norm > 1e-6:
+            up = corrected / norm
+            mount = mount_yaw_from_dynamics(
+                window[finite], up, ref.forward[lo:hi][finite], ref.right[lo:hi][finite]
+            )
+    return Alignment(
+        up=up,
+        mount=mount,
+        mount_source="dynamics" if mount.sign_resolved else "none",
+        level_sigma_rad=_level_sigma(ref, lo, hi, residual=residual),
+    )
+
+
+def _mean_forward_acceleration(ref: VehicleReference, lo: int, hi: int) -> tuple[float, float]:
+    """`(mean, residual)` of the vehicle's forward acceleration over `[lo, hi)` from the held
+    GNSS speed: the speed change over the window's span, and what the held speed's staleness
+    could hide, as the uncertainty on that mean."""
+    speed = ref.speed[lo:hi]
+    finite = np.isfinite(speed)
+    if finite.sum() < 2:
+        return 0.0, 0.0
+    span_s = max((hi - lo) / SAMPLE_RATE_HZ, 1e-6)
+    mean = float(speed[finite][-1] - speed[finite][0]) / span_s
+    # The held speed is stale by up to one fix interval, so the window's mean can be wrong by
+    # one interval's worth of the largest acceleration the reference saw, over the span.
+    changes = np.flatnonzero(np.diff(speed[finite]) != 0)
+    stale_s = float(np.max(np.diff(changes))) / SAMPLE_RATE_HZ if changes.size >= 2 else span_s
+    largest = float(np.nanmax(np.abs(ref.forward[lo:hi]))) if hi > lo else 0.0
+    residual = largest * min(stale_s, span_s) / span_s
+    return mean, residual
+
+
+def _level_sigma(ref: VehicleReference | None, lo: int, hi: int, *, residual: float) -> float:
+    """1-sigma roll/pitch error of levelling on this window: the stationary bound, plus the
+    part of the window's mean acceleration that was *not* taken out -- all of it when the mount
+    was unresolved and none could be, the held speed's staleness when it was -- over g."""
+    sigma = LEVEL_SIGMA_STATIONARY_RAD
+    if ref is not None:
+        uncorrected = residual
+        speed = ref.speed[lo:hi]
+        finite = np.isfinite(speed)
+        if residual == 0.0 and finite.sum() >= 2:
+            span_s = max((hi - lo) / SAMPLE_RATE_HZ, 1e-6)
+            uncorrected = abs(float(speed[finite][-1] - speed[finite][0])) / span_s
+        sigma = float(np.hypot(sigma, uncorrected / 9.80665))
+    return sigma
+
+
+def apply_alignment(
+    f: InEKF, alignment: Alignment, course_rad: float, speed_mps: float
+) -> tuple[float, float]:
+    """Write an alignment into the filter: `R_sv`, `R`, `v`, and a fresh `P` for everything the
+    alignment (re)initialised. Returns `(yaw_sigma_rad, level_sigma_rad)`.
+
+    `R = R_vn @ R_sv`: the phone's attitude is the vehicle's heading composed with the mount
+    (see `initialise_filter`), with the vehicle taken as level. The heading is the receiver's
+    course at this fix, worth `course_sigma_rad` at this speed; the mount block carries the
+    estimator's spread; roll and pitch carry the levelling's.
+
+    The velocity block is worth the receiver's Doppler velocity, `course_cross_track_sigma_mps`
+    (0.5 m/s), and not `initial_covariance`'s 4.24 m/s position chord: the velocity was set from
+    the Doppler speed and course, and the block has to say so for the stationary veto in
+    `_step_constraints` to hold from the first sample -- at 4.24 m/s the filter could not
+    exclude being stopped while doing 3.5 m/s, and on S3a a false ZUPT 2 s into the run took
+    the velocity to zero and the filter never recovered (D-115).
+
+    `P` is replaced whole: before alignment the filter was not running (`run_filter`), so
+    there is nothing in it to keep.
+    """
+    cfg = f.cfg
+    f.state.R_sv = alignment.mount.r_sv
+    f.state.R = yaw_only_rotation(course_rad) @ f.state.R_sv
+    f.state.v = np.array([speed_mps * np.cos(course_rad), speed_mps * np.sin(course_rad), 0.0])
+    yaw_sigma = course_sigma_rad(cfg, speed_mps)
+    fresh = initial_covariance(
+        cfg,
+        mount_sigma_rad=alignment.mount.spread_rad,
+        yaw_sigma_rad=yaw_sigma,
+        level_sigma_rad=alignment.level_sigma_rad,
+        velocity_sigma_mps=cfg.course_cross_track_sigma_mps,
+    )
+    # Every sigma above is a plain error about the vehicle; the filter's error is
+    # right-invariant, about the origin. See `right_invariant_from_plain`.
+    f.P = right_invariant_from_plain(fresh, f.state.p, f.state.v)
+    return yaw_sigma, alignment.level_sigma_rad
+
+
+def attempt_alignment(
+    f: InEKF, seq: Sequence, gyro: np.ndarray, accel: np.ndarray, fix_idx: np.ndarray, k: int,
+    course_rad: float, speed_mps: float,
+) -> bool:
+    """In-motion alignment at open fix `k`, completing the initialisation `initialise_filter`
+    could not: reads the trailing `ALIGN_WINDOW_S` and nothing after `k`, and returns whether it
+    aligned.
+
+    Done once, and only ever from an *open* fix, so an outage that begins before the vehicle
+    has aligned is scored exactly as a phone would experience it: unaligned. It is not a mode and
+    not a re-initialisation on re-acquisition -- after this the heading and the mount are the
+    filter's to keep, corrected by the ordinary gated updates (D-001).
+    """
+    lo = max(0, k + 1 - ALIGN_WINDOW_S * SAMPLE_RATE_HZ)
+    alignment = level_and_mount(seq, gyro, accel, fix_idx, lo, k + 1, upto=k)
+    if alignment is None or not alignment.mount_resolved:
+        return False
+    apply_alignment(f, alignment, course_rad, speed_mps)
+    return True
 
 
 def initialise_filter(
@@ -431,8 +1040,9 @@ def initialise_filter(
     fix_ned: np.ndarray,
     *,
     warmup_s: int = WARMUP_S,
+    gyro: np.ndarray | None = None,
 ) -> FilterInit:
-    """Start the filter from the `S-` stream's own GNSS and gravity, never from truth.
+    """Start the filter from the `S-` stream's own GNSS and IMU, never from truth.
 
     **Without this the filter does not converge, it diverges.** `run_filter` used to construct
     `InEKF(cfg)` and propagate from `R = I`, `R_sv = I`, `v = 0`, `p = 0`. A phone in a cradle is
@@ -446,90 +1056,124 @@ def initialise_filter(
     the *strapdown baseline*, which is deliberately handed truth (D-064) because it is a floor
     rather than a system; the filter is the system, and it gets what a phone would have.
 
-    Four things, all from inside the warmup window:
+    Everything comes from inside the warmup window:
 
     * **Position** -- the first fix. It is the measurement, not an estimate of one.
-    * **Velocity and yaw** -- the first and last warmup fixes, differenced. Course over ground
-      needs motion, so if the vehicle has not moved far enough to have a heading the yaw prior
-      stands at zero and `initial_covariance`'s 14.56-degree block carries it.
-    * **`R_sv`** -- `pca_mount_yaw` over the warmup accelerometer and the stream's own `GRAVITY`
-      channel, which D-085 established points up. This is D-073's initialiser, which until now was
-      called from `tests/test_mount.py` and nowhere else.
-    * **`P0`** -- `initial_covariance` with the PCA's measured `spread_rad` in the mount block,
-      instead of the stated 5-degree fallback it uses when nobody has measured one.
+    * **Levelling and the mount** -- `level_and_mount` over the warmup: up from the accelerometer
+      mean, the mount from `mount_yaw_from_dynamics` (D-115). Until D-115 the mount came from
+      `pca_mount_yaw` with its sign from a reference that was constant over a stationary warmup,
+      and on Vta1a it came out backwards with `sign_resolved` True.
+    * **Velocity and heading** -- the receiver's own course and speed at the first fix
+      (`fix_course_arrays`), when the vehicle is moving. The state being initialised is the one
+      at sample zero, so the fix that describes it is the first one, not a chord to the last: a
+      30 s chord is the *mean* direction over the warmup, and on the held-out stems where the
+      road turns in those 30 s it was 61-105 deg from the heading at the moment the first
+      outage opens. Streams without a course column -- the unit-test fixtures -- fall back to the
+      first-to-last chord, which is exact for a fixture driving straight.
+
+    A vehicle that is stationary at its first fix, or whose warmup holds too little dynamics to
+    resolve the mount, is **not aligned**: the yaw block is `UNALIGNED_YAW_SIGMA_RAD`, NHC is
+    withheld, and `run_filter` calls `attempt_alignment` at each open fix until it completes.
+    The vertical is still set, so that propagation cancels gravity while it waits.
+
+    `gyro` is optional for the callers that predate D-115; without it the mount falls back to
+    PCA, which is the fixtures' path anyway.
     """
     n_warm = min(int(warmup_s * SAMPLE_RATE_HZ), accel.shape[0])
     in_warmup = np.flatnonzero((fix_idx >= 0) & (fix_idx < n_warm))
+    if in_warmup.size:
+        f.state.p = np.asarray(fix_ned[in_warmup[0]], dtype=float).copy()
 
-    # The mount comes first, because the attitude is expressed through it -- see below.
-    mount_spread: float | None = None
-    mount_yaw = 0.0
-    resolved = False
-    gravity_cols = ["gravity_x", "gravity_y", "gravity_z"]
-    if all(c in seq.imu.columns for c in gravity_cols) and n_warm >= 3:
-        gravity = seq.imu[gravity_cols].to_numpy(dtype=float)[:n_warm]
-        finite = np.isfinite(gravity).all(axis=1)
-        if finite.sum() >= 3:
-            reference = _forward_reference(seq, accel.shape[0])
-            mount = pca_mount_yaw(
-                accel[:n_warm][finite],
-                gravity[finite].mean(axis=0),
-                forward_reference=None if reference is None else reference[:n_warm][finite],
-            )
-            # An unresolved sign is reported, never guessed -- see `pca_mount_yaw`. The rotation
-            # is still applied: PCA has found the mount *axis*, which is most of the answer, and
-            # `mount_sign_resolved` travels to `summary.json` so a run made on an unresolved stem
-            # can be read as one.
-            f.state.R_sv = mount.r_sv
-            mount_spread = mount.spread_rad
-            mount_yaw = mount.yaw_rad
-            resolved = mount.sign_resolved
+    if gyro is None:
+        gyro = np.zeros_like(accel)
+    alignment = level_and_mount(seq, gyro, accel, fix_idx, 0, n_warm, upto=n_warm - 1)
 
     yaw = 0.0
     speed = 0.0
-    if in_warmup.size:
-        f.state.p = np.asarray(fix_ned[in_warmup[0]], dtype=float).copy()
-    if in_warmup.size >= 2:
+    aligned = False
+    source = "none"
+    course = fix_course_arrays(seq)
+    if course is not None:
+        if in_warmup.size:
+            j = in_warmup[0]
+            c, v = float(course[0][j]), float(course[1][j])
+            if np.isfinite(c) and np.isfinite(v) and v >= f.cfg.course_min_speed_mps:
+                yaw, speed = c, v
+                aligned, source = True, "course"
+    elif in_warmup.size >= 2:
         first, last = in_warmup[0], in_warmup[-1]
         step = np.asarray(fix_ned[last], dtype=float) - np.asarray(fix_ned[first], dtype=float)
         span_s = float(fix_idx[last] - fix_idx[first]) / SAMPLE_RATE_HZ
         if span_s > 0 and float(np.linalg.norm(step[:2])) >= MIN_HEADING_DISPLACEMENT_M:
             yaw = float(np.arctan2(step[1], step[0]))
-            f.state.v = np.array([step[0] / span_s, step[1] / span_s, 0.0])
-            speed = float(np.linalg.norm(f.state.v[:2]))
+            speed = float(np.linalg.norm(step[:2])) / span_s
+            aligned, source = True, "chord"
 
-    # **`state.R` is phone->NED, not vehicle->NED**, and getting that wrong is a 1 g error rather
-    # than a small one. `_h_vehicle_velocity` computes `v_veh = R_sv @ R.T @ v`, so `R.T` takes NED
-    # into the *phone* frame and `R_sv` takes phone into the vehicle; and `propagate` applies `R`
-    # to the raw accelerometer, which is a phone-frame quantity. Course over ground measures the
-    # **vehicle's** heading, so the phone's attitude is that composed with the mount:
-    # `v_ned = R_vn @ R_sv @ v_phone`, hence `R = R_vn @ R_sv`. Setting `R = R_vn` alone leaves the
-    # mount rotation out of the gravity cancellation, and the leaked component is integrated twice
-    # -- measured at 12.2 m/s^2 on S3a, which is what D-094 is about.
-    f.state.R = yaw_only_rotation(yaw) @ f.state.R_sv
+    # A heading without a resolved mount is not an alignment: `R = R_vn @ R_sv` needs both, and
+    # a heading composed with a backwards mount integrates every acceleration as a braking. The
+    # chord path (fixtures) keeps its PCA mount as it always did.
+    mount_ok = alignment is not None and (alignment.mount_resolved or source == "chord")
+    aligned = aligned and mount_ok
 
-    f.P = initial_covariance(f.cfg, mount_sigma_rad=mount_spread)
+    if aligned:
+        yaw_sigma, level_sigma = apply_alignment(f, alignment, yaw, speed)
+    else:
+        # Level the phone so gravity cancels while the filter waits for a heading; the yaw and
+        # mount are unknown and `P0` says so. `R_sv`'s down row is right whatever its yaw is.
+        if alignment is not None:
+            f.state.R_sv = alignment.mount.r_sv
+            level_sigma = alignment.level_sigma_rad
+            mount_sigma = float(np.pi / 2)
+        else:
+            level_sigma = None
+            mount_sigma = None
+        f.state.R = f.state.R_sv.copy()
+        f.state.v = np.zeros(3)
+        yaw_sigma = UNALIGNED_YAW_SIGMA_RAD
+        f.P = right_invariant_from_plain(
+            initial_covariance(
+                f.cfg, mount_sigma_rad=mount_sigma, yaw_sigma_rad=yaw_sigma,
+                level_sigma_rad=level_sigma,
+            ),
+            f.state.p,
+            f.state.v,
+        )
+        yaw, speed = 0.0, 0.0
+
+    mount = None if alignment is None else alignment.mount
     return FilterInit(
         yaw_rad=yaw,
         speed_mps=speed,
-        mount_yaw_rad=mount_yaw,
-        mount_spread_rad=float("nan") if mount_spread is None else mount_spread,
-        mount_sign_resolved=resolved,
+        mount_yaw_rad=float("nan") if mount is None else mount.yaw_rad,
+        mount_spread_rad=float("nan") if mount is None else mount.spread_rad,
+        mount_sign_resolved=False if mount is None else mount.sign_resolved,
         n_warmup_fixes=int(in_warmup.size),
+        heading_aligned=aligned,
+        heading_source=source if aligned else "none",
+        mount_source="none" if alignment is None else alignment.mount_source,
+        yaw_sigma_rad=float(np.sqrt(f.P[2, 2])),
+        level_sigma_rad=float(np.sqrt(f.P[0, 0])),
     )
 
 
-def window_trajectory(position_ned: np.ndarray, outage: Outage) -> BaselineTrajectory:
-    """Slice one outage window's epoch boundaries out of a whole-sequence position series."""
+def window_trajectory(
+    position_ned: np.ndarray, outage: Outage, *, origin: int = 0
+) -> BaselineTrajectory:
+    """Slice one outage window's epoch boundaries out of a position series.
+
+    Row `i` of `position_ned` is sample `origin + i`: zero for a whole-sequence series, the
+    window's own `start_idx` for a `WindowRun`.
+    """
     idx = np.arange(outage.start_idx, outage.end_idx + 1, EPOCH_STRIDE)
     if idx[-1] != outage.end_idx:
         raise ValueError(
             f"outage [{outage.start_idx}, {outage.end_idx}) is not a whole number of "
             f"{EPOCH_STRIDE}-sample epochs"
         )
-    if idx[-1] >= position_ned.shape[0]:
+    rows = idx - origin
+    if rows[0] < 0 or rows[-1] >= position_ned.shape[0]:
         raise ValueError(f"outage window runs past the end of the sequence at sample {idx[-1]}")
-    disp = np.diff(position_ned[idx], axis=0)
+    disp = np.diff(position_ned[rows], axis=0)
     return BaselineTrajectory(disp, course_over_ground(disp))
 
 
@@ -545,6 +1189,11 @@ class WindowResult:
     length_s: int
     start_idx: int
     metrics: OutageMetrics
+    #: For the filter: whether it had aligned when the window opened (`WindowRun.aligned`). A
+    #: window from an unaligned filter is a held fix, not a navigation solution, and the count of
+    #: those travels with every number (`summary.json`: `n_filter_windows_unaligned`). Always
+    #: True for the two baselines, which are initialised per window.
+    aligned: bool = True
 
     def as_row(self) -> dict[str, object]:
         return {
@@ -552,6 +1201,7 @@ class WindowResult:
             "sequence": self.sequence,
             "length_s": self.length_s,
             "start_idx": self.start_idx,
+            "aligned": self.aligned,
             **self.metrics.as_row(),
         }
 
@@ -595,11 +1245,14 @@ def evaluate_sequence(
     replay: dict | None = None,
     stamp: Stamp | None = None,
     dropped: list[DroppedWindow] | None = None,
+    aided_passes: dict[str, dict] | None = None,
 ) -> list[WindowResult]:
     """Every window of every length for one sequence, all three methods.
 
-    One filter pass **per outage length**, because the GNSS mask differs between lengths and a
-    single pass cannot have GNSS both open and closed at the same sample.
+    One GNSS-aided filter pass for the sequence, snapshotted at the first sample of every window
+    of every length, and one dead-reckoned replay per window from its snapshot -- so each window
+    is entered aided, exactly as if the filter had been run once per window with GNSS open
+    everywhere but inside it. See the module docstring for what this replaced and why.
 
     If `replay` is a dict and this sequence is in `MANDATORY_PLOT_SEQUENCES`, the first
     `REPLAY_LENGTH_S` window is recorded into it for the renderer, stamped with `stamp`. First
@@ -643,27 +1296,50 @@ def evaluate_sequence(
     n = gyro.shape[0]
     sweep = generate_sweep({seq.name: n}, tuple(lengths))
     out: list[WindowResult] = []
+    for windows in sweep.values():
+        assert_non_overlapping(windows)
+    starts = {o.start_idx for windows in sweep.values() for o in windows}
+    if not starts:
+        return out
+
+    try:
+        aided = run_filter(
+            gyro, accel, dt, fix_idx, fix_ned, fix_sigma, np.ones(n, dtype=bool),
+            cfg=cfg, seq=seq, snapshot_at=starts,
+        )
+    except FilterDivergedError as exc:
+        # The *aided* pass left physical bounds: with every fix available to correct it, the
+        # filter still ran away, and every snapshot after that sample -- and, since the state was
+        # wrong before it was caught, some before it -- describes nothing. The stem is unusable.
+        raise SequenceUnusable(str(exc)) from exc
+    if aided_passes is not None:
+        aided_passes[seq.name] = aided.aided_pass_summary()
 
     for length_s, windows in sorted(sweep.items()):
-        if not windows:
-            continue
-        assert_non_overlapping(windows)
-        try:
-            run = run_filter(
-                gyro, accel, dt, fix_idx, fix_ned, fix_sigma,
-                mask_gnss(n, windows), cfg=cfg, seq=seq,
-            )
-        except FilterDivergedError as exc:
-            # Not window-scoped like D-089/D-093: `run_filter` integrates one continuous pass
-            # per length, so a state that left physical bounds partway through has already
-            # corrupted every window's slice of it, including ones before the sample named in
-            # the message (the state was wrong before it was caught, not only after). The same
-            # divergence reproduces at every length -- it is a property of the continuous
-            # integration, not of any one outage -- so the whole stem is unusable, not just this
-            # length's windows.
-            raise SequenceUnusable(str(exc)) from exc
         for outage in windows:
             t0 = float(t_abs_s[outage.start_idx])
+            try:
+                run = replay_window(
+                    aided.snapshots[outage.start_idx], gyro, accel, dt, outage, name=seq.name
+                )
+            except FilterDivergedError as exc:
+                # Window-scoped, unlike the aided pass: the next window starts from its own
+                # aided snapshot and is untouched by this one. The window is dropped and
+                # counted (D-089's rule -- the omission travels with the number), never scored
+                # from a state that reached 150 m/s and never silently left out.
+                print(
+                    f"[idr-eval] DROPPED WINDOW {seq.name} {length_s}s @{outage.start_idx}: "
+                    f"{exc}",
+                    file=sys.stderr,
+                )
+                if dropped is not None:
+                    dropped.append(
+                        DroppedWindow(
+                            sequence=seq.name, length_s=length_s, start_idx=outage.start_idx,
+                            kind="filter_diverged", reason=str(exc),
+                        )
+                    )
+                continue
             want_replay = (
                 replay is not None
                 and seq.name in MANDATORY_PLOT_SEQUENCES
@@ -685,7 +1361,9 @@ def evaluate_sequence(
             # `ValueError`s are real defects.
             try:
                 trajectories = {
-                    "filter": window_trajectory(run.position_ned, outage),
+                    "filter": window_trajectory(
+                        run.position_ned, outage, origin=outage.start_idx
+                    ),
                     "strapdown": _strapdown_for(gyro, accel, dt, outage, truth, t0),
                     "gnss_available": _gnss_for(fix_idx, fix_ned, fix_sigma, outage, t_abs_s, t0),
                 }
@@ -696,6 +1374,7 @@ def evaluate_sequence(
                         length_s=length_s,
                         start_idx=outage.start_idx,
                         metrics=score(traj, truth, outage, t0_s=t0),
+                        aligned=run.aligned if method == "filter" else True,
                     )
                     for method, traj in trajectories.items()
                     if traj is not None
@@ -756,7 +1435,7 @@ def _replay_record(seq, truth, outage, t0, run, trajectories, gyro, accel, *, st
     times = epoch_times(t0, outage.length_s)
     true_disp = truth.displacements_ned(times)
     truth_ned = np.vstack([np.zeros((1, 2)), np.cumsum(true_disp, axis=0)])
-    idx = np.arange(outage.start_idx, outage.end_idx + 1, EPOCH_STRIDE)
+    idx = np.arange(outage.start_idx, outage.end_idx + 1, EPOCH_STRIDE) - run.start_idx
     gnss = trajectories["gnss_available"]
     return trajectory_record(
         sequence=seq.name,
@@ -929,6 +1608,7 @@ def write_artefacts(
     results: list[WindowResult],
     replay: dict[str, dict] | None = None,
     dropped: list[DroppedWindow] | None = None,
+    aided_passes: dict[str, dict] | None = None,
 ) -> dict:
     """Write `summary.json`, `windows.csv` and one `trajectory_<seq>.json` per plotted
     sequence, all carrying the stamp.
@@ -947,6 +1627,11 @@ def write_artefacts(
         "reproducible": stamp.is_reproducible(),
         "crse_convention": CRSE_CONVENTION.value,
         "n_windows": len(results),
+        # Filter windows opened before the phone had a heading and a mount (D-115). They are in
+        # every filter number above as a held fix; this is how many.
+        "n_filter_windows_unaligned": sum(
+            1 for r in results if r.method == "filter" and not r.aligned
+        ),
         "n_dropped_windows": len(dropped),
         "n_dropped_by_kind": {
             kind: sum(d.kind == kind for d in dropped)
@@ -956,6 +1641,9 @@ def write_artefacts(
         "gate1": gate1_ratio(by_method),
         "trajectories": sorted(replay or {}),
         "dropped_windows": [d.as_row() for d in dropped],
+        # The aided pass each stem's windows were replayed from (D-115): alignment, the process
+        # noise it ran with, and its update counts, so a claim about any of them is checkable.
+        "aided_pass": dict(sorted((aided_passes or {}).items())),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -1051,12 +1739,14 @@ def main(argv: list[str] | None = None) -> int:
     skipped: list[str] = []
     skipped_names: list[str] = []
     dropped: list[DroppedWindow] = []
+    aided_passes: dict[str, dict] = {}
     for name, seq in sorted(sequences.items()):
         try:
             truth = load_truth(paired_truth_path(name, args.data), name)
             results.extend(
                 evaluate_sequence(
-                    seq, truth, args.lengths, replay=replay, stamp=stamp, dropped=dropped
+                    seq, truth, args.lengths, replay=replay, stamp=stamp, dropped=dropped,
+                    aided_passes=aided_passes,
                 )
             )
         except SequenceUnusable as exc:
@@ -1074,7 +1764,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    summary = write_artefacts(args.out, stamp, results, replay, dropped)
+    summary = write_artefacts(args.out, stamp, results, replay, dropped, aided_passes)
 
     # A mandatory figure that is simply absent (D-089). Before dropped windows existed, a hole
     # inside a `MANDATORY_PLOT_SEQUENCES` replay window aborted the run, so this could not happen

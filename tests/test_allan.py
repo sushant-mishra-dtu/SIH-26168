@@ -253,8 +253,9 @@ def test_a_vibrating_cabin_is_stationary_but_not_quiet():
     characterisation: its Allan curve measures the cabin, not the gyroscope."""
     n = 4_000
     # Loud enough that both quiet margins fail, quiet enough that the ZUPT detector still fires:
-    # mean |gyro| is ~1.6 sigma = 0.013 rad/s, under the 0.02 rad/s threshold.
-    accel, gyro = _still(n, accel_sigma=0.12, gyro_sigma=0.008)
+    # mean |gyro| is ~1.6 sigma = 0.008 rad/s, under the 0.01 rad/s threshold (D-115); accel
+    # variance is 0.0144, under 0.02, and both are more than a tenth of their thresholds.
+    accel, gyro = _still(n, accel_sigma=0.12, gyro_sigma=0.005)
     found = find_stationary_segments(_sequence(accel, gyro, np.arange(n) * DT))
 
     assert len(found) == 1
