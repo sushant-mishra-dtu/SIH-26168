@@ -34,6 +34,9 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         permissionsGranted = results.values.all { it }
+        if (permissionsGranted) {
+            seedLocationIfPossible()
+        }
     }
 
     private var permissionsGranted by mutableStateOf(false)
@@ -45,6 +48,9 @@ class MainActivity : ComponentActivity() {
 
         // Check permissions on launch
         permissionsGranted = hasAllPermissions()
+        if (permissionsGranted) {
+            seedLocationIfPossible()
+        }
 
         setContent {
             NavigatorTheme {
@@ -72,6 +78,12 @@ class MainActivity : ComponentActivity() {
                     telemetry = telemetry,
                     isRecording = isRecording,
                     permissionsGranted = permsGranted,
+                    onToggleTunnelMode = {
+                        SensorForegroundService.toggleTunnelMode()
+                    },
+                    onResetOrigin = {
+                        SensorForegroundService.resetOrigin()
+                    },
                     onStartStop = {
                         if (!permsGranted) {
                             permissionLauncher.launch(requiredPermissions)
@@ -101,6 +113,22 @@ class MainActivity : ComponentActivity() {
 
     private fun hasAllPermissions(): Boolean = requiredPermissions.all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun seedLocationIfPossible() {
+        if (hasAllPermissions()) {
+            val lm = getSystemService(LOCATION_SERVICE) as? android.location.LocationManager ?: return
+            val lastGps = try { lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
+            val lastNet = try { lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
+            val loc = lastGps ?: lastNet
+            if (loc != null) {
+                TelemetryStore.update {
+                    if (!it.running) {
+                        it.copy(latitude = loc.latitude, longitude = loc.longitude)
+                    } else it
+                }
+            }
+        }
     }
 
     companion object {

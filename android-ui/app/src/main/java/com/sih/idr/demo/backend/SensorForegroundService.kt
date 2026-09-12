@@ -31,6 +31,9 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     private var rateWindowStartNs = 0L
     private val estimator = LocalNavigationEstimator()
     private var satelliteCount = 0
+    private var currentRate = 0f
+    private var currentJitter = 0f
+
     private val gnssCallback = object : GnssStatus.Callback() {
         override fun onSatelliteStatusChanged(status: GnssStatus) {
             satelliteCount = (0 until status.satelliteCount).count { status.usedInFix(it) }
@@ -39,37 +42,80 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification())
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
+
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER_UNCALIBRATED)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        val rotVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+
         accel?.let { sensorManager.registerListener(this, it, REQUESTED_PERIOD_US) }
         gyro?.let { sensorManager.registerListener(this, it, REQUESTED_PERIOD_US) }
+        rotVector?.let { sensorManager.registerListener(this, it, REQUESTED_PERIOD_US) }
+
         TelemetryStore.update {
             it.copy(running = true, accelAvailable = accel != null, gyroAvailable = gyro != null)
         }
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0.5f, this)
-            locationManager.registerGnssStatusCallback(gnssCallback, null)
+            val lastGps = try { locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
+            val lastNet = try { locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
+            (lastGps ?: lastNet)?.let { loc ->
+                val estimate = estimator.onLocation(loc)
+                applyEstimate(estimate)
+            }
+            try {
+                locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0.5f, this)
+            } catch (e: Exception) {}
+            try {
+                locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 1.0f, this)
+            } catch (e: Exception) {}
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                locationManager.registerGnssStatusCallback(gnssCallback, null)
+            }
         }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_GYROSCOPE_UNCALIBRATED) return
-        val now = event.timestamp
-        if (rateWindowStartNs == 0L) rateWindowStartNs = now
-        sampleCount++
-        val elapsedNs = now - rateWindowStartNs
-        val rate = if (elapsedNs > 0) sampleCount * 1_000_000_000f / elapsedNs else 0f
-        val jitter = if (lastTimestampNs == 0L) {
-            0f
-        } else {
-            kotlin.math.abs((now - lastTimestampNs) / 1_000_000f - REQUESTED_PERIOD_US / 1000f)
+        when (event.sensor.type) {
+            Sensor.TYPE_GYROSCOPE_UNCALIBRATED, Sensor.TYPE_GYROSCOPE -> {
+                val now = event.timestamp
+                if (rateWindowStartNs == 0L) rateWindowStartNs = now
+                sampleCount++
+                val elapsedNs = now - rateWindowStartNs
+                currentRate = if (elapsedNs > 0) sampleCount * 1_000_000_000f / elapsedNs else 0f
+                currentJitter = if (lastTimestampNs == 0L) {
+                    0f
+                } else {
+                    kotlin.math.abs((now - lastTimestampNs) / 1_000_000f - REQUESTED_PERIOD_US / 1000f)
+                }
+                lastTimestampNs = now
+                val estimate = estimator.onGyro(event.values[2], now)
+                applyEstimate(estimate)
+            }
+            Sensor.TYPE_ACCELEROMETER_UNCALIBRATED, Sensor.TYPE_ACCELEROMETER -> {
+                val estimate = estimator.onAccelerometer(event.values[0], event.values[1], event.values[2], event.timestamp)
+                applyEstimate(estimate)
+            }
+            Sensor.TYPE_ROTATION_VECTOR -> {
+                val rotationMatrix = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                // Project device forward axis [0, 1, 0] in portrait orientation onto world ground plane (ENU):
+                // v_world = R * [0, 1, 0]^T = [R[1], R[4], R[7]]
+                // East = R[1], North = R[4]
+                val eastComponent = rotationMatrix[1]
+                val northComponent = rotationMatrix[4]
+                val azimuthRad = kotlin.math.atan2(eastComponent, northComponent)
+                estimator.onOrientation(azimuthRad, 0f, 0f)
+            }
         }
-        lastTimestampNs = now
-        val estimate = estimator.onGyro(event.values[2], now)
+    }
+
+    private fun applyEstimate(estimate: Estimate) {
         TelemetryStore.update {
             it.copy(
                 mode = estimate.mode,
@@ -79,33 +125,64 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 positionEastM = estimate.positionEastM,
                 uncertaintyM = estimate.uncertaintyM,
                 gnssAvailable = estimate.gnssAvailable,
+                tunnelModeActive = estimate.tunnelModeActive,
+                stepCount = estimate.stepCount,
+                latitude = estimate.latitude,
+                longitude = estimate.longitude,
+                originLat = estimate.originLat,
+                originLon = estimate.originLon,
                 path = estimate.path,
-                sampleRateHz = rate,
-                timestampJitterMs = jitter,
+                sampleRateHz = currentRate,
+                timestampJitterMs = currentJitter,
                 lastSensorAgeMs = 0
             )
         }
     }
 
+    private var lastGpsFixElapsedMs = 0L
+
     override fun onLocationChanged(location: Location) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (location.provider == LocationManager.GPS_PROVIDER) {
+            lastGpsFixElapsedMs = now
+        } else if (location.provider == LocationManager.NETWORK_PROVIDER) {
+            // If GPS fix was received recently, suppress coarse network fixes to eliminate jumping & drift
+            if (now - lastGpsFixElapsedMs < 8_000L) {
+                return
+            }
+        }
+
+        // Suppress coarse fixes (>35m error) from dragging the map
+        if (location.hasAccuracy() && location.accuracy > 35f) {
+            return
+        }
+
         val estimate = estimator.onLocation(location)
         TelemetryStore.update { state ->
             state.copy(
                 mode = estimate.mode,
                 gnssAvailable = estimate.gnssAvailable,
+                tunnelModeActive = estimate.tunnelModeActive,
                 satellites = satelliteCount,
                 speedMps = estimate.speedMps,
                 yawRad = estimate.yawRad,
                 positionNorthM = estimate.positionNorthM,
                 positionEastM = estimate.positionEastM,
                 uncertaintyM = estimate.uncertaintyM,
+                stepCount = estimate.stepCount,
+                latitude = estimate.latitude,
+                longitude = estimate.longitude,
+                originLat = estimate.originLat,
+                originLon = estimate.originLon,
                 path = estimate.path
             )
         }
     }
 
     override fun onProviderDisabled(provider: String) {
-        TelemetryStore.update { it.copy(gnssAvailable = false, mode = NavigationMode.INS) }
+        if (provider == LocationManager.GPS_PROVIDER) {
+            TelemetryStore.update { it.copy(gnssAvailable = false, mode = NavigationMode.INS) }
+        }
     }
 
     override fun onProviderEnabled(provider: String) = Unit
@@ -113,6 +190,7 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     override fun onDestroy() {
+        activeInstance = null
         sensorManager.unregisterListener(this)
         locationManager.removeUpdates(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) locationManager.unregisterGnssStatusCallback(gnssCallback)
@@ -141,6 +219,20 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         const val NOTIFICATION_ID = 26168
         const val REQUESTED_PERIOD_US = 5_000
         var startRequested = false
+        private var activeInstance: SensorForegroundService? = null
+
+        fun toggleTunnelMode(): Boolean {
+            val service = activeInstance ?: return false
+            val active = service.estimator.toggleTunnelMode()
+            service.applyEstimate(service.estimator.snapshot())
+            return active
+        }
+
+        fun resetOrigin() {
+            val service = activeInstance ?: return
+            service.estimator.resetOrigin()
+            service.applyEstimate(service.estimator.snapshot())
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, SensorForegroundService::class.java)

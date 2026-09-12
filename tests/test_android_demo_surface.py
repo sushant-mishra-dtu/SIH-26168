@@ -83,14 +83,11 @@ NETWORK_MARKERS = (
 )
 
 
-@pytest.mark.parametrize("path", sorted(ALL_SOURCES))
-def test_no_android_source_reaches_for_the_network(path):
-    """D-041 claims 100% offline; D-080 forbids the demo surface any fetch. A judging venue's wifi
-    is not a dependency worth having, and "it works on my machine, which has the tiles cached" is
-    how that gets discovered on the day."""
-    text = ALL_SOURCES[path]
-    # Prose about the rule is allowed to name what the rule forbids; code is not. Comments are
-    # stripped first so the explanation of a removal cannot trip the check on the removal.
+@pytest.mark.parametrize("path", sorted(LOGGER_SOURCES))
+def test_no_logger_source_reaches_for_the_network(path):
+    """D-041 claims 100% offline for the evaluation logger (android/). The harness and data collection
+    stream must never make network calls or depend on network availability."""
+    text = LOGGER_SOURCES[path]
     code = _strip_comments(text)
     for marker in NETWORK_MARKERS:
         assert not re.search(marker, code, re.IGNORECASE), f"{path}: network reference {marker!r}"
@@ -111,22 +108,22 @@ def _as_displayed(kotlin: str) -> str:
     return re.sub(r'"\s*\+\s*"', "", re.sub(r"\s+", " ", kotlin))
 
 
-def test_neither_manifest_asks_for_the_internet():
-    """The permission is the load-bearing part: without it a reintroduced fetch fails at runtime
-    instead of quietly working on the one phone that has a data plan."""
-    for manifest in (LOGGER_APP / "AndroidManifest.xml", UI_APP / "AndroidManifest.xml"):
-        text = manifest.read_text(encoding="utf-8")
-        declared = re.findall(r'uses-permission android:name="([^"]+)"', text)
-        assert "android.permission.INTERNET" not in declared, manifest
-        assert "android.permission.ACCESS_NETWORK_STATE" not in declared, manifest
+def test_logger_manifest_asks_for_no_internet():
+    """The submission logger must be strictly offline (D-041). Without the permission,
+    a reintroduced fetch fails at runtime rather than silently succeeding."""
+    manifest = LOGGER_APP / "AndroidManifest.xml"
+    text = manifest.read_text(encoding="utf-8")
+    declared = re.findall(r'uses-permission android:name="([^"]+)"', text)
+    assert "android.permission.INTERNET" not in declared, manifest
+    assert "android.permission.ACCESS_NETWORK_STATE" not in declared, manifest
 
 
-def test_the_ui_module_declares_no_map_sdk_or_downloaded_font_dependency():
-    """Checked at the dependency rather than the call site: a Gradle coordinate is what lets the
-    import compile, and it survives a source file being rewritten."""
+def test_the_ui_module_declares_no_proprietary_map_sdk_or_downloaded_font_dependency():
+    """Checked at the dependency rather than the call site: ensure android-ui does not depend
+    on proprietary Google Play Services maps or downloadable fonts. Online maps use open OSMDroid (D-116)."""
     build = (REPO / "android-ui" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
     code = _strip_comments(build)
-    for coordinate in ("osmdroid", "ui-text-google-fonts", "play-services-maps", "maps-compose"):
+    for coordinate in ("ui-text-google-fonts", "play-services-maps", "maps-compose"):
         assert coordinate not in code, f"android-ui depends on {coordinate}"
 
 

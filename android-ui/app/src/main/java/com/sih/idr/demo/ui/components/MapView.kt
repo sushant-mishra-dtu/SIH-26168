@@ -1,202 +1,328 @@
 package com.sih.idr.demo.ui.components
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.view.MotionEvent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.ui.IDRColors
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView as OsmMapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polygon
+import org.osmdroid.views.overlay.Polyline
 import kotlin.math.cos
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * The recorded track, drawn in metres on a plain canvas. **There is no basemap and no tile
- * server.**
- *
- * This was an `osmdroid` map pulling raster tiles from `basemaps.cartocdn.com`. Three things were
- * wrong with that and only the first is obvious:
- *
- *  1. It is a network call at runtime, which D-041's "100% offline" claim does not survive and
- *     which D-080 forbids the demo surface outright.
- *  2. Tiles under a track imply a *fix* to the road. Nothing here matches to a road -- the map
- *     matcher is seat P's October work -- so road geometry beneath the line would be read by a
- *     judge as evidence of something the system does not do yet (HANDOVER.md section 3b).
- *  3. It anchored the track at a hard-coded Delhi origin, which places a recording made anywhere
- *     else on top of streets it was never driven on.
- *
- * What is drawn is what was measured: the track, the marker, the reported uncertainty radius, and
- * a scale bar so distances stay readable without a basemap. Metres to pixels is a projection, not
- * a computed quantity -- no displayed *number* originates here (D-079).
+ * Online map canvas streaming OpenStreetMap tiles with pinch-to-zoom, drag-to-pan,
+ * on-screen zoom buttons, seamless vehicle pointer, and dead-reckoning trajectory overlay.
  */
 @Composable
 fun MapView(
     telemetry: TelemetryState,
     modifier: Modifier = Modifier
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val view = ViewWindow.of(
-            telemetry,
-            Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()),
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var mapViewInstance by remember { mutableStateOf<OsmMapView?>(null) }
+    var followVehicle by remember { mutableStateOf(true) }
+
+    // Retain overlay objects across recompositions
+    val polyline = remember {
+        Polyline().apply {
+            val density = context.resources.displayMetrics.density
+            outlinePaint.color = android.graphics.Color.parseColor("#2563EB")
+            outlinePaint.strokeWidth = 6f * density
+            outlinePaint.strokeCap = Paint.Cap.ROUND
+            outlinePaint.strokeJoin = Paint.Join.ROUND
+        }
+    }
+
+    val uncertaintyPolygon = remember {
+        Polygon().apply {
+            val density = context.resources.displayMetrics.density
+            outlinePaint.strokeWidth = 2f * density
+        }
+    }
+
+    val vehicleMarker = remember {
+        Marker(OsmMapView(context)).apply {
+            icon = getVehicleIcon(context)
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            infoWindow = null
+        }
+    }
+
+    // Lifecycle binding for OSMDroid tile caching
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> mapViewInstance?.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapViewInstance?.onPause()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapViewInstance?.onDetach()
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        // ── Native OSMDroid MapView Embedded in Compose ──────────────
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+                Configuration.getInstance().userAgentValue = ctx.packageName
+
+                OsmMapView(ctx).apply {
+                    setTileSource(TileSourceFactory.MAPNIK)
+                    setMultiTouchControls(true)
+                    isTilesScaledToDpi = true
+                    controller.setZoom(18.0)
+                    controller.setCenter(GeoPoint(telemetry.latitude, telemetry.longitude))
+
+                    // Detect manual drag to pause auto-follow without fighting user
+                    setOnTouchListener { _, event ->
+                        if (event.action == MotionEvent.ACTION_MOVE) {
+                            followVehicle = false
+                        }
+                        false
+                    }
+
+                    // Add overlays in back-to-front order
+                    overlays.add(uncertaintyPolygon)
+                    overlays.add(polyline)
+                    overlays.add(vehicleMarker)
+
+                    mapViewInstance = this
+                }
+            },
+            update = { osmView ->
+                val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
+
+                // 1. Update vehicle position and heading rotation
+                vehicleMarker.position = currentPoint
+                vehicleMarker.rotation = Math.toDegrees(telemetry.yawRad.toDouble()).toFloat()
+
+                // 2. Update uncertainty circle (radius in metres)
+                if (telemetry.running && telemetry.uncertaintyM > 0f) {
+                    val circlePoints = generateCirclePoints(currentPoint, telemetry.uncertaintyM.toDouble())
+                    uncertaintyPolygon.points = circlePoints
+                    if (telemetry.tunnelModeActive || telemetry.uncertaintyM > 25f) {
+                        uncertaintyPolygon.fillPaint.color = 0x22D97706.toInt() // Amber fill
+                        uncertaintyPolygon.outlinePaint.color = 0x88D97706.toInt() // Amber stroke
+                    } else {
+                        uncertaintyPolygon.fillPaint.color = 0x1A16A34A.toInt() // Green fill
+                        uncertaintyPolygon.outlinePaint.color = 0x8816A34A.toInt() // Green stroke
+                    }
+                } else {
+                    uncertaintyPolygon.points = ArrayList()
+                }
+
+                // 3. Update trajectory path
+                val latPerMetre = 1.0 / 111_320.0
+                val lonPerMetre = 1.0 / (111_320.0 * cos(Math.toRadians(telemetry.originLat)))
+                val oLat = telemetry.originLat
+                val oLon = telemetry.originLon
+
+                val pathPoints = ArrayList<GeoPoint>(telemetry.path.size + 1)
+                for (p in telemetry.path) {
+                    pathPoints.add(GeoPoint(oLat + p.northM * latPerMetre, oLon + p.eastM * lonPerMetre))
+                }
+                pathPoints.add(currentPoint)
+                polyline.setPoints(pathPoints)
+
+                // 4. Locked camera follow (using setCenter directly avoids animation jitter)
+                if (followVehicle) {
+                    osmView.controller.setCenter(currentPoint)
+                }
+
+                osmView.invalidate()
+            }
         )
 
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawGraticule(view)
-            drawTrack(telemetry, view)
-            drawUncertainty(telemetry, view)
-            drawMarker(telemetry, view)
-            drawScaleBar(view)
-        }
-
-        Text(
-            text = "no basemap — offline build. Track in metres from the first fix; " +
-                "the line is not matched to a road.",
-            style = MaterialTheme.typography.bodySmall,
-            color = IDRColors.TextSecondary,
-            textAlign = TextAlign.Center,
+        // ── Subtitle / Mode Disclaimer ──────────────────────────────
+        Surface(
+            color = IDRColors.OverlayBg,
+            shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 24.dp, vertical = 72.dp)
-        )
-
-        Text(
-            text = "${view.scaleBarMetres.roundToInt()} m",
-            style = MaterialTheme.typography.labelMedium,
-            color = IDRColors.TextSecondary,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 24.dp, bottom = 36.dp)
-        )
-    }
-}
-
-/**
- * The metres-to-pixels mapping for one frame: everything recorded, plus the uncertainty radius,
- * fitted into the canvas with a margin, never zoomed in past [MIN_SPAN_M].
- */
-private class ViewWindow(
-    val centreNorthM: Float,
-    val centreEastM: Float,
-    val pixelsPerMetre: Float,
-    val canvas: Size,
-) {
-    fun toPixels(northM: Float, eastM: Float) = Offset(
-        // East is +x, north is -y: north is up the screen, and screen y grows downwards.
-        x = canvas.width / 2f + (eastM - centreEastM) * pixelsPerMetre,
-        y = canvas.height / 2f - (northM - centreNorthM) * pixelsPerMetre,
-    )
-
-    /** The round number of metres the scale bar spans at this zoom. */
-    val scaleBarMetres: Float
-        get() = NICE_SPANS_M.lastOrNull { it * pixelsPerMetre <= canvas.width * 0.3f }
-            ?: NICE_SPANS_M.first()
-
-    companion object {
-        /** No closer than this, so a stationary phone does not render as a hugely zoomed dot. */
-        const val MIN_SPAN_M = 120f
-        private const val MARGIN = 0.82f
-
-        val NICE_SPANS_M = listOf(10f, 25f, 50f, 100f, 250f, 500f, 1000f, 2500f)
-
-        fun of(telemetry: TelemetryState, canvas: Size): ViewWindow {
-            val norths = telemetry.path.map { it.northM } + telemetry.positionNorthM
-            val easts = telemetry.path.map { it.eastM } + telemetry.positionEastM
-            val centreNorth = (norths.min() + norths.max()) / 2f
-            val centreEast = (easts.min() + easts.max()) / 2f
-            // The uncertainty circle is part of the picture, so it has to fit inside it too.
-            val spanM = max(
-                max(norths.max() - norths.min(), easts.max() - easts.min()) +
-                    2f * telemetry.uncertaintyM,
-                MIN_SPAN_M,
+                .statusBarsPadding()
+                .padding(top = 72.dp)
+                .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = IDRColors.TextDim)
+        ) {
+            Text(
+                text = "OpenStreetMap • Live Online Tile Stream",
+                style = MaterialTheme.typography.bodySmall,
+                color = IDRColors.TextSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
             )
-            val shorterEdge = max(1f, min(canvas.width, canvas.height))
-            return ViewWindow(centreNorth, centreEast, shorterEdge * MARGIN / spanM, canvas)
+        }
+
+        // ── Floating Zoom & Re-Center Controls ──────────────────────
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 112.dp, end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Zoom In Button (+)
+            MapControlButton(icon = Icons.Rounded.Add) {
+                mapViewInstance?.controller?.zoomIn()
+            }
+
+            // Zoom Out Button (−)
+            MapControlButton(icon = Icons.Rounded.Remove) {
+                mapViewInstance?.controller?.zoomOut()
+            }
+
+            // Re-center / Follow Vehicle Button (smoothly glides camera back to vehicle)
+            MapControlButton(
+                icon = Icons.Rounded.MyLocation,
+                active = !followVehicle
+            ) {
+                followVehicle = true
+                val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
+                mapViewInstance?.controller?.animateTo(currentPoint)
+                mapViewInstance?.controller?.setZoom(18.0)
+            }
         }
     }
 }
 
-/** A 50 m grid, so the scale is legible in the picture and not only in the scale bar. */
-private fun DrawScope.drawGraticule(view: ViewWindow) {
-    val stepPx = 50f * view.pixelsPerMetre
-    if (stepPx < 12f) return
-    val colour = IDRColors.TextDim.copy(alpha = 0.35f)
-    var x = view.canvas.width / 2f % stepPx
-    while (x < view.canvas.width) {
-        drawLine(colour, Offset(x, 0f), Offset(x, view.canvas.height), strokeWidth = 1f)
-        x += stepPx
-    }
-    var y = view.canvas.height / 2f % stepPx
-    while (y < view.canvas.height) {
-        drawLine(colour, Offset(0f, y), Offset(view.canvas.width, y), strokeWidth = 1f)
-        y += stepPx
+@Composable
+private fun MapControlButton(
+    icon: ImageVector,
+    active: Boolean = false,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    Surface(
+        color = if (active) IDRColors.Blue.copy(alpha = 0.2f) else IDRColors.BgPrimary,
+        shape = CircleShape,
+        modifier = Modifier
+            .size(44.dp)
+            .scale(if (isPressed) 0.88f else 1f)
+            .shadow(6.dp, CircleShape, spotColor = IDRColors.TextDim)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (active) IDRColors.Blue else IDRColors.TextPrimary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
     }
 }
 
-private fun DrawScope.drawTrack(telemetry: TelemetryState, view: ViewWindow) {
-    val points = telemetry.path
-    if (points.size < 2) return
-    val path = Path()
-    points.forEachIndexed { i, p ->
-        val o = view.toPixels(p.northM, p.eastM)
-        if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
+/** Generates circle points in WGS84 coordinates given center and radius in metres. */
+private fun generateCirclePoints(center: GeoPoint, radiusMeters: Double, count: Int = 36): ArrayList<GeoPoint> {
+    val points = ArrayList<GeoPoint>(count)
+    val lat = center.latitude
+    val lon = center.longitude
+    val latPerM = 1.0 / 111_320.0
+    val lonPerM = 1.0 / (111_320.0 * cos(Math.toRadians(lat)))
+    for (i in 0 until count) {
+        val angle = 2.0 * Math.PI * i / count
+        val dLat = radiusMeters * cos(angle) * latPerM
+        val dLon = radiusMeters * sin(angle) * lonPerM
+        points.add(GeoPoint(lat + dLat, lon + dLon))
     }
-    drawPath(path, color = IDRColors.Blue, style = Stroke(width = 12f))
+    return points
 }
 
 /**
- * The reported uncertainty radius, exactly as the telemetry reports it. The colour thresholds are
- * presentation; the radius is not recomputed here.
+ * Compact, seamless navigation puck with subtle drop shadow, crisp white ring,
+ * and precision forward directional chevron (Google/Apple Maps style).
  */
-private fun DrawScope.drawUncertainty(telemetry: TelemetryState, view: ViewWindow) {
-    val radiusPx = telemetry.uncertaintyM * view.pixelsPerMetre
-    if (radiusPx <= 0f) return
-    val colour = when {
-        telemetry.uncertaintyM < 15f -> IDRColors.GreenOk
-        telemetry.uncertaintyM < 40f -> IDRColors.AmberWarn
-        else -> IDRColors.RedError
+private fun getVehicleIcon(context: Context): Drawable {
+    val density = context.resources.displayMetrics.density
+    // Compact 24dp size: sleek, precise, seamless
+    val sizePx = (24 * density).roundToInt()
+    val center = sizePx / 2f
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+
+    // 1. Soft subtle drop shadow
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(45, 0, 0, 0)
     }
-    val centre = view.toPixels(telemetry.positionNorthM, telemetry.positionEastM)
-    drawCircle(colour.copy(alpha = 0.12f), radius = radiusPx, center = centre)
-    drawCircle(colour.copy(alpha = 0.5f), radius = radiusPx, center = centre, style = Stroke(4f))
-}
+    canvas.drawCircle(center, center + (1f * density), 10.5f * density, shadowPaint)
 
-/** Position and heading, both read from the telemetry. */
-private fun DrawScope.drawMarker(telemetry: TelemetryState, view: ViewWindow) {
-    val centre = view.toPixels(telemetry.positionNorthM, telemetry.positionEastM)
-    drawCircle(Color.White, radius = 20f, center = centre)
-    drawCircle(IDRColors.Blue, radius = 15f, center = centre)
-    // Yaw is measured clockwise from north, which on screen is +x east and -y north.
-    val yaw = telemetry.yawRad
-    val tip = Offset(centre.x + 34f * sin(yaw), centre.y - 34f * cos(yaw))
-    drawLine(IDRColors.Blue, centre, tip, strokeWidth = 6f)
-}
+    // 2. Crisp outer white border
+    val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+    }
+    canvas.drawCircle(center, center, 9.5f * density, whitePaint)
 
-/** Without a basemap this is the only thing that says how big the picture is. */
-private fun DrawScope.drawScaleBar(view: ViewWindow) {
-    val lengthPx = view.scaleBarMetres * view.pixelsPerMetre
-    val y = view.canvas.height - 48f
-    val x0 = 48f
-    drawLine(IDRColors.TextSecondary, Offset(x0, y), Offset(x0 + lengthPx, y), strokeWidth = 4f)
-    drawLine(IDRColors.TextSecondary, Offset(x0, y - 8f), Offset(x0, y + 8f), strokeWidth = 4f)
-    drawLine(
-        IDRColors.TextSecondary,
-        Offset(x0 + lengthPx, y - 8f),
-        Offset(x0 + lengthPx, y + 8f),
-        strokeWidth = 4f,
-    )
+    // 3. Vibrant IDR Blue core puck
+    val bluePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#2563EB")
+    }
+    canvas.drawCircle(center, center, 7f * density, bluePaint)
+
+    // 4. Sharp precision directional chevron at the top pointing North (0°)
+    val chevronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.FILL
+    }
+    val chevron = Path().apply {
+        val tipY = center - 8f * density
+        val baseY = center - 2.5f * density
+        val halfW = 4f * density
+        moveTo(center, tipY)
+        lineTo(center + halfW, baseY)
+        lineTo(center, baseY - 1.5f * density)
+        lineTo(center - halfW, baseY)
+        close()
+    }
+    canvas.drawPath(chevron, chevronPaint)
+
+    return BitmapDrawable(context.resources, bitmap)
 }

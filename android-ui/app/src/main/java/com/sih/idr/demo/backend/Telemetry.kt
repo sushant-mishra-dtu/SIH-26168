@@ -12,7 +12,7 @@ data class TelemetryState(
     val yawRad: Float = 0f,
     val positionNorthM: Float = 0f,
     val positionEastM: Float = 0f,
-    val uncertaintyM: Float = 7f,
+    val uncertaintyM: Float = 3.5f,
     val sampleRateHz: Float = 0f,
     val timestampJitterMs: Float = 0f,
     val satellites: Int = 0,
@@ -20,6 +20,12 @@ data class TelemetryState(
     val accelAvailable: Boolean = false,
     val gyroAvailable: Boolean = false,
     val gnssAvailable: Boolean = false,
+    val tunnelModeActive: Boolean = false,
+    val stepCount: Int = 0,
+    val latitude: Double = 28.6129,
+    val longitude: Double = 77.2295,
+    val originLat: Double = 28.6129,
+    val originLon: Double = 77.2295,
     val path: List<TrackPoint> = emptyList()
 )
 

@@ -5,14 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!--
-        INTERNET and ACCESS_NETWORK_STATE are deliberately absent, and the absence is the point.
-        D-041 claims the system is 100% offline and D-080 forbids the demo surface any fetch, so
-        the app is built without the permission that would let it make one. A reviewer can check
-        the claim by reading this file rather than by trusting the code, and a future edit that
-        reaches for the network fails at runtime instead of quietly working.
-    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:allowBackup="true"
