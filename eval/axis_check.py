@@ -241,9 +241,9 @@ def measure(
     # The correction under test: the measured yaw column moved into the vertical slot. The two
     # horizontal channels are zeroed rather than assigned, because which of them is device x and
     # which is device y is NOT measured by anything here -- see D-095.
-    vertical_only = np.column_stack(
-        [np.zeros(raw_gyro.shape[0]), np.zeros(raw_gyro.shape[0]), raw_gyro[:, int(np.argmax(np.abs(r2)))]]
-    )
+    yaw_col = int(np.argmax(np.abs(r2)))
+    flat = np.zeros(raw_gyro.shape[0])
+    vertical_only = np.column_stack([flat, flat, raw_gyro[:, yaw_col]])
     corrected_rms, _ = _residual_specific_force(
         seq, vertical_only, accel, dt, fix_idx, fix_ned, seconds
     )

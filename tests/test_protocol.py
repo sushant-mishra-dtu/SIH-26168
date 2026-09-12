@@ -226,6 +226,7 @@ def test_dirty_tree_is_flagged_as_unreproducible():
 def test_evaluation_doc_matches_splits_module():
     """`docs/EVALUATION.md` section 3 and `eval/splits.py` must stay in exact agreement."""
     from pathlib import Path
+
     from eval.splits import UNAVAILABLE_S_STREAM
 
     doc_path = Path(__file__).resolve().parent.parent / "docs" / "EVALUATION.md"

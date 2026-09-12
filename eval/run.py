@@ -317,7 +317,11 @@ def run_filter(
         if k > 0:
             f.propagate(gyro[k], accel[k], float(dt[k - 1]))
             speed = float(np.linalg.norm(f.state.v))
-            if not np.isfinite(speed) or not np.isfinite(f.state.p).all() or speed > DIVERGENCE_SPEED_MPS:
+            if (
+                not np.isfinite(speed)
+                or not np.isfinite(f.state.p).all()
+                or speed > DIVERGENCE_SPEED_MPS
+            ):
                 raise FilterDivergedError(
                     f"{seq.name if seq is not None else '<unnamed>'}: filter state left physical "
                     f"bounds at sample {k} ({k / SAMPLE_RATE_HZ:.1f} s into this pass) -- "
