@@ -26,7 +26,9 @@ data class TelemetryState(
     val longitude: Double = 77.2295,
     val originLat: Double = 28.6129,
     val originLon: Double = 77.2295,
-    val path: List<TrackPoint> = emptyList()
+    val path: List<TrackPoint> = emptyList(),
+    val totalDistanceM: Float = 0f,
+    val tripDurationSec: Long = 0L
 )
 
 enum class NavigationMode(val label: String) {

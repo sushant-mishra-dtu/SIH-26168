@@ -33,10 +33,17 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     private var satelliteCount = 0
     private var currentRate = 0f
     private var currentJitter = 0f
+    private var lastUiPublishMs = 0L
 
     private val gnssCallback = object : GnssStatus.Callback() {
         override fun onSatelliteStatusChanged(status: GnssStatus) {
-            satelliteCount = (0 until status.satelliteCount).count { status.usedInFix(it) }
+            val used = (0 until status.satelliteCount).count { status.usedInFix(it) }
+            val visible = (0 until status.satelliteCount).count { status.getCn0DbHz(it) > 12f }
+            satelliteCount = if (used > 0) used else visible
+            if (satelliteCount >= 3) {
+                estimator.notifyGnssHeartbeat()
+            }
+            TelemetryStore.update { it.copy(satellites = satelliteCount) }
         }
     }
 
@@ -62,18 +69,30 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
             it.copy(running = true, accelAvailable = accel != null, gyroAvailable = gyro != null)
         }
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            val lastFused = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try { locationManager.getLastKnownLocation(LocationManager.FUSED_PROVIDER) } catch (e: Exception) { null }
+            } else null
             val lastGps = try { locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
             val lastNet = try { locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
-            (lastGps ?: lastNet)?.let { loc ->
+            val initialLoc = lastFused ?: lastGps ?: lastNet
+            initialLoc?.let { loc ->
                 val estimate = estimator.onLocation(loc)
-                applyEstimate(estimate)
+                applyEstimate(estimate, force = true)
             }
+            // Continuous periodic updates with minDistance = 0f to prevent disconnects when stopped
             try {
-                locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0.5f, this)
+                locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0.0f, this)
             } catch (e: Exception) {}
             try {
-                locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 1.0f, this)
+                locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 0.0f, this)
             } catch (e: Exception) {}
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    if (locationManager.allProviders.contains(LocationManager.FUSED_PROVIDER)) {
+                        locationManager.requestLocationUpdates(LocationManager.FUSED_PROVIDER, 1000L, 0.0f, this)
+                    }
+                } catch (e: Exception) {}
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 locationManager.registerGnssStatusCallback(gnssCallback, null)
             }
@@ -115,7 +134,12 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         }
     }
 
-    private fun applyEstimate(estimate: Estimate) {
+    private fun applyEstimate(estimate: Estimate, force: Boolean = false) {
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        if (!force && nowMs - lastUiPublishMs < 33L) {
+            return
+        }
+        lastUiPublishMs = nowMs
         TelemetryStore.update {
             it.copy(
                 mode = estimate.mode,
@@ -132,9 +156,12 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 originLat = estimate.originLat,
                 originLon = estimate.originLon,
                 path = estimate.path,
+                totalDistanceM = estimate.totalDistanceM,
+                tripDurationSec = estimate.tripDurationSec,
                 sampleRateHz = currentRate,
                 timestampJitterMs = currentJitter,
-                lastSensorAgeMs = 0
+                lastSensorAgeMs = 0,
+                satellites = satelliteCount
             )
         }
     }
@@ -143,40 +170,26 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
 
     override fun onLocationChanged(location: Location) {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (location.provider == LocationManager.GPS_PROVIDER) {
+        val isGpsOrFused = location.provider == LocationManager.GPS_PROVIDER || location.provider == "fused"
+        if (isGpsOrFused) {
             lastGpsFixElapsedMs = now
         } else if (location.provider == LocationManager.NETWORK_PROVIDER) {
-            // If GPS fix was received recently, suppress coarse network fixes to eliminate jumping & drift
-            if (now - lastGpsFixElapsedMs < 8_000L) {
+            // If GPS/fused fix was received recently, suppress coarse network fixes to eliminate jumping & drift
+            if (now - lastGpsFixElapsedMs < 3_000L) {
                 return
             }
         }
 
-        // Suppress coarse fixes (>35m error) from dragging the map
-        if (location.hasAccuracy() && location.accuracy > 35f) {
+        // Heartbeat retention: inform estimator that GNSS updates are flowing
+        estimator.notifyGnssHeartbeat()
+
+        // Suppress coarse cell tower fixes (>100m error) once we already have an established origin
+        if (location.hasAccuracy() && location.accuracy > 100f && estimator.hasOrigin()) {
             return
         }
 
         val estimate = estimator.onLocation(location)
-        TelemetryStore.update { state ->
-            state.copy(
-                mode = estimate.mode,
-                gnssAvailable = estimate.gnssAvailable,
-                tunnelModeActive = estimate.tunnelModeActive,
-                satellites = satelliteCount,
-                speedMps = estimate.speedMps,
-                yawRad = estimate.yawRad,
-                positionNorthM = estimate.positionNorthM,
-                positionEastM = estimate.positionEastM,
-                uncertaintyM = estimate.uncertaintyM,
-                stepCount = estimate.stepCount,
-                latitude = estimate.latitude,
-                longitude = estimate.longitude,
-                originLat = estimate.originLat,
-                originLon = estimate.originLon,
-                path = estimate.path
-            )
-        }
+        applyEstimate(estimate, force = true)
     }
 
     override fun onProviderDisabled(provider: String) {
@@ -224,14 +237,21 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         fun toggleTunnelMode(): Boolean {
             val service = activeInstance ?: return false
             val active = service.estimator.toggleTunnelMode()
-            service.applyEstimate(service.estimator.snapshot())
+            service.applyEstimate(service.estimator.snapshot(), force = true)
             return active
         }
 
         fun resetOrigin() {
             val service = activeInstance ?: return
-            service.estimator.resetOrigin()
-            service.applyEstimate(service.estimator.snapshot())
+            val lm = service.locationManager
+            val lastFused = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try { lm.getLastKnownLocation(LocationManager.FUSED_PROVIDER) } catch (e: Exception) { null }
+            } else null
+            val lastGps = try { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
+            val lastNet = try { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
+            val freshLoc = lastFused ?: lastGps ?: lastNet
+            service.estimator.resetOrigin(freshLoc)
+            service.applyEstimate(service.estimator.snapshot(), force = true)
         }
 
         fun start(context: Context) {

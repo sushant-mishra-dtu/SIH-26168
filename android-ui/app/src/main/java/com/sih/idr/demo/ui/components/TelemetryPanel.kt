@@ -1,5 +1,6 @@
 package com.sih.idr.demo.ui.components
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -15,7 +16,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
-import com.sih.idr.demo.ui.IDRColors
+import com.sih.idr.demo.ui.LocalIDRPalette
 import kotlin.math.roundToInt
 
 /**
@@ -85,10 +86,14 @@ private fun MetricCard(
     unit: String,
     modifier: Modifier = Modifier
 ) {
+    val palette = LocalIDRPalette.current
+
     Surface(
-        color = IDRColors.BgCard,
+        color = palette.bgCard,
         shape = RoundedCornerShape(20.dp),
-        modifier = modifier.aspectRatio(1f) // Makes it a square
+        modifier = modifier
+            .aspectRatio(1f) // Makes it a square
+            .border(1.dp, palette.border, RoundedCornerShape(20.dp))
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -101,7 +106,7 @@ private fun MetricCard(
                     val parts = value.split(".")
                     if (parts.size == 2) {
                         append(parts[0])
-                        withStyle(SpanStyle(fontSize = 18.sp, color = IDRColors.TextSecondary)) {
+                        withStyle(SpanStyle(fontSize = 18.sp, color = palette.textSecondary)) {
                             append(".${parts[1]}")
                         }
                     } else {
@@ -109,13 +114,13 @@ private fun MetricCard(
                     }
                 },
                 style = MaterialTheme.typography.displayMedium,
-                color = IDRColors.TextPrimary
+                color = palette.textPrimary
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 text = unit,
                 style = MaterialTheme.typography.titleSmall,
-                color = IDRColors.TextSecondary
+                color = palette.textSecondary
             )
         }
     }

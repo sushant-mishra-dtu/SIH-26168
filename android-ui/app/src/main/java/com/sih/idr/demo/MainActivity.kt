@@ -53,7 +53,11 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            NavigatorTheme {
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            var isDarkTheme by remember { mutableStateOf(systemDark) }
+            var courseUpMode by remember { mutableStateOf(false) }
+
+            NavigatorTheme(darkTheme = isDarkTheme) {
                 // The one source of telemetry there is. Before the service starts this is a
                 // default-constructed TelemetryState -- zeros, INITIALIZING, an empty path -- and
                 // that empty state is what the screen shows. D-080: a surface with no data shows
@@ -78,6 +82,10 @@ class MainActivity : ComponentActivity() {
                     telemetry = telemetry,
                     isRecording = isRecording,
                     permissionsGranted = permsGranted,
+                    darkTheme = isDarkTheme,
+                    onToggleTheme = { isDarkTheme = !isDarkTheme },
+                    courseUpMode = courseUpMode,
+                    onToggleCourseUp = { courseUpMode = !courseUpMode },
                     onToggleTunnelMode = {
                         SensorForegroundService.toggleTunnelMode()
                     },
@@ -118,13 +126,21 @@ class MainActivity : ComponentActivity() {
     private fun seedLocationIfPossible() {
         if (hasAllPermissions()) {
             val lm = getSystemService(LOCATION_SERVICE) as? android.location.LocationManager ?: return
+            val lastFused = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try { lm.getLastKnownLocation(android.location.LocationManager.FUSED_PROVIDER) } catch (e: Exception) { null }
+            } else null
             val lastGps = try { lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
             val lastNet = try { lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
-            val loc = lastGps ?: lastNet
+            val loc = lastFused ?: lastGps ?: lastNet
             if (loc != null) {
                 TelemetryStore.update {
                     if (!it.running) {
-                        it.copy(latitude = loc.latitude, longitude = loc.longitude)
+                        it.copy(
+                            latitude = loc.latitude,
+                            longitude = loc.longitude,
+                            originLat = loc.latitude,
+                            originLon = loc.longitude
+                        )
                     } else it
                 }
             }

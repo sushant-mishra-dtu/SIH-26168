@@ -3,11 +3,19 @@ package com.sih.idr.demo.ui.components
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.view.MotionEvent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -16,7 +24,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -25,18 +35,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.ui.IDRColors
+import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.LocalIsDarkTheme
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -49,25 +65,43 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Online map canvas streaming OpenStreetMap tiles with pinch-to-zoom, drag-to-pan,
- * on-screen zoom buttons, seamless vehicle pointer, and dead-reckoning trajectory overlay.
+ * Online map canvas streaming OpenStreetMap tiles with Google Maps-style navigation:
+ * - Course-Up (Bearing-Up) & North-Up modes
+ * - Dark Mode night-vision tile filtering
+ * - Smooth auto-follow with interactive "Re-center" button
+ * - Compass North-indicator with single-tap snap to North
+ * - Circular HUD speedometer
  */
 @Composable
 fun MapView(
     telemetry: TelemetryState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    courseUpMode: Boolean = false,
+    onToggleCourseUp: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val palette = LocalIDRPalette.current
+    val isDark = LocalIsDarkTheme.current
 
     var mapViewInstance by remember { mutableStateOf<OsmMapView?>(null) }
     var followVehicle by remember { mutableStateOf(true) }
+
+    // Night Mode Color Filter for OSM Tiles (Google Maps Night Mode look)
+    val nightFilter = remember {
+        val cm = ColorMatrix(floatArrayOf(
+            -0.82f,  0.00f,  0.00f, 0.0f, 220f,
+             0.00f, -0.82f,  0.00f, 0.0f, 220f,
+             0.00f,  0.00f, -0.70f, 0.0f, 238f,
+             0.00f,  0.00f,  0.00f, 1.0f,   0f
+        ))
+        ColorMatrixColorFilter(cm)
+    }
 
     // Retain overlay objects across recompositions
     val polyline = remember {
         Polyline().apply {
             val density = context.resources.displayMetrics.density
-            outlinePaint.color = android.graphics.Color.parseColor("#2563EB")
             outlinePaint.strokeWidth = 6f * density
             outlinePaint.strokeCap = Paint.Cap.ROUND
             outlinePaint.strokeJoin = Paint.Join.ROUND
@@ -138,40 +172,61 @@ fun MapView(
             },
             update = { osmView ->
                 val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
+                val headingDeg = Math.toDegrees(telemetry.yawRad.toDouble()).toFloat()
 
-                // 1. Update vehicle position and heading rotation
+                // 1. Dark/Night mode tile filter
+                osmView.overlayManager.tilesOverlay.setColorFilter(if (isDark) nightFilter else null)
+
+                // 2. Camera Orientation: Course-Up vs North-Up
+                if (courseUpMode) {
+                    osmView.mapOrientation = -headingDeg
+                    vehicleMarker.rotation = 0f // Straight ahead in course-up
+                } else {
+                    osmView.mapOrientation = 0f
+                    vehicleMarker.rotation = headingDeg // Rotates relative to north
+                }
+
+                // 3. Update vehicle position
                 vehicleMarker.position = currentPoint
-                vehicleMarker.rotation = Math.toDegrees(telemetry.yawRad.toDouble()).toFloat()
 
-                // 2. Update uncertainty circle (radius in metres)
+                // 4. Update uncertainty circle (radius in metres)
                 if (telemetry.running && telemetry.uncertaintyM > 0f) {
                     val circlePoints = generateCirclePoints(currentPoint, telemetry.uncertaintyM.toDouble())
                     uncertaintyPolygon.points = circlePoints
                     if (telemetry.tunnelModeActive || telemetry.uncertaintyM > 25f) {
-                        uncertaintyPolygon.fillPaint.color = 0x22D97706.toInt() // Amber fill
+                        uncertaintyPolygon.fillPaint.color = 0x25D97706.toInt() // Amber fill
                         uncertaintyPolygon.outlinePaint.color = 0x88D97706.toInt() // Amber stroke
                     } else {
-                        uncertaintyPolygon.fillPaint.color = 0x1A16A34A.toInt() // Green fill
-                        uncertaintyPolygon.outlinePaint.color = 0x8816A34A.toInt() // Green stroke
+                        uncertaintyPolygon.fillPaint.color = if (isDark) 0x2510B981.toInt() else 0x1A16A34A.toInt()
+                        uncertaintyPolygon.outlinePaint.color = if (isDark) 0x8810B981.toInt() else 0x8816A34A.toInt()
                     }
                 } else {
                     uncertaintyPolygon.points = ArrayList()
                 }
 
-                // 3. Update trajectory path
+                // 5. Update trajectory path
                 val latPerMetre = 1.0 / 111_320.0
                 val lonPerMetre = 1.0 / (111_320.0 * cos(Math.toRadians(telemetry.originLat)))
                 val oLat = telemetry.originLat
                 val oLon = telemetry.originLon
 
-                val pathPoints = ArrayList<GeoPoint>(telemetry.path.size + 1)
-                for (p in telemetry.path) {
-                    pathPoints.add(GeoPoint(oLat + p.northM * latPerMetre, oLon + p.eastM * lonPerMetre))
+                if (telemetry.running && (telemetry.path.isNotEmpty() || telemetry.totalDistanceM > 0f)) {
+                    val pathPoints = ArrayList<GeoPoint>(telemetry.path.size + 1)
+                    for (p in telemetry.path) {
+                        pathPoints.add(GeoPoint(oLat + p.northM * latPerMetre, oLon + p.eastM * lonPerMetre))
+                    }
+                    pathPoints.add(currentPoint)
+                    polyline.setPoints(pathPoints)
+                } else {
+                    polyline.setPoints(ArrayList())
                 }
-                pathPoints.add(currentPoint)
-                polyline.setPoints(pathPoints)
+                polyline.outlinePaint.color = if (isDark) {
+                    android.graphics.Color.parseColor("#38BDF8")
+                } else {
+                    android.graphics.Color.parseColor("#2563EB")
+                }
 
-                // 4. Locked camera follow (using setCenter directly avoids animation jitter)
+                // 6. Camera follow
                 if (followVehicle) {
                     osmView.controller.setCenter(currentPoint)
                 }
@@ -180,53 +235,64 @@ fun MapView(
             }
         )
 
-        // ── Subtitle / Mode Disclaimer ──────────────────────────────
-        Surface(
-            color = IDRColors.OverlayBg,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 72.dp)
-                .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = IDRColors.TextDim)
-        ) {
-            Text(
-                text = "OpenStreetMap • Live Online Tile Stream",
-                style = MaterialTheme.typography.bodySmall,
-                color = IDRColors.TextSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-            )
-        }
-
-        // ── Floating Zoom & Re-Center Controls ──────────────────────
+        // ── Floating Zoom Controls (Comfortably centered on right edge) ──
         Column(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .statusBarsPadding()
-                .padding(top = 112.dp, end = 16.dp),
+                .align(Alignment.CenterEnd)
+                .padding(end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Zoom In Button (+)
-            MapControlButton(icon = Icons.Rounded.Add) {
+            MapControlButton(icon = Icons.Rounded.Add, contentDescription = "Zoom In") {
                 mapViewInstance?.controller?.zoomIn()
             }
 
             // Zoom Out Button (−)
-            MapControlButton(icon = Icons.Rounded.Remove) {
+            MapControlButton(icon = Icons.Rounded.Remove, contentDescription = "Zoom Out") {
                 mapViewInstance?.controller?.zoomOut()
             }
+        }
 
-            // Re-center / Follow Vehicle Button (smoothly glides camera back to vehicle)
-            MapControlButton(
-                icon = Icons.Rounded.MyLocation,
-                active = !followVehicle
+        // ── Google Maps Floating "Re-center" Button (Cleanly floating above bottom sheet) ──
+        AnimatedVisibility(
+            visible = !followVehicle,
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut() + slideOutVertically { it / 2 },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 360.dp)
+        ) {
+            Surface(
+                color = palette.bgPrimary,
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 10.dp,
+                modifier = Modifier
+                    .border(1.dp, palette.border, RoundedCornerShape(24.dp))
+                    .clickable {
+                        followVehicle = true
+                        val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
+                        mapViewInstance?.controller?.animateTo(currentPoint)
+                        mapViewInstance?.controller?.setZoom(18.0)
+                    }
             ) {
-                followVehicle = true
-                val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
-                mapViewInstance?.controller?.animateTo(currentPoint)
-                mapViewInstance?.controller?.setZoom(18.0)
+                Row(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.MyLocation,
+                        contentDescription = "Re-center",
+                        tint = palette.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Re-center",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = palette.textPrimary
+                    )
+                }
             }
         }
     }
@@ -236,25 +302,28 @@ fun MapView(
 private fun MapControlButton(
     icon: ImageVector,
     active: Boolean = false,
+    contentDescription: String? = null,
     onClick: () -> Unit
 ) {
+    val palette = LocalIDRPalette.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
     Surface(
-        color = if (active) IDRColors.Blue.copy(alpha = 0.2f) else IDRColors.BgPrimary,
+        color = if (active) palette.primary.copy(alpha = 0.2f) else palette.bgPrimary,
         shape = CircleShape,
         modifier = Modifier
             .size(44.dp)
             .scale(if (isPressed) 0.88f else 1f)
-            .shadow(6.dp, CircleShape, spotColor = IDRColors.TextDim)
+            .shadow(6.dp, CircleShape, spotColor = palette.textDim)
+            .border(1.dp, if (active) palette.primary else palette.border, CircleShape)
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Icon(
                 imageVector = icon,
-                contentDescription = null,
-                tint = if (active) IDRColors.Blue else IDRColors.TextPrimary,
+                contentDescription = contentDescription,
+                tint = if (active) palette.primary else palette.textPrimary,
                 modifier = Modifier.size(22.dp)
             )
         }
@@ -283,39 +352,38 @@ private fun generateCirclePoints(center: GeoPoint, radiusMeters: Double, count: 
  */
 private fun getVehicleIcon(context: Context): Drawable {
     val density = context.resources.displayMetrics.density
-    // Compact 24dp size: sleek, precise, seamless
-    val sizePx = (24 * density).roundToInt()
+    val sizePx = (26 * density).roundToInt()
     val center = sizePx / 2f
     val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
 
     // 1. Soft subtle drop shadow
     val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(45, 0, 0, 0)
+        color = android.graphics.Color.argb(55, 0, 0, 0)
     }
-    canvas.drawCircle(center, center + (1f * density), 10.5f * density, shadowPaint)
+    canvas.drawCircle(center, center + (1f * density), 11.5f * density, shadowPaint)
 
     // 2. Crisp outer white border
     val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
     }
-    canvas.drawCircle(center, center, 9.5f * density, whitePaint)
+    canvas.drawCircle(center, center, 10.5f * density, whitePaint)
 
     // 3. Vibrant IDR Blue core puck
     val bluePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#2563EB")
+        color = android.graphics.Color.parseColor("#008CFF")
     }
-    canvas.drawCircle(center, center, 7f * density, bluePaint)
+    canvas.drawCircle(center, center, 8f * density, bluePaint)
 
-    // 4. Sharp precision directional chevron at the top pointing North (0°)
+    // 4. Sharp precision directional chevron pointing forward (0°)
     val chevronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
         style = Paint.Style.FILL
     }
     val chevron = Path().apply {
-        val tipY = center - 8f * density
-        val baseY = center - 2.5f * density
-        val halfW = 4f * density
+        val tipY = center - 9f * density
+        val baseY = center - 3f * density
+        val halfW = 4.5f * density
         moveTo(center, tipY)
         lineTo(center + halfW, baseY)
         lineTo(center, baseY - 1.5f * density)
