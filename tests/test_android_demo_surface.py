@@ -36,9 +36,12 @@ REPLAY_PKG = LOGGER_APP / "kotlin" / "org" / "idr26168" / "logger" / "replay"
 
 
 def _kotlin(root: Path) -> dict[str, str]:
-    """Every Kotlin source under `root`, keyed by its path relative to the repo."""
+    """Every Kotlin source under `root`, keyed by its path relative to the repo.
+
+    Keys are POSIX-style (`android/app/...`) on every platform: the assertions below name files
+    with forward slashes, and `str(Path)` on Windows would yield backslashes and match none."""
     return {
-        str(p.relative_to(REPO)): p.read_text(encoding="utf-8")
+        p.relative_to(REPO).as_posix(): p.read_text(encoding="utf-8")
         for p in sorted(root.rglob("*.kt"))
     }
 
