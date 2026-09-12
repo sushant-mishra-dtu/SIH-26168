@@ -68,7 +68,10 @@ schema is right.
 
 ## Files it writes
 
-Per session, under `Android/data/org.idr26168.logger/files/sessions/<session-id>/`:
+Per session, under `Android/data/<application id>/files/sessions/<session-id>/`. The application
+id is `org.idr26168.logger.debug` for the debug build (`applicationIdSuffix` in
+`app/build.gradle.kts`), which is the only build that exists, so the path on a phone is
+`/sdcard/Android/data/org.idr26168.logger.debug/files/sessions/`:
 
 | File | Rate | Read by |
 |---|---|---|
@@ -221,9 +224,23 @@ Record two minutes stationary on a desk and read the front screen. If `got Hz` i
 `req Hz`, stop: the device microphone toggle rate-limits motion sensors regardless of permissions,
 and thermal throttling looks identical. The app says so in a warning rather than leaving it to be
 discovered afterwards. Then record the numbers per device — that is the Sprint 0 exit criterion.
+The step-by-step for a phone — install, permissions, the stationary run, the drive, getting the
+files off and where the numbers go — is [HANDOVER.md](HANDOVER.md) §9.
 
 ## Status
 
-Logger written, not yet built or run: no Android SDK on the machine it was written on, and **no
-number in `_session.json` has been produced by a real device.** Until a drive exists, the achieved
-rate and jitter are unmeasured and nothing in this directory may be quoted.
+Written 3 Sep, **builds and passes its unit tests, has never run on a phone.**
+
+| Claim | As of | How to check |
+|---|---|---|
+| Compiles | `53e0053` committed the wrapper; `.github/workflows/android.yml` (D-114) runs `:app:assembleDebug` on every PR | the Android check on the PR |
+| 56 JVM unit tests pass | same workflow, `:app:test` | `cd android && ./gradlew :app:test` |
+| CSV schema matches the harness loader | `tests/test_android_logger_schema.py` | `pytest tests/test_android_logger_schema.py` |
+| Installed on a device | **never** | no `*_session.json` exists anywhere, in the repo or on any team phone |
+| Achieved rate and jitter per team device | **not measured** | same |
+
+The earlier version of this section said "not yet built": that was true until `53e0053` and is
+not any more. The second half is still true and is the one that matters. Until a stationary
+recording and one real drive exist, every number in `_session.json` is unmeasured and nothing in
+this directory may be quoted. [HANDOVER.md](HANDOVER.md) §9 is the full list of remaining work,
+with the procedure for producing them under item 1.
