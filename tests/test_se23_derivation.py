@@ -654,7 +654,7 @@ def test_process_noise_psd_is_the_squares_of_the_measured_config_values():
 
 def test_the_mount_block_of_q_carries_the_d111_process_noise():
     """D-048 set sigma_sv to zero because no source gave it a magnitude, and this test used to
-    say so out loud. D-111 sets it: with zero, NHC collapsed the mount block from its measured
+    say so out loud. D-115 sets it: with zero, NHC collapsed the mount block from its measured
     2-37 deg spread to under 0.1 deg within a minute of driving, after which the constraint was
     asserted through a rotation the filter believed it knew perfectly (D-110). The value is a
     walk of 1e-3 rad/sqrt(s) -- 0.44 deg over a minute -- and the block must now *grow* under
@@ -736,7 +736,7 @@ def test_zupt_does_not_shrink_the_mount_covariance():
     The velocity error below is deliberately large, because that is exactly the case where the
     vehicle-frame Jacobian's mount column is most non-zero and the bug would be biggest.
     """
-    # The mount block grows under propagation since D-111 (`mount_rw` is non-zero), so the
+    # The mount block grows under propagation since D-115 (`mount_rw` is non-zero), so the
     # reference is a propagate-only twin rather than the starting block: ZUPT must leave the
     # block exactly where propagation alone would have.
     f = InEKF()
@@ -1119,7 +1119,7 @@ def test_11_nees_with_zaru_is_consistent():
     four stopped samples and one moving one -- carrying a chi-squared distance of 1456 against the
     repo's own 11.345 threshold. Gating it (D-057) gives 3.05.
 
-    **One-sided since D-111.** With `P0`'s gyro-bias block at the measured 0.2 deg/s turn-on
+    **One-sided since D-115.** With `P0`'s gyro-bias block at the measured 0.2 deg/s turn-on
     bias rather than the 42 deg/hr instability, the simulated biases are 17x larger and the
     ZARU-only mean measures 16.63 against [16.84, 19.20] -- 1.3% *under* the band, the safe
     direction, and the same one-sided statement `test_11_nees_full_state_is_not_over_confident`

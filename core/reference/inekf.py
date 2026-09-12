@@ -244,7 +244,7 @@ class FilterConfig:
     # blamed on the mount rather than on the velocity -- carries no weight (D-110). The value is
     # stated as the walk it implies: 1e-3 rad/sqrt(s) is 0.44 deg over a minute, the order of the
     # creep a phone in a cradle shows and well under the 5 deg knock `reinflate_mount` exists
-    # for. Swept, not guessed -- see D-111 for the sweep and what it did and did not change.
+    # for. Swept, not guessed -- see D-115 for the sweep and what it did and did not change.
     mount_rw: float = 1.0e-3  # rad/s/sqrt(Hz)
 
     # NHC: lateral and vertical body velocity are ~0. Loose defaults; the AI-IMU CNN replaces
@@ -263,7 +263,7 @@ class FilterConfig:
     # largest measured bias at one sigma. With 42 deg/hr in the block, a 0.1 deg/s reading at a
     # standstill was a 9-sigma event and **every ZARU on every held-out stem was rejected** --
     # 0 of 103 accepted on Vta1a -- so the one update that observes the dominant error term never
-    # ran (D-111).
+    # ran (D-115).
     gyro_bias_turn_on: float = float(np.deg2rad(0.2))  # rad/s
 
     # The receiver's course over ground, `gps_orientation_deg` in the `S-` stream, is a Doppler
@@ -281,7 +281,7 @@ class FilterConfig:
     # The receiver's Doppler *speed*, `gps_speed_mps`, against the paired `V-` track speed at
     # the fix epochs, eight held-out and TRAIN stems: unbiased (median -0.08 to +0.05 m/s), RMS
     # 0.27-0.92 m/s, p90 0.33-1.00 m/s. With the course above it is a horizontal velocity
-    # measurement worth about 0.5 m/s along-track and 0.5 m/s across (D-111), and
+    # measurement worth about 0.5 m/s along-track and 0.5 m/s across (D-115), and
     # `InEKF.update_gnss_velocity` applies it as one, at every open fix that is moving faster
     # than `course_min_speed_mps`. It is the update that made the filter hold on S3a: a position
     # fix every 9 s is the double integral of the tilt error and cannot tell a 3 m/s speed error
@@ -304,7 +304,7 @@ class FilterConfig:
     # Stationary detection. Thresholds are conservative on purpose: a missed ZUPT costs a little
     # accuracy, a false ZUPT while rolling injects a hard error the filter believes.
     #
-    # Measured against the paired `V-` track speed (D-111). At the previous 0.5 s / 0.05 /
+    # Measured against the paired `V-` track speed (D-115). At the previous 0.5 s / 0.05 /
     # 0.02 rad/s, the detector fired *while rolling* for 31% of its firings on S3a and 41% on
     # S3c -- median 4.1 and 7.7 m/s, p90 13.8 and 20.4 m/s: a phone that sits quietly in its
     # cradle looks stationary to an IMU-only detector at motorway speed, and a ZUPT at 20 m/s
@@ -328,7 +328,7 @@ class FilterConfig:
     #: rejected velocity is the first step of every runaway this harness has recorded. The
     #: filter's velocity block after 9 s of propagation is set by its tilt block, and a 2-sigma
     #: tilt excursion puts a good Doppler fix outside the gate; once refused, the next one is
-    #: further out, and the lock is permanent. Measured over the whole aided pass (D-111):
+    #: further out, and the lock is permanent. Measured over the whole aided pass (D-115):
     #: S3a's position error is 15.0 m median / 144 m p90 gated at 99%, 11.3 / 144 at 99.99%,
     #: and 10.6 / 58 ungated; Vta1a 15.6 / 46, 14.7 / 43, 10.2 / 16; Vw2 diverges under either
     #: gate and holds 57 / 207 without one. A Doppler velocity has no multipath mode comparable
@@ -370,7 +370,7 @@ REFERENCE_SPEED_MPS = 16.7
 #: The yaw sigma of a filter that has no heading at all: the standard deviation of an angle
 #: uniform on the circle, `pi / sqrt(3)` = 103.9 deg. Used by the harness for a vehicle that has
 #: not yet moved -- a stationary receiver reports no course, and a fix-to-fix chord of a car that
-#: has not moved is noise -- so that the block says "unknown" rather than 14.6 deg (D-111). The
+#: has not moved is noise -- so that the block says "unknown" rather than 14.6 deg (D-115). The
 #: EKF's linearisation is meaningless at this width, and that is the point: nothing downstream
 #: should be able to read it as a heading.
 UNALIGNED_YAW_SIGMA_RAD = float(np.pi / np.sqrt(3.0))
@@ -435,7 +435,7 @@ def pca_mount_yaw(
     component, and nothing in a covariance can tell them apart. `forward_reference` resolves it: a
     per-sample signed scalar that grows with forward acceleration -- the finite-differenced
     `gps_speed_mps` is the one the `S-` stream can supply -- and the sign is chosen so the two
-    correlate positively, **when that correlation clears `SIGN_CUE_MIN_T`**. Until D-111 there
+    correlate positively, **when that correlation clears `SIGN_CUE_MIN_T`**. Until D-115 there
     was no such test: a reference that was *constant* over the window -- a car that had not
     moved -- left `ref - ref.mean()` as floating-point dust, `np.any` of which is True, and the
     sign was "resolved" from the correlation of noise with noise. On Vta1a that put the forward
@@ -548,7 +548,7 @@ def _effective_samples(x: np.ndarray) -> float:
 #: `mount_yaw_from_dynamics` accepts a fit only above this correlation between the phone's
 #: horizontal specific force and the reference. Measured per 60 s window on the held-out stems:
 #: windows that clear 0.5 agree with each other to a median 9-13 deg on S3a and Vta1a, windows
-#: below it scatter over the circle (D-111). The threshold is where the estimator becomes
+#: below it scatter over the circle (D-115). The threshold is where the estimator becomes
 #: repeatable, which is the only property a 180-degree-free estimate can be checked for without
 #: truth.
 DYNAMICS_FIT_MIN_CORRELATION = 0.5
@@ -576,7 +576,7 @@ def mount_yaw_from_dynamics(
     `forward_ref` is the vehicle's longitudinal acceleration per sample and `right_ref` its
     lateral (centripetal) acceleration, both in the vehicle frame, both m/s^2. The harness builds
     them from what the phone has: the finite-differenced GNSS speed for the first, and
-    `speed * omega_down` from the gyro for the second (D-111). Anything that is not a rotation
+    `speed * omega_down` from the gyro for the second (D-115). Anything that is not a rotation
     of the phone's horizontal specific force onto that reference is residual.
 
     The frame algebra, written out because it is where a sign is easy to lose: the vehicle frame
@@ -712,7 +712,7 @@ def initial_covariance(
         accel bias     3.2 mm/s^2      3.3 mm/s^2      9.5x too loose
         mount          1.81 deg        5 deg           2.8x too tight
 
-    (The gyro-bias row read 42 deg/hr and the roll/pitch row 1.31 deg until D-111; see
+    (The gyro-bias row read 42 deg/hr and the roll/pitch row 1.31 deg until D-115; see
     `FilterConfig.gyro_bias_turn_on` for why a bias instability is the wrong quantity to start an
     unestimated bias from, and the `zupt_*` thresholds for the tighter stop detector.)
 
@@ -735,7 +735,7 @@ def initial_covariance(
       when it has a real heading source -- the receiver's own course at a known speed
       (`FilterConfig.course_cross_track_sigma_mps`) -- or when it has none at all, in which case
       the honest value is `UNALIGNED_YAW_SIGMA_RAD`, and 14.6 deg would be a claim to know a
-      heading nobody has measured (D-111).
+      heading nobody has measured (D-115).
     * **Position** is the fix itself; **velocity** is that same differenced pair.
     * **Both bias blocks** are the D-045 Allan run's measured bias instabilities.
     * **The mount block** takes `mount_sigma_rad` when the PCA initialiser (`pca_mount_yaw`)
@@ -749,7 +749,7 @@ def initial_covariance(
 
     # Levelling at a detected stop. The detector admits accelerometer variance up to
     # `zupt_accel_var_thresh`, so that is the residual specific force the alignment must tolerate.
-    # The harness passes its own figure when it levelled on a moving window (D-111).
+    # The harness passes its own figure when it levelled on a moving window (D-115).
     if level_sigma_rad is None:
         sigma_level = float(np.sqrt(cfg.zupt_accel_var_thresh)) / g
     elif level_sigma_rad <= 0:
@@ -759,7 +759,7 @@ def initial_covariance(
 
     # Two GNSS fixes, differenced. Position noise sqrt(2)*sigma_p over one epoch -- unless the
     # caller set the velocity from the receiver's Doppler speed and course, which is worth
-    # `course_cross_track_sigma_mps` and not a position chord (D-111).
+    # `course_cross_track_sigma_mps` and not a position chord (D-115).
     if velocity_sigma_mps is None:
         sigma_v = float(np.sqrt(2.0) * cfg.gnss_sigma_m / cfg.gnss_epoch_s)
     elif velocity_sigma_mps <= 0:
@@ -778,7 +778,7 @@ def initial_covariance(
 
     # Gyro: the measured turn-on bias (`FilterConfig.gyro_bias_turn_on`), because the block
     # starts from a bias nothing has estimated. Accel: still the D-045 bias instability, which is
-    # too tight for the same reason and is an open item in D-111 -- there is no clean standstill
+    # too tight for the same reason and is an open item in D-115 -- there is no clean standstill
     # measurement of an accelerometer offset to replace it with, since at rest the offset is
     # confounded with the levelling that was derived from the same sensor.
     sigma_bg = cfg.gyro_bias_turn_on
@@ -827,7 +827,7 @@ def right_invariant_from_plain(
     100 m from the origin with a 9-degree yaw -- and, less harmlessly, it holds a correlation
     between height and roll/pitch of `|p| sigma_tilt` that nothing measured: at 500 m and 1 deg
     that is 8.7 m, comparable to the altitude fix, and each altitude innovation then moves the
-    tilt (D-111). This is the same `-p^` that `update_gnss` carries in its Jacobian, applied
+    tilt (D-115). This is the same `-p^` that `update_gnss` carries in its Jacobian, applied
     once to the prior so the prior and the measurement model agree on what `xi_p` means.
 
     `p_plain` is returned re-expressed; the input is not modified.
@@ -1205,7 +1205,7 @@ class InEKF:
         xi_v` under the section 5 error, so the invariant velocity error is observed together
         with the attitude error's action on the velocity. Like the position update, it is never
         called inside an outage; unlike it, one fix of it observes the speed and heading
-        *directly*, where nine seconds of position observe their double integral (D-111).
+        *directly*, where nine seconds of position observe their double integral (D-115).
 
         The vertical row is left out: a phone receiver reports no vertical speed, and the
         vehicle's is asserted zero by NHC in the frame where that is true.

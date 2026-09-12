@@ -2,6 +2,51 @@
 
 Read once. It saves the six of us from talking past each other for three weeks.
 
+How the terms hang together — the whole system in one picture, with the jargon attached to the
+place it is used:
+
+```mermaid
+flowchart TB
+    subgraph sense["what the phone gives us"]
+        BIAS["<b>bias</b> · <b>bias instability</b><br/><b>ARW</b> · <b>VRW</b> · <b>scale factor</b><br/><i>measured by</i> <b>Allan variance</b>"]
+        UNCAL["<b>uncalibrated sensor types</b><br/><i>raw value AND the OS bias estimate,<br/>kept separate</i>"]
+    end
+
+    subgraph filt["the filter"]
+        INEKF["<b>InEKF</b> on <b>SE_2(3)</b><br/><i>error-state, <b>group-affine</b>,<br/>linearisation independent of the estimate</i>"]
+        QR["<b>process noise Q</b> — how wrong we expect ourselves to be<br/><b>measurement noise R</b> — how much we distrust a measurement"]
+        GATE["<b>innovation</b> → <b>chi-square gate</b><br/><i>why GNSS is optional and not a mode switch</i>"]
+        RTS["<b>RTS smoother</b><br/><i>so the drawn path corrects instead of snapping</i>"]
+    end
+
+    subgraph constr["free measurements from physics"]
+        PSEUDO["<b>pseudo-measurement</b>"]
+        NHC["<b>NHC</b> — no sideways, no vertical"]
+        ZUPT["<b>ZUPT</b> — velocity is zero"]
+        ZARU["<b>ZARU</b> — angular rate is zero<br/><i>the one that observes gyro bias</i>"]
+    end
+
+    subgraph outer["the outer layer"]
+        MM["<b>map matching</b> · <b>HMM</b><br/><b>emission</b> / <b>transition</b> probability<br/><b>Viterbi</b> over a <b>CSR graph</b>"]
+    end
+
+    subgraph judged["how we are judged"]
+        MET["<b>drift %</b> — what PS 26168 grades<br/><b>CTE</b> · <b>CRSE</b> — Onyekpe's, not cross-track and not ATE<br/><b>yaw error</b> — logged separately, always"]
+    end
+
+    BIAS --> QR --> INEKF
+    UNCAL --> INEKF
+    PSEUDO --> NHC & ZUPT & ZARU --> INEKF
+    GATE --> INEKF
+    INEKF --> MM --> INEKF
+    INEKF --> RTS --> MET
+    INEKF --> MET
+
+    style ZARU fill:#238636,color:#fff
+    style INEKF fill:#1f6feb,color:#fff
+    style MET fill:#9e6a03,color:#fff
+```
+
 ---
 
 ## Navigation

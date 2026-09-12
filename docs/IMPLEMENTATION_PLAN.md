@@ -72,9 +72,32 @@ trajectories, and is undebuggable.
 
 ### 2B. Needs redoing or correcting — nine items
 
+**Where they stand on 5 Sep**, since this table was written on 27 Aug:
+
+```mermaid
+flowchart LR
+    subgraph done["Closed"]
+        direction TB
+        r1["R-1 Allan from IO-VNBD<br/><i>D-045 — but the >20 min<br/>premise below was wrong</i>"]
+        r2["R-2 gyro_arw placeholder<br/><i>D-045</i>"]
+        r4["R-4 CRSE convention<br/><i>D-054</i>"]
+        r5["R-5 D-034 to D-037 missing<br/><i>transcribed</i>"]
+        r9["R-9 stale calendars<br/><i>bannered</i>"]
+    end
+    subgraph open["Still open"]
+        direction TB
+        r3["R-3 flat P_0<br/><i>now also blocks test 11</i>"]
+        r6["R-6 figure criterion → Gate 1<br/><i>no figures exist yet</i>"]
+        r7["R-7 test count / suite green<br/><i>1 test red on Windows</i>"]
+        r8["R-8 accel sign convention<br/><i>needs the dataset</i>"]
+    end
+    style done fill:#0d2818,stroke:#238636
+    style open fill:#2d1a02,stroke:#9e6a03
+```
+
 | # | Item | Problem | Fix | Owner | When |
 |---|---|---|---|---|---|
-| R-1 | **Allan variance sourced from our own phone** | Wrong sensor. The screening numbers come from IO-VNBD, recorded on a Huawei P20 Pro / Moto G7 Power / BlackBerry Priv. Tuning `Q` from a teammate's phone on a desk models a device that produces none of the graded data — and it puts an Android task on the Gate 1 critical path. | Seed `Q` from **IO-VNBD's own >20 min stationary segments** ([DATASETS.md](DATASETS.md) §1.4). 20 min at 10 Hz gives ARW cleanly at τ = 1 s and bias instability out to τ ≈ 100–200 s — exactly the 10–180 s timescale we are graded on. Our own phone's Allan run continues in parallel for the demo and edge story, no longer blocking. | S | **Today** |
+| R-1 | **Allan variance sourced from our own phone** | Wrong sensor. The screening numbers come from IO-VNBD, recorded on a Huawei P20 Pro / Moto G7 Power / BlackBerry Priv. Tuning `Q` from a teammate's phone on a desk models a device that produces none of the graded data — and it puts an Android task on the Gate 1 critical path. | Seed `Q` from **IO-VNBD's own >20 min stationary segments** ([DATASETS.md](DATASETS.md) §1.4). 20 min at 10 Hz gives ARW cleanly at τ = 1 s and bias instability out to τ ≈ 100–200 s — exactly the 10–180 s timescale we are graded on. Our own phone's Allan run continues in parallel for the demo and edge story, no longer blocking. ⚠️ **The premise was wrong (D-045): there are no >20 min segments. The longest is 507 s, so τ_max is ~51 s, bias instability is an upper bound and the two bias driving noises are derived rather than measured.** Done anyway, on the segments that exist. | S | **Done — D-045** |
 | R-2 | `FilterConfig.gyro_arw = 3e-3` rad/s/√Hz | ≈ 10.3 °/√hr, outside the 0.5–5 °/√hr phone range our own [ERROR_BUDGET.md](ERROR_BUDGET.md) §9 states. Self-flagged in [SE23_PROPAGATION.md](SE23_PROPAGATION.md) §10. Pessimistic rather than dangerous, but it is an internal inconsistency a judge can find. | Replaced by R-1's measured value. If the measurement lands near 10 °/√hr, say in the budget why that is realistic for a phone in a vibrating cabin. | S | Sprint 1 |
 | R-3 | `P₀ = 1e-3·I`, flat | Wrong in both directions: far too tight on the mount block (which starts unknown), too loose on position (which starts at a GNSS fix). A wrong `P₀` makes the filter reject good measurements at the χ² gate, and that failure reads as a sensor problem, not a tuning problem. | Set per-block from [ERROR_BUDGET.md](ERROR_BUDGET.md): position from GNSS accuracy, mount yaw from the PCA initialiser's spread, biases from the Allan run. | S | Sprint 1 |
 | R-4 | **CRSE convention unpinned** | `SUM_SQUARES` is a consistency argument (D-023), not a verified reading of the paper. It blocks the Gate 0 freeze and it scales every CRSE we report by √n. | Pin against the WhONet paper's own equation numbers and write them verbatim into [EVALUATION.md](EVALUATION.md) §4.2. If they differ, the paper wins. | D | **Today** |
@@ -86,7 +109,48 @@ trajectories, and is undebuggable.
 
 ### 2C. Not started — the actual remaining work
 
-Ordered by dependency. Everything above the line must happen; everything below it is explicitly deferred.
+Ordered by dependency. Everything above the line must happen; everything below it is explicitly
+deferred. The dependency order is the whole point of the table — read it as a graph:
+
+```mermaid
+flowchart TB
+    DL["<b>Download IO-VNBD</b><br/>manifest + SHA-256"]
+    ALLAN["Allan variance → Q_c"]
+    PROP["InEKF.propagate()"]
+    UPD["update family + tests 7-11"]
+    BASE["raw-strapdown +<br/>GNSS-available baselines"]
+    ONY["Onyekpe INS baseline"]
+    RUN["<b>wire eval/run.py</b>"]
+    G1{{"<b>GATE 1</b><br/>hard stop"}}
+    HEAD["speed + variance head"]
+    FUSE["fuse as pseudo-measurement<br/>with predicted R"]
+    G2{{"<b>GATE 2</b><br/>calibration"}}
+    SWEEP["full sweep · all plots<br/>drift % median and p95"]
+    WRITE["write-up · deck · video"]
+    SUB(["SUBMIT · Tue 8 Sep"])
+
+    DL --> ALLAN --> PROP
+    DL --> BASE
+    DL --> ONY
+    PROP --> UPD --> RUN
+    BASE --> RUN
+    RUN --> G1
+    ONY --> G1
+    G1 --> HEAD --> FUSE --> G2
+    G1 --> SWEEP
+    G2 --> SWEEP --> WRITE --> SUB
+
+    DONE1["done"] -.- ALLAN
+    DONE2["done, but not consistent"] -.- UPD
+
+    style G1 fill:#da3633,color:#fff,stroke-width:2px
+    style G2 fill:#9e6a03,color:#fff
+    style RUN fill:#1f6feb,color:#fff
+    style SUB fill:#238636,color:#fff
+```
+
+**`eval/run.py` is the choke point.** Two finished layers sit on either side of it — the filter
+above, the metrics below — and nothing produces a number until they are joined.
 
 | Work | Depends on | Owner | Sprint |
 |---|---|---|---|
@@ -120,27 +184,41 @@ Ordered by dependency. Everything above the line must happen; everything below i
 Unchanged from the survey and the repo. Stated here so the reconciliation in §4 has something to
 reconcile *against*.
 
-```
-  IMU (accel + gyro)            ─┬─→ speed + variance head (TCN, 1–2 s window)  ─┐
-  10 Hz phone / 200 Hz FOG       │                                                │ pseudo-meas
-                                 ├─→ adaptive R_NHC (AI-IMU CNN, ~6k params)  ─┐  │ with predicted R
-                                 │                                             │  │
-                                 ├─→ stationary detector → ZUPT + ZARU  ───────┼──┤
-                                 │                                             │  │
-                                 └─→ ══════ propagation, always running ═══════╪══╡
-                                                                               │  │
-                                        NHC (no sideways, no vertical) ←── R ──┘  │
-                                                                                  ▼
-   GNSS ──→ χ² innovation gate ──accepted──────────────────────────────→ ┌─────────────────┐
-             │                                                           │  InEKF on SE₂(3) │
-             └──rejected: tunnel or multipath. No update. No mode switch─→│  R,v,p,b_g,b_a,  │
-                                                                          │  R_sv  (18-dim   │
-   Baro ──→ floor detection (car parks only) ────────────────────────────→│  error state)    │
-                                                                          └────────┬─────────┘
-                                                                                   │ 10 Hz pose
-                                            HMM map matching  ←────────────────────┤ + covariance
-                                            emission σ from filter covariance      │
-                                                     └── heading feedback ──────────┘
+```mermaid
+flowchart LR
+    IMU["<b>IMU</b><br/>accel + gyro<br/>10 Hz phone / 200 Hz FOG"]
+    GNSSIN["<b>GNSS</b>"]
+    BARO["<b>Barometer</b>"]
+
+    SPEED["speed + variance head<br/>TCN, 1-2 s window"]
+    RNHC["adaptive R_NHC<br/>AI-IMU CNN, ~6k params"]
+    STOP["stationary detector"]
+    NHC["NHC<br/>no sideways, no vertical"]
+    ZZ["ZUPT + ZARU"]
+    GATE["chi-square innovation gate"]
+
+    FILTER{{"<b>InEKF on SE_2(3)</b><br/>R, v, p, b_g, b_a, R_sv<br/>18-dim error state<br/><i>always propagating</i>"}}
+    MAP["HMM map matching<br/>emission sigma from<br/>the filter's own covariance"]
+    OUT["10 Hz pose + covariance"]
+
+    IMU ==>|"propagation, always running"| FILTER
+    IMU --> SPEED
+    IMU --> RNHC
+    IMU --> STOP
+    STOP --> ZZ --> FILTER
+    RNHC -->|"per-step R"| NHC --> FILTER
+    SPEED -->|"pseudo-measurement<br/>with predicted R"| FILTER
+    GNSSIN --> GATE
+    GATE -->|"accepted"| FILTER
+    GATE -.->|"<b>rejected: tunnel or multipath.</b><br/>No update. No mode switch."| FILTER
+    BARO -->|"floor detection,<br/>car parks only"| FILTER
+    FILTER --> OUT
+    FILTER --> MAP
+    MAP -->|"heading feedback"| FILTER
+
+    style FILTER fill:#1f6feb,color:#fff,stroke:#0d419d,stroke-width:2px
+    style GATE fill:#9e6a03,color:#fff
+    style OUT fill:#238636,color:#fff
 ```
 
 The rejected-GNSS edge is the whole argument. In a tunnel nothing passes the gate, so nothing is
@@ -225,8 +303,19 @@ This also gives the video its footage and the deck its figures, from one artefac
 
 ## 5. Schedule — 12 days
 
-Today is **Thu 27 Aug**, which is Sprint 0 **day 2 of 3**, with five blocking Sprint 0 items still
-open. That is the pressure point, and it is why §6 has a *today* column at all.
+> **Reality check, Fri 5 Sep — 3 days out.** The calendar below is unchanged and still correct as a
+> plan. What has moved is the repo against it. Today is Sprint 3 day 1 by this table; the repo is at
+> the end of Sprint 1. **Gate 0 never closed and Gate 1 is blocked** (D-053). The last commit landed
+> 1 Sep. Concretely, the three things standing between here and a submittable number are: close the
+> NEES failure, wire `eval/run.py`, and produce the two baselines Gate 1 is a ratio *between*.
+>
+> §5's own cut order is now live, not hypothetical: adaptive `R_NHC` and in-filter `R_sv` go first,
+> then the replay renderer. **A physics-only result, reported honestly, is a defensible submission.
+> A rushed hybrid nobody can debug is not** — that sentence was written on 27 Aug and it is the
+> operative one today.
+
+Written on **Thu 27 Aug**, which was Sprint 0 **day 2 of 3**, with five blocking Sprint 0 items
+still open. That was the pressure point, and it is why §6 has a *today* column at all.
 
 | Sprint | Dates | Days | Focus | Gate |
 |---|---|---|---|---|
@@ -254,8 +343,15 @@ instrument, the honest-limits section.
 
 **Today:** R-1 — pull the IO-VNBD stationary segments the moment the dataset lands and compute
 overlapping Allan deviation per axis; ARW from the −½ slope at τ = 1 s, bias instability from the flat
-minimum (×0.664). Record the measured numbers in [ERROR_BUDGET.md](ERROR_BUDGET.md) §9, replacing R-2's
-placeholder. Start our own phone's multi-hour stationary log in parallel — it is no longer blocking,
+minimum as **`B = σ_min ÷ 0.664`**. Record the measured numbers in
+[ERROR_BUDGET.md](ERROR_BUDGET.md) §9, replacing R-2's placeholder.
+
+> ⚠️ **Corrected 5 Sep (D-046): that is a division, and this line said "×0.664".** IEEE Std 952's
+> flicker-floor relation is `σ(τ) = B√(2ln2/π) = 0.664 B`, so the Allan minimum is 0.664 *of* `B`.
+> Multiplying understates `B` by 2.27×, and it understates it in the dangerous direction — the
+> filter would believe a drifting gyro bias more than it should, exactly where the error budget has
+> least room. `eval.allan.BIAS_INSTABILITY_COEFF` and its test pin both the constant and the
+> direction; this document was the last place the wrong sense survived. Start our own phone's multi-hour stationary log in parallel — it is no longer blocking,
 but it is free once running and it is the edge-story evidence.
 
 **Sprint 1 — the critical path of the whole project.** Write `propagate()` from
@@ -376,25 +472,29 @@ us, and every plot caption naming its stream (`S-` or `V-`) and rate.
 
 Unchanged in criteria. Only R-6 moves an item, and the dates now match this calendar.
 
-### Gate 0 — Fri 28 Aug · *the harness is trustworthy*
+Checkbox state below is **as at 5 Sep**, not as written on 27 Aug.
+
+### Gate 0 — Fri 28 Aug · *the harness is trustworthy* — **NOT CLOSED, 8 days over**
 
 - [ ] IO-VNBD downloaded; synchronised/unsynchronised choice logged; `data/manifest/` written with SHA-256s.
 - [ ] Two machines, same commit, same seed → **byte-identical** metrics output.
-- [ ] CTE/CRSE equations pinned to the paper and written verbatim into EVALUATION.md.
+- [x] CTE/CRSE equations pinned to the paper and written verbatim into EVALUATION.md. *(D-054 — and it went to a third convention, `Σ|eᵢ|`, not either of the two D-023 chose between.)*
 - [x] Leakage CI test passes **and is demonstrated to fail** on a deliberate `V-` column.
-- [x] Train/test split fixed in code; no sequence on both sides.
-- [ ] `pytest` green on the primary dev machine, not only in CI.
+- [x] Train/test split fixed in code; no sequence on both sides. *(D-044 — but it holds 3 long-outage sequences, not 9, and the re-pick is still open.)*
+- [ ] `pytest` green on the primary dev machine, not only in CI. **One test is red on Windows:** `test_reorthonormalisation_keeps_r_on_so3` measures `1.22e-15` against a `1e-15` tolerance. A tolerance one ULP too tight, not a filter defect — and precisely the platform gap R-7 named.
 - [ ] [EVALUATION.md](EVALUATION.md) marked **FROZEN**.
+- [ ] **[NEW]** GNSS cadence resolved: the `S-` fixes are 9.0 s, not 1 Hz, and the `V-` truth path that answers it has never run against real bytes. EVALUATION §1.1, §2.
+- [ ] **[NEW]** Duplicate-copy choice settled: all 72 `S-` stems ship twice, differing by up to 8.9% in rows. Two machines cannot agree to the digit until this is pinned. EVALUATION §1.1.
 
 *(Moved to Gate 1 by R-6: "one command regenerates every figure" — there are no figures yet.)*
 
-### Gate 1 — Tue 1 Sep · *the spine holds without learning*
+### Gate 1 — Tue 1 Sep · *the spine holds without learning* — **BLOCKED**
 
 - [ ] Onyekpe INS baseline reproduced; our number vs theirs, with the gap explained.
 - [ ] Raw-strapdown and GNSS-available baselines both produced by the harness.
-- [ ] Physics-only InEKF within **3–5×** of GNSS-available over 60 s outages.
-- [ ] `Q` from the IO-VNBD Allan run in use; measured numbers recorded in ERROR_BUDGET.md §9.
-- [ ] SE₂(3) tests 7–11 pass, **including NEES consistency**.
+- [ ] Physics-only InEKF within **3–5×** of GNSS-available over 60 s outages — **with the update count reported beside the ratio** (EVALUATION §5: ~7 updates in 60 s, not 60).
+- [x] `Q` from the IO-VNBD Allan run in use; measured numbers recorded in ERROR_BUDGET.md §9. *(D-045)*
+- [ ] SE₂(3) tests 7–11 pass, **including NEES consistency**. **7–10 green; test 11's full-state case measures 29.90 against [16.843, 19.195] and is the blocker** (D-053, ERROR_BUDGET §9.4).
 - [ ] Yaw error instrumented and plotted separately.
 - [ ] One command regenerates every figure *(moved from Gate 0)*.
 - [ ] Leakage audit pass #1 complete.
@@ -458,6 +558,10 @@ The first four are carried forward unchanged. The last three are new or changed 
    of Sprint 0 and Sprint 1 work — Allan variance, baselines, harness wiring, the sign-convention check
    — sit behind one download that has not started. → It is the first item today. If IO-VNBD is slow or
    partially unavailable, say so by tonight, not on Saturday.
+   > **Still the top risk on 5 Sep, nine days later.** It has partly materialised: the Allan run got
+   > done (D-045), but the baselines, the harness wiring, the sign-convention check, the `V-` truth
+   > verification and the two-machine reproduction are all still behind it, and there are three days
+   > left. Everything a judge will grade is downstream of this one item.
 6. **[NEW] Sprint 0 has two days left and five open blocking items.** → If Gate 0 cannot close on Fri 28,
    close it Sat 29 and compress Sprint 1 to three days rather than freezing an unpinned protocol. A
    protocol frozen with the CRSE convention still unverified is not frozen; it is postponed.

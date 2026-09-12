@@ -16,7 +16,7 @@ state is snapshotted at the first sample of every window, and each window is dea
 its own snapshot with the GNSS update never called. That is exactly one filter pass per window
 with GNSS open everywhere except inside that window -- the outage the protocol describes, with a
 re-acquisition on the far side of it (docs/EVALUATION.md section 3 and section 6) -- at the cost
-of two passes rather than one per window. Until D-111 the harness masked *every* window of a
+of two passes rather than one per window. Until D-115 the harness masked *every* window of a
 length in a single pass, which left GNSS closed from the end of warmup to the end of the
 recording: the filter entered its second window having been unaided for the whole of the first,
 its tenth having been unaided for nine, while the strapdown baseline was re-initialised from
@@ -272,7 +272,7 @@ def fix_arrays(
 #: through the lever arm, so an altitude trusted to 3 m tells the filter its tilt to 0.3 deg
 #: after one fix -- measured on S3a -- when the levelling it started from was good to 2 deg. A
 #: tilt the filter believes it knows is a tilt it will not correct, and 2 deg is 0.3 m/s^2 of
-#: gravity in the horizontal (D-111). 3 is the ratio the receiver literature gives for VDOP over
+#: gravity in the horizontal (D-115). 3 is the ratio the receiver literature gives for VDOP over
 #: HDOP in the open; it is stated, not measured on this dataset, which carries no vertical truth.
 GNSS_VERTICAL_SIGMA_RATIO = 3.0
 
@@ -290,7 +290,7 @@ def fix_course_arrays(seq: Sequence) -> tuple[np.ndarray, np.ndarray] | None:
     north, and `gps_speed_mps` its speed (D-102). They are the heading the phone actually has:
     a fix-to-fix chord at the measured 9 s cadence turns through whatever the road did in those
     nine seconds, and against the paired `V-` course its p90 error is 18-38 deg on the 9 s stems
-    where the receiver's own course is under 2 deg (D-111). Entries the file leaves non-finite
+    where the receiver's own course is under 2 deg (D-115). Entries the file leaves non-finite
     stay NaN, and the caller must check both the value and the speed threshold before reading a
     course, because a stationary receiver reports its last one.
     """
@@ -318,7 +318,7 @@ def velocity_measurement(
     """The receiver's Doppler course and speed as a horizontal NED velocity with its 2x2
     covariance: `gnss_speed_sigma_mps` along the course, `course_cross_track_sigma_mps` across
     it, rotated into north/east. Both sigmas are measured against the paired `V-` track
-    (`FilterConfig`, D-111).
+    (`FilterConfig`, D-115).
 
     Why a velocity update at all, when the protocol's aiding is the position fix: ten of the
     twelve held-out stems carry GNSS at 9 s, and over 9 s a phone's tilt error, its accelerometer
@@ -365,7 +365,7 @@ def in_motion_config(
     carries over its first `upto` samples, never lowered below the Allan-run defaults.
 
     The D-045 process noise is a stationary phone's floor: 1.41 deg/sqrt(hr), 0.074 deg/s per
-    10 Hz sample. Measured in motion against the paired `V-` truth (D-111), the same phone's
+    10 Hz sample. Measured in motion against the paired `V-` truth (D-115), the same phone's
     tilt random-walks at about 0.5 deg/sqrt(s) on S3a -- 3.7 deg over 60 s, 20x the Allan
     figure in sigma -- and its 10 Hz gyro carries a per-sample white level of 1.7-1.9 deg/s.
     On the Vta/Vw stems the level is 4-20 deg/s and the heading random-walks 20-45 deg per
@@ -449,7 +449,7 @@ class FilterRun:
 
     def aided_pass_summary(self) -> dict[str, object]:
         """What the aided pass did, for `summary.json`: how it aligned, what it was fed, and
-        how many of each update it applied -- the numbers every D-111 claim rests on."""
+        how many of each update it applied -- the numbers every D-115 claim rests on."""
         init = self.init
         return {
             "aligned_at_sample": self.aligned_at_sample,
@@ -498,7 +498,7 @@ def run_filter(
     tunnel exit) takes the same path as a masked one -- see D-001 and `InEKF.update_gnss`. The
     one exception is deliberate and counted: a fix rejected `GNSS_REJECTIONS_BEFORE_REANCHOR`
     times running is applied, because that many rejections is evidence against the covariance
-    and not against the fixes (D-111).
+    and not against the fixes (D-115).
 
     Two GNSS updates per open fix: the position, gated, and the receiver's Doppler velocity,
     ungated -- `velocity_measurement` and `FilterConfig.gate_gnss_velocity` say why each.
@@ -544,7 +544,7 @@ def run_filter(
 
         # **Before alignment the filter is not running.** It has no heading and no mount, so
         # there is nothing to integrate the accelerometer through; it holds the last open fix
-        # and waits (D-111). Propagating anyway integrated gravity through an unknown yaw and
+        # and waits (D-115). Propagating anyway integrated gravity through an unknown yaw and
         # took S3a to 3.5 km from its fix before the alignment window had filled.
         if aligned and k > 0:
             f.propagate(gyro[k], accel[k], float(dt[k - 1]))
@@ -627,7 +627,7 @@ def _check_physical(f: InEKF, k: int, name: str, where: str) -> None:
 #: 3 sigma of `gps_accuracy_m`) -- and not that three fixes were. Without this the position
 #: block never re-admits a fix once it has drifted past the gate, because the velocity updates
 #: keep the velocity right and `P_pp` grows at (0.5 m/s x 9 s)^2 per fix: S3a spent 100 of
-#: 254 fixes locked out at 200-800 m with a 3 m fix in hand (D-111). Counted and reported as
+#: 254 fixes locked out at 200-800 m with a 3 m fix in hand (D-115). Counted and reported as
 #: `n_gnss_reanchored`; a stem that needs many of them is a stem whose aided pass is not
 #: tracking, and the number says so.
 GNSS_REJECTIONS_BEFORE_REANCHOR = 3
@@ -648,7 +648,7 @@ def _step_constraints(
     `nhc_is_valid` wants the *vehicle's* yaw rate and lateral acceleration. The raw sample is in
     the phone frame, and a phone yawed 90 deg in its cradle has the vehicle's forward
     acceleration on its own y axis -- so the gate used to read braking as cornering and
-    cornering as nothing on every stem whose mount is not near zero (D-111). `R_sv` takes both
+    cornering as nothing on every stem whose mount is not near zero (D-115). `R_sv` takes both
     into the vehicle frame first.
     """
     lo = max(0, k - window + 1)
@@ -664,7 +664,7 @@ def _step_constraints(
         # `ZUPT_VETO_MIN_SPEED_MPS` *and* more than three sigma from zero. Early, when the
         # velocity is worth 0.5 m/s, that vetoes anything over 1.5 m/s; deep into an outage,
         # when the velocity block has grown, it vetoes only what the filter is sure of, so a real
-        # stop the dead-reckoned speed has drifted 2 m/s from still gets its ZUPT (D-111).
+        # stop the dead-reckoned speed has drifted 2 m/s from still gets its ZUPT (D-115).
         speed = float(np.linalg.norm(st.v))
         sigma_v = float(np.sqrt(np.max(np.linalg.eigvalsh(f.P[3:6, 3:6]))))
         if speed > ZUPT_VETO_MIN_SPEED_MPS and speed > ZUPT_VETO_NSIGMA * sigma_v:
@@ -784,7 +784,7 @@ class FilterInit:
 
 
 # --------------------------------------------------------------------------------------------
-# Alignment -- levelling, mount and heading, from what the phone has (D-111)
+# Alignment -- levelling, mount and heading, from what the phone has (D-115)
 #
 # Three things have to be known before the accelerometer can be integrated: which way is up
 # (levelling), which way the vehicle points in the phone (the mount), and which way the vehicle
@@ -799,7 +799,7 @@ class FilterInit:
 ALIGN_WINDOW_S = 60
 
 #: Levelling at a detected stop is bounded by `sqrt(zupt_accel_var_thresh) / g` (D-055; 0.83 deg
-#: at the D-111 threshold);
+#: at the D-115 threshold);
 #: a moving window's levelling is that plus the window's mean dynamic acceleration over g, which
 #: `_level_sigma` adds from the reference.
 LEVEL_SIGMA_STATIONARY_RAD = float(np.sqrt(FilterConfig().zupt_accel_var_thresh) / 9.80665)
@@ -988,7 +988,7 @@ def apply_alignment(
     the Doppler speed and course, and the block has to say so for the stationary veto in
     `_step_constraints` to hold from the first sample -- at 4.24 m/s the filter could not
     exclude being stopped while doing 3.5 m/s, and on S3a a false ZUPT 2 s into the run took
-    the velocity to zero and the filter never recovered (D-111).
+    the velocity to zero and the filter never recovered (D-115).
 
     `P` is replaced whole: before alignment the filter was not running (`run_filter`), so
     there is nothing in it to keep.
@@ -1060,7 +1060,7 @@ def initialise_filter(
 
     * **Position** -- the first fix. It is the measurement, not an estimate of one.
     * **Levelling and the mount** -- `level_and_mount` over the warmup: up from the accelerometer
-      mean, the mount from `mount_yaw_from_dynamics` (D-111). Until D-111 the mount came from
+      mean, the mount from `mount_yaw_from_dynamics` (D-115). Until D-115 the mount came from
       `pca_mount_yaw` with its sign from a reference that was constant over a stationary warmup,
       and on Vta1a it came out backwards with `sign_resolved` True.
     * **Velocity and heading** -- the receiver's own course and speed at the first fix
@@ -1076,7 +1076,7 @@ def initialise_filter(
     withheld, and `run_filter` calls `attempt_alignment` at each open fix until it completes.
     The vertical is still set, so that propagation cancels gravity while it waits.
 
-    `gyro` is optional for the callers that predate D-111; without it the mount falls back to
+    `gyro` is optional for the callers that predate D-115; without it the mount falls back to
     PCA, which is the fixtures' path anyway.
     """
     n_warm = min(int(warmup_s * SAMPLE_RATE_HZ), accel.shape[0])
@@ -1627,7 +1627,7 @@ def write_artefacts(
         "reproducible": stamp.is_reproducible(),
         "crse_convention": CRSE_CONVENTION.value,
         "n_windows": len(results),
-        # Filter windows opened before the phone had a heading and a mount (D-111). They are in
+        # Filter windows opened before the phone had a heading and a mount (D-115). They are in
         # every filter number above as a held fix; this is how many.
         "n_filter_windows_unaligned": sum(
             1 for r in results if r.method == "filter" and not r.aligned
@@ -1641,7 +1641,7 @@ def write_artefacts(
         "gate1": gate1_ratio(by_method),
         "trajectories": sorted(replay or {}),
         "dropped_windows": [d.as_row() for d in dropped],
-        # The aided pass each stem's windows were replayed from (D-111): alignment, the process
+        # The aided pass each stem's windows were replayed from (D-115): alignment, the process
         # noise it ran with, and its update counts, so a claim about any of them is checkable.
         "aided_pass": dict(sorted((aided_passes or {}).items())),
     }

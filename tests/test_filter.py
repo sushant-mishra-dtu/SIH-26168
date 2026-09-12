@@ -204,7 +204,7 @@ def test_p0_velocity_is_two_gnss_fixes_differenced():
 
 
 def test_p0_roll_and_pitch_are_bounded_by_what_the_stop_detector_admits():
-    """sqrt(0.02) / 9.80665 = 0.0144 rad = 0.83 deg (1.31 deg at the pre-D-111 threshold of 0.05).
+    """sqrt(0.02) / 9.80665 = 0.0144 rad = 0.83 deg (1.31 deg at the pre-D-115 threshold of 0.05).
 
     Levelling from gravity is only as good as the residual specific force at the epoch it is done,
     and `zupt_accel_var_thresh` is exactly how much of that the stop detector still admits. The
@@ -231,7 +231,7 @@ def test_p0_yaw_is_gnss_course_over_ground_at_the_reference_speed():
 
 
 def test_p0_gyro_bias_block_is_the_measured_turn_on_bias_not_the_instability():
-    """D-111 supersedes the D-045 entry here. `P0` carries the uncertainty of a bias nothing has
+    """D-115 supersedes the D-045 entry here. `P0` carries the uncertainty of a bias nothing has
     estimated yet, which is the *turn-on* bias -- measured at 0.14 deg/s RMS, 0.20 deg/s worst
     axis, over 638 s of standstill on the TRAIN stems -- and not the bias *instability* (42
     deg/hr = 0.012 deg/s), which is how far an already-estimated bias wanders. With 42 deg/hr in
@@ -244,7 +244,7 @@ def test_p0_gyro_bias_block_is_the_measured_turn_on_bias_not_the_instability():
 
 def test_p0_accel_bias_block_is_the_allan_runs_measured_bias_instability():
     """docs/ERROR_BUDGET.md section 9.1 (D-045): 0.34 mg, measured on IO-VNBD's own stationary
-    segments. Still the instability rather than a turn-on figure, and D-111 records why: at a
+    segments. Still the instability rather than a turn-on figure, and D-115 records why: at a
     standstill an accelerometer offset is confounded with the levelling derived from the same
     sensor, so there is no clean measurement of one to put here."""
     assert _sd(IDX_ACCEL_BIAS) == pytest.approx(0.34e-3 * 9.80665)
@@ -383,7 +383,7 @@ def test_a_rejected_gnss_fix_changes_absolutely_nothing():
 
 
 # ------------------------------------------------------------------------------------------
-# D-111: the Doppler velocity update, the right-invariant prior, and the caller's override
+# D-115: the Doppler velocity update, the right-invariant prior, and the caller's override
 # ------------------------------------------------------------------------------------------
 
 
@@ -419,7 +419,7 @@ def test_gnss_velocity_update_pulls_the_velocity_onto_the_measurement():
 
 def test_gnss_velocity_update_is_ungated_by_default_and_gated_at_two_dof_on_request():
     """Ungated by default, for D-057's reason applied to the velocity: a refused Doppler fix is
-    the first step of every runaway the aided pass has recorded (D-111). When the gate is
+    the first step of every runaway the aided pass has recorded (D-115). When the gate is
     switched on it is `chi2_gate_2dof`, not the 3-DOF one: a 2-vector innovation tested against
     the 3-DOF threshold would be 24% too permissive at 99%."""
     assert FilterConfig().gate_gnss_velocity is False

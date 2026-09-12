@@ -350,7 +350,7 @@ both directions at once.
 | Accel bias | **0.34 mg** | §9.1, measured (D-045) | 3.2 mm/s² — 9.5× too loose |
 | Mount `ξ_sv` | **5°** | §5's knock. **Not** §5's requirement — see below | 1.81° — 2.8× too tight |
 
-*(The gyro-bias, roll/pitch and mount rows above are the D-055 values; §10.3 records what D-111
+*(The gyro-bias, roll/pitch and mount rows above are the D-055 values; §10.3 records what D-115
 replaced them with, and why a stationary measurement was the wrong one for two of them.)*
 
 Too tight is the direction that costs: a `P₀` below the truth makes the χ² gate reject good
@@ -409,10 +409,10 @@ is NHC's `R_NHC = 0.5 m/s`, which is model slack for suspension travel, road cam
 that a noise-free simulation does not contain. It is not tuned away here; `R_NHC` belongs to P-10's
 adaptive head, set from data.
 
-### 10.3 What D-111 changed in `P₀` and `Q`, and why — measured in motion
+### 10.3 What D-115 changed in `P₀` and `Q`, and why — measured in motion
 
 The §9.1 numbers are a *stationary* phone's. Measured against the paired `V-` track while
-driving (D-111), three entries above are the wrong quantity for a filter that starts moving:
+driving (D-115), three entries above are the wrong quantity for a filter that starts moving:
 
 | Entry | Was | Is | Measured as |
 |---|---|---|---|
@@ -425,7 +425,7 @@ driving (D-111), three entries above are the wrong quantity for a filter that st
 filter's error is right-invariant, `ξ_p = δp + p^ δθ`, so a diagonal `P₀` in the filter's
 coordinates claims a `|p|·σ_yaw` position uncertainty attributable to yaw and a `|p|·σ_tilt`
 height uncertainty attributable to roll/pitch. `right_invariant_from_plain` applies the §5 map
-once at alignment; `H P Hᵀ` for a fix is then exactly the plain position block. See D-111 and
+once at alignment; `H P Hᵀ` for a fix is then exactly the plain position block. See D-115 and
 `tests/test_filter.py::test_the_caller_can_override_the_position_gate` for what the diagonal
 prior did to a forced fix 200 m from the origin (it rotated the state 80°).
 

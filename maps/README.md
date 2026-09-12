@@ -25,17 +25,32 @@ term as well.
 **Heading feedback is an outer loop into the filter**, and it is one of the few things that bounds
 yaw drift. Coordinate the interface with seat S.
 
-## Library choice — *pending, log it*
+## Library choice — **settled: build it, do not adopt one (D-036)**
 
-| Option | Notes |
-|---|---|
-| **FMM / fast-map-matching** | C++/Python, precomputed UBODT, very fast. Best if the matcher lives inside the C++/Rust core via FFI. |
-| **GraphHopper map-matching** | Java, uses `hmm-lib`, imports OSM directly, Android-friendly. Most practical if the matcher lives app-side. |
-| Valhalla Meili | C++, tiled, mobile-oriented. |
-| BMW Barefoot | Java, offline + online HMM variants, server-oriented. |
+Every candidate library takes GPS accuracy as **one scalar**. Valhalla Meili precomputes
+`1/(2·σ_z²)` with `σ_z` defaulting to 4.07 m; FMM's `gps_error`, GraphHopper's
+`measurement_error_sigma` and Barefoot's `sigma` are the same shape. That is the right model for a
+raw GPS trace and the wrong one for a *filtered pose whose covariance we compute* — which is the
+one adaptation in this layer worth writing up. Adopting a library means either discarding D-015 and
+D-035 or patching someone else's core probability model.
 
-Rust has no dominant mature library — wrapping FMM via FFI or reimplementing Viterbi over the CSR
-graph are the realistic paths.
+| Rejected option | Why it was considered | Why not |
+|---|---|---|
+| **FMM / fast-map-matching** | C++/Python, precomputed UBODT, very fast | Scalar `gps_error` |
+| **GraphHopper map-matching** | Java, `hmm-lib`, imports OSM directly, Android-friendly | Scalar `measurement_error_sigma` |
+| Valhalla Meili | C++, tiled, mobile-oriented | Precomputed scalar `σ_z` |
+| BMW Barefoot | Java, offline + online HMM, server-oriented | Scalar `sigma` |
+
+Viterbi over the CSR is ~200 lines, and **the CSR is ours regardless** — its mmap behaviour is what
+makes matching affordable on Android at all. Candidate search uses the Mahalanobis distance against
+the filter's own `P_pos`, not a scalar radius (D-035): the 99% radius implied by the error budget
+runs from **18 m at a 10 s outage to 359 m at 180 s**, a 20× span across the outage lengths the
+protocol mandates, and the ellipse is anisotropic and rotates with heading.
+
+**MapmyIndia/Mappls is not a screening dependency (D-041).** An online SDK behind an API key cannot
+back a "100% offline" claim, and the measured offline footprint — ~21 MiB for the Delhi bbox,
+~32 MiB for core NCR, ~16 KiB resident over a 180 s transit — removes the capability argument too.
+Revisit it post-screening as a *rendering* layer only, never as the matching graph.
 
 ## Known failure modes
 
@@ -54,7 +69,37 @@ within the position covariance ellipse. Then: tight NHC + barometer floor detect
 
 This is the hardest case and drift may exceed 10% on a long stay. Say so in the write-up.
 
+## The pipeline, as designed
+
+```mermaid
+flowchart LR
+    GF["Geofabrik<br/><b>northern-zone</b> + <b>central-zone</b><br/><i>both — the seam is the Yamuna (D-034)</i>"] --> CLIP["clip to NCR bbox"]
+    CLIP --> FILT["keep drivable highway=*<br/><i>including highway=service (D-037)</i>"]
+    FILT --> CSR["<b>CSR adjacency + edge geometry</b><br/>~21 MiB Delhi · ~32 MiB core NCR<br/>mmap, ~16 KiB resident over a 180 s transit"]
+
+    POSE["filter pose + <b>P_pos</b>"] --> CAND["candidate search<br/><i>Mahalanobis vs P_pos, not a radius (D-035)</i>"]
+    CSR --> CAND
+    CAND --> HMM["<b>HMM</b><br/>emission: Gaussian in distance,<br/>sigma from the filter's own covariance<br/>transition: straight-line vs on-road distance"]
+    HMM --> VIT["sliding-window Viterbi<br/><i>commit segments older than ~5-10 s</i>"]
+    VIT --> FB["heading feedback into the filter"]
+
+    style CSR fill:#1f6feb,color:#fff
+    style HMM fill:#9e6a03,color:#fff
+```
+
 ## Status
 
-Scaffold only. Sprint 0: pull a Geofabrik Delhi/NCR `.pbf`, measure the filtered extract size,
-choose the matcher path, sketch the CSR layout. Extracts are gitignored — regenerate, never commit.
+**Designed and sized; no code.** The extract sizing, the CSR layout and the matcher decision are all
+recorded — D-034 (merge both Geofabrik zones), D-035 (Mahalanobis candidate search), D-036 (build,
+don't adopt), D-037 (include `highway=service`), D-041 (no Mappls dependency).
+
+**Deferred past screening** together with the Android app and car-park mode. The write-up presents
+this layer as *design*, with D-035's covariance-driven candidate radius — 18 m at 10 s to 359 m at
+180 s — as the argument for building a matcher rather than adopting one. That argument is worth a
+slide with no matcher running.
+
+Seat P's screening work is elsewhere and it is on the critical path: the **raw-strapdown INS** and
+**GNSS-available** baselines. Gate 1 is defined as a *ratio between them*, so both must exist before
+Gate 1, not alongside it. See [../docs/IMPLEMENTATION_PLAN.md](../docs/IMPLEMENTATION_PLAN.md) §6.
+
+Extracts are gitignored — regenerate, never commit.
