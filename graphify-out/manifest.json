@@ -530,8 +530,8 @@
     "semantic_hash": ""
   },
   "android-ui/app/src/main/java/com/sih/idr/demo/backend/Telemetry.kt": {
-    "mtime": 1789314157.7909448,
-    "ast_hash": "4353ff0d54cc131b28eee68872d3708f",
+    "mtime": 1789316839.8052034,
+    "ast_hash": "0b722b318f475db7caf7aec0336c1972",
     "semantic_hash": ""
   },
   "android-ui/app/src/main/java/com/sih/idr/demo/ui/Theme.kt": {
@@ -545,8 +545,8 @@
     "semantic_hash": ""
   },
   "android-ui/app/src/main/java/com/sih/idr/demo/ui/screens/NavigationScreen.kt": {
-    "mtime": 1789314227.903618,
-    "ast_hash": "5e3eb19819fad28333cde412c3c2dc7a",
+    "mtime": 1789317078.1982193,
+    "ast_hash": "1c2ea954866d8c406eb9ca03c36ad276",
     "semantic_hash": ""
   },
   "android-ui/build.gradle.kts": {
@@ -770,8 +770,8 @@
     "semantic_hash": ""
   },
   "android-ui/app/src/osm/java/com/sih/idr/demo/ui/components/MapView.kt": {
-    "mtime": 1789315622.413142,
-    "ast_hash": "15085fadb393939009432e714aa6ad83",
+    "mtime": 1789316954.4677165,
+    "ast_hash": "ed22f2d4b9fb53be3a8823fc3ee2f975",
     "semantic_hash": ""
   },
   "android-ui/app/src/test/java/com/sih/idr/demo/backend/CovarianceTest.kt": {
@@ -822,6 +822,41 @@
   "docs/UI_UX_NAVIGATION_PLAN.md": {
     "mtime": 1789310459.1819377,
     "ast_hash": "3a2aa620b7870d5eea458558576217cc",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/backend/routing/NavigationRoute.kt": {
+    "mtime": 1789316791.192414,
+    "ast_hash": "18e942eb6dbfa8ffcd0cd7605fc3f530",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/backend/routing/RouteService.kt": {
+    "mtime": 1789316812.192267,
+    "ast_hash": "892ffab55d5ce031767dd56e2a5d0756",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/backend/routing/SearchPreset.kt": {
+    "mtime": 1789316798.5589414,
+    "ast_hash": "699c8e2225e1511f22f87934e0a26a6e",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/DestinationSearchBar.kt": {
+    "mtime": 1789316863.790286,
+    "ast_hash": "723938c5a4dc83a4a717ff23c0b6ae1f",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/NavigationBottomSheet.kt": {
+    "mtime": 1789317104.8101091,
+    "ast_hash": "fd9c814c7fca9a7b9fa34fe503245a8b",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/NavigationHeader.kt": {
+    "mtime": 1789317069.7481537,
+    "ast_hash": "c03d3482f7693b48d432f4aafb51985e",
+    "semantic_hash": ""
+  },
+  "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/TunnelStatusBadge.kt": {
+    "mtime": 1789317054.7328472,
+    "ast_hash": "1ec4d661ed29fc4ac4d7aae60430f6ef",
     "semantic_hash": ""
   }
 }
