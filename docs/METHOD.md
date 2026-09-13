@@ -527,7 +527,7 @@ demonstrated pipeline**, and no figure or caption implies otherwise.
 | Speed + variance head, adaptive `R_NHC` | Architecture written and tested; **not trained** — blocked by Gate 1 (H-4). |
 | The Onyekpe baseline reproduction | Nine of its eighteen hyperparameters are ours, not the papers' (§14). Not trained. |
 
-**Three open items that are gaps rather than deferrals**, stated here because a limitation we state
+**Two open items that are gaps rather than deferrals**, stated here because a limitation we state
 costs a fraction of what one a judge finds costs:
 
 1. **The mount-disturbance detector cannot see a 5° knock at 10 Hz** (§7, D-075). Its threshold
@@ -536,8 +536,9 @@ costs a fraction of what one a judge finds costs:
    60 s → drift < 1 mm") is a self-consistency check of our own mechanisation until someone reads a
    stationary segment and reports the mean specific-force vector. Half an hour on a machine with the
    files, and skipping it invalidates a Gate 1 result.
-3. **Gate 0 is not closed.** CRSE is pinned, but the split re-pick after D-044 and the GNSS cadence
-   consequences are open, and [EVALUATION.md](EVALUATION.md) is still marked DRAFT.
+
+A third item listed here earlier — Gate 0 being open — is closed: the split was re-picked against
+measured truth pairing (D-092) and [EVALUATION.md](EVALUATION.md) was frozen on 03 Sep 2026 (D-103).
 
 **Where our numbers are worse than published ones, the reason is the sensor grade and the permitted
 inputs, and we say so rather than letting the comparison stand.** §14.
