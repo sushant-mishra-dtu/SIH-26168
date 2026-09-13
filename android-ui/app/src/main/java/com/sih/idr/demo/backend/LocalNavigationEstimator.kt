@@ -282,6 +282,11 @@ class LocalNavigationEstimator {
         val currentLon = originLon + eastM * lonPerMetre
         val durationSec = if (sessionStartMs != 0L) (SystemClock.elapsedRealtime() - sessionStartMs) / 1000L else 0L
 
+        // This estimator carries one scalar sigma, so its covariance is isotropic by construction
+        // -- sigma squared on the diagonal, no cross term. That is a faithful statement of what it
+        // knows, not a measurement of an ellipse: the InEKF behind DeadReckoningBackend will fill
+        // all three elements from its P block and the map will draw a real ellipse (D-125).
+        val sigmaSq = uncertaintyM * uncertaintyM
         return Estimate(
             mode = if (gnssFresh) NavigationMode.GNSS else NavigationMode.INS,
             speedMps = speedMps,
@@ -289,6 +294,10 @@ class LocalNavigationEstimator {
             positionNorthM = northM,
             positionEastM = eastM,
             uncertaintyM = uncertaintyM,
+            covNorthM2 = sigmaSq,
+            covNorthEastM2 = 0f,
+            covEastM2 = sigmaSq,
+            poseElapsedMs = SystemClock.elapsedRealtime(),
             gnssAvailable = gnssFresh,
             tunnelModeActive = tunnelModeActive,
             stepCount = stepCount,
@@ -349,6 +358,10 @@ data class Estimate(
     val positionNorthM: Float,
     val positionEastM: Float,
     val uncertaintyM: Float,
+    val covNorthM2: Float,
+    val covNorthEastM2: Float,
+    val covEastM2: Float,
+    val poseElapsedMs: Long,
     val gnssAvailable: Boolean,
     val tunnelModeActive: Boolean,
     val stepCount: Int,

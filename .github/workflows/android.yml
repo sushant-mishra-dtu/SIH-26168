@@ -63,8 +63,11 @@ jobs:
           path: android/app/build/reports/tests/
 
   operator-ui:
-    name: operator UI (android-ui/) — assemble
+    name: operator UI (android-ui/) — assemble + unit tests
     runs-on: ubuntu-latest
+    env:
+      # Empty when the secret is not configured; the mapbox step keys off that.
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,9 +82,29 @@ jobs:
         with:
           build-scan-publish: false
 
-      # Assemble only: this module has no unit tests yet. It is built because it is a second
-      # Gradle root with its own dependency set and its own AGP version, so nothing about the
-      # logger building proves anything about this one.
-      - name: Assemble debug
+      # Two product flavours since D-121. `osm` needs no account and is always built and unit
+      # tested. `mapbox` resolves from a Maven repository that refuses anonymous downloads, so it
+      # is built only when the repository carries the MAPBOX_DOWNLOADS_TOKEN secret (D-122): a
+      # fork or a PR from outside the org skips that step rather than failing on it. Gradle reads
+      # ORG_GRADLE_PROJECT_* as project properties, which is what settings.gradle.kts checks.
+      - name: Assemble osm flavour
         working-directory: android-ui
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleOsmDebug
+
+      - name: Unit tests
+        working-directory: android-ui
+        run: ./gradlew --no-daemon :app:testOsmDebugUnitTest
+
+      - name: Assemble mapbox flavour
+        if: ${{ env.MAPBOX_DOWNLOADS_TOKEN != '' }}
+        working-directory: android-ui
+        env:
+          ORG_GRADLE_PROJECT_MAPBOX_DOWNLOADS_TOKEN: ${{ env.MAPBOX_DOWNLOADS_TOKEN }}
+        run: ./gradlew --no-daemon :app:assembleMapboxDebug
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-ui-test-report
+          path: android-ui/app/build/reports/tests/

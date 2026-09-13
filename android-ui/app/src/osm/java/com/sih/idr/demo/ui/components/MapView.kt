@@ -15,43 +15,23 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.MyLocation
-import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.sih.idr.demo.backend.TelemetryState
-import com.sih.idr.demo.ui.IDRColors
-import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.backend.errorEllipse
 import com.sih.idr.demo.ui.LocalIsDarkTheme
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -62,15 +42,12 @@ import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /**
- * Online map canvas streaming OpenStreetMap tiles with Google Maps-style navigation:
- * - Course-Up (Bearing-Up) & North-Up modes
- * - Dark Mode night-vision tile filtering
- * - Smooth auto-follow with interactive "Re-center" button
- * - Compass North-indicator with single-tap snap to North
- * - Circular HUD speedometer
+ * The `osm` flavour's map canvas (D-117, D-121): OpenStreetMap raster tiles through OSMDroid, with
+ * Course-Up / North-Up, a night-vision tile filter, auto-follow with a "Re-center" pill, the track
+ * and the estimator's 1 sigma error ellipse. It needs no account and no token, which is why it is
+ * the flavour CI always builds; the `mapbox` flavour is the navigation UI the plan is built on.
  */
 @Composable
 fun MapView(
@@ -81,7 +58,6 @@ fun MapView(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val palette = LocalIDRPalette.current
     val isDark = LocalIsDarkTheme.current
 
     var mapViewInstance by remember { mutableStateOf<OsmMapView?>(null) }
@@ -189,10 +165,10 @@ fun MapView(
                 // 3. Update vehicle position
                 vehicleMarker.position = currentPoint
 
-                // 4. Update uncertainty circle (radius in metres)
+                // 4. Update the 1 sigma error ellipse from the reported covariance (D-125). For the
+                //    demo estimator it is a circle, because that estimator carries one scalar.
                 if (telemetry.running && telemetry.uncertaintyM > 0f) {
-                    val circlePoints = generateCirclePoints(currentPoint, telemetry.uncertaintyM.toDouble())
-                    uncertaintyPolygon.points = circlePoints
+                    uncertaintyPolygon.points = ellipseGeoPoints(telemetry)
                     if (telemetry.tunnelModeActive || telemetry.uncertaintyM > 25f) {
                         uncertaintyPolygon.fillPaint.color = 0x25D97706.toInt() // Amber fill
                         uncertaintyPolygon.outlinePaint.color = 0x88D97706.toInt() // Amber stroke
@@ -263,85 +239,27 @@ fun MapView(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 360.dp)
         ) {
-            Surface(
-                color = palette.bgPrimary,
-                shape = RoundedCornerShape(24.dp),
-                shadowElevation = 10.dp,
-                modifier = Modifier
-                    .border(1.dp, palette.border, RoundedCornerShape(24.dp))
-                    .clickable {
-                        followVehicle = true
-                        val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
-                        mapViewInstance?.controller?.animateTo(currentPoint)
-                        mapViewInstance?.controller?.setZoom(18.0)
-                    }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Rounded.MyLocation,
-                        contentDescription = "Re-center",
-                        tint = palette.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "Re-center",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = palette.textPrimary
-                    )
-                }
-            }
+            RecenterPill(onClick = {
+                followVehicle = true
+                val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
+                mapViewInstance?.controller?.animateTo(currentPoint)
+                mapViewInstance?.controller?.setZoom(18.0)
+            })
         }
     }
 }
 
-@Composable
-private fun MapControlButton(
-    icon: ImageVector,
-    active: Boolean = false,
-    contentDescription: String? = null,
-    onClick: () -> Unit
-) {
-    val palette = LocalIDRPalette.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-
-    Surface(
-        color = if (active) palette.primary.copy(alpha = 0.2f) else palette.bgPrimary,
-        shape = CircleShape,
-        modifier = Modifier
-            .size(44.dp)
-            .scale(if (isPressed) 0.88f else 1f)
-            .shadow(6.dp, CircleShape, spotColor = palette.textDim)
-            .border(1.dp, if (active) palette.primary else palette.border, CircleShape)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = if (active) palette.primary else palette.textPrimary,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-    }
-}
-
-/** Generates circle points in WGS84 coordinates given center and radius in metres. */
-private fun generateCirclePoints(center: GeoPoint, radiusMeters: Double, count: Int = 36): ArrayList<GeoPoint> {
-    val points = ArrayList<GeoPoint>(count)
-    val lat = center.latitude
-    val lon = center.longitude
+/** The 1 sigma ellipse of the reported covariance as WGS84 points around the current position. */
+private fun ellipseGeoPoints(telemetry: TelemetryState): ArrayList<GeoPoint> {
+    val ellipse = errorEllipse(telemetry.covNorthM2, telemetry.covNorthEastM2, telemetry.covEastM2)
+    val lat = telemetry.latitude
+    val lon = telemetry.longitude
     val latPerM = 1.0 / 111_320.0
     val lonPerM = 1.0 / (111_320.0 * cos(Math.toRadians(lat)))
-    for (i in 0 until count) {
-        val angle = 2.0 * Math.PI * i / count
-        val dLat = radiusMeters * cos(angle) * latPerM
-        val dLon = radiusMeters * sin(angle) * lonPerM
-        points.add(GeoPoint(lat + dLat, lon + dLon))
+    val outline = ellipse.outline()
+    val points = ArrayList<GeoPoint>(outline.size)
+    for (p in outline) {
+        points.add(GeoPoint(lat + p.northM * latPerM, lon + p.eastM * lonPerM))
     }
     return points
 }

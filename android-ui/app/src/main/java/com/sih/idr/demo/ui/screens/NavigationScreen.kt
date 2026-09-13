@@ -46,6 +46,7 @@ import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.ui.IDRColors
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.components.MapStack
 import com.sih.idr.demo.ui.components.MapView
 import com.sih.idr.demo.ui.components.TelemetryPanel
 import kotlin.math.roundToInt
@@ -311,7 +312,7 @@ fun NavigationScreen(
                             "On-device demo estimator over the phone's own sensors — not the " +
                                 "evaluated InEKF, and not a drift figure. The graded numbers come " +
                                 "from the offline harness; the 200 Hz FOG configuration is not " +
-                                "demonstrated here."
+                                "demonstrated here. Map: ${MapStack.engineCaption}."
                         } else {
                             "Not recording. No sensor data has been read, so there is nothing to " +
                                 "show — this screen displays no stand-in trajectory."

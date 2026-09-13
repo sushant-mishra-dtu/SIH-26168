@@ -31,7 +31,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 LOGGER_APP = REPO / "android" / "app" / "src" / "main"
-UI_APP = REPO / "android-ui" / "app" / "src" / "main"
+#: The whole `src/` tree, not `src/main`: the operator UI has two product flavours since D-121
+#: (`osm`, `mapbox`), each with its own source set, and every rule below applies to both.
+UI_APP = REPO / "android-ui" / "app" / "src"
+UI_MAPBOX_FLAVOUR = UI_APP / "mapbox"
 REPLAY_PKG = LOGGER_APP / "kotlin" / "org" / "idr26168" / "logger" / "replay"
 
 
@@ -118,14 +121,72 @@ def test_logger_manifest_asks_for_no_internet():
     assert "android.permission.ACCESS_NETWORK_STATE" not in declared, manifest
 
 
-def test_the_ui_module_declares_no_proprietary_map_sdk_or_downloaded_font_dependency():
-    """Checked at the dependency rather than the call site: ensure android-ui does not depend
-    on proprietary Google Play Services maps or downloadable fonts. Online maps use open
-    OSMDroid (D-116)."""
-    build = (REPO / "android-ui" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
-    code = _strip_comments(build)
-    for coordinate in ("ui-text-google-fonts", "play-services-maps", "maps-compose"):
+def _ui_build_script() -> str:
+    return _strip_comments(
+        (REPO / "android-ui" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    )
+
+
+def test_the_ui_module_declares_no_play_services_or_downloaded_font_dependency():
+    """Checked at the dependency rather than the call site. Downloadable fonts were a network
+    call disguised as a `FontFamily` (D-111). `play-services-maps` is a proprietary map SDK the
+    project never chose. `play-services-location` is the one the Mapbox docs recommend for "better
+    raw location": it would be a second location source next to the InEKF's, which is precisely
+    what D-123 rule R1 forbids -- the SDK must see one feed, ours, with no gap for its own
+    extrapolator to fill.
+
+    `maps-compose` was on this list until D-122 admitted the Mapbox stack for the `mapbox`
+    flavour; the flavour split below is what now keeps it out of the `osm` build."""
+    code = _ui_build_script()
+    for coordinate in ("ui-text-google-fonts", "play-services-maps", "play-services-location"):
         assert coordinate not in code, f"android-ui depends on {coordinate}"
+
+
+def test_each_map_engine_is_confined_to_its_own_product_flavour():
+    """D-121: `osm` is the flavour CI can always build (no account, no token); `mapbox` is the one
+    the navigation plan is built on. A map engine added to the shared `implementation`
+    configuration would leak into both -- and, for Mapbox, would make the whole module depend on a
+    Maven repository that refuses anonymous downloads."""
+    code = _ui_build_script()
+    assert re.search(r'"osmImplementation"\("org\.osmdroid', code), "osmdroid is not osm-only"
+    assert re.search(r'"mapboxImplementation"\("com\.mapbox', code), "no mapbox flavour deps"
+    assert not re.search(r'(?<!["\w])implementation\("(org\.osmdroid|com\.mapbox)', code), (
+        "a map engine is declared for every flavour"
+    )
+
+
+def test_the_mapbox_flavour_switches_the_sdks_own_dead_reckoning_off():
+    """D-123 rule R2, the single most important line in the Mapbox integration. The SDK's own
+    words: with sensors enabled it "ignores location updates which don't match data from
+    sensors". A demo that showed Mapbox's extrapolation instead of the InEKF's would be
+    indistinguishable from ours on screen, and the option that causes it is one boolean."""
+    sources = _kotlin(UI_MAPBOX_FLAVOUR)
+    assert sources, f"no Kotlin sources under {UI_MAPBOX_FLAVOUR}"
+    joined = "\n".join(_strip_comments(text) for text in sources.values())
+    assert "enableSensors(false)" in joined, "the mapbox flavour never disables SDK sensors"
+    assert "enableSensors(true)" not in joined, "the mapbox flavour enables SDK sensors"
+    assert "locationProviderFactory(" in joined, "the SDK is not given the InEKF location provider"
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(
+        p.relative_to(REPO).as_posix()
+        for p in (REPO / "android-ui").rglob("*")
+        if p.is_file()
+        and p.suffix in {".kt", ".kts", ".xml", ".properties", ".md", ".yml", ".json"}
+        and "build" not in p.parts
+        and ".gradle" not in p.parts
+        and p.name != "local.properties"
+    ),
+)
+def test_no_mapbox_token_is_committed_under_the_ui_module(path):
+    """D-122: the secret `sk.` downloads token lives in the per-machine Gradle user home and the
+    public `pk.` token in the gitignored `local.properties`, injected at build time. Neither
+    belongs in the tree, for the same reason D-111 removed a Google API key placeholder: a token
+    that works in rehearsal and is revoked before the venue is worse than none."""
+    text = (REPO / path).read_text(encoding="utf-8", errors="replace")
+    assert not re.search(r"\b[ps]k\.[A-Za-z0-9_-]{20,}", text), f"{path}: Mapbox token literal"
 
 
 # ------------------------------------------------------------------------------------------
@@ -211,6 +272,24 @@ def test_the_operator_ui_shows_no_telemetry_it_was_not_given():
         assert not re.search(r"\btimestampJitterMs\s*=\s*[0-9]", code), f"{path}: literal jitter"
 
 
+@pytest.mark.parametrize("path", sorted(UI_SOURCES))
+def test_no_operator_ui_surface_labels_a_drift_or_a_grade(path):
+    """D-124, restating D-112 for every new screen: drift is error against truth as a percentage
+    of distance -- the graded metric -- and a phone has no truth, so no Android surface may print
+    a number under that name, nor award itself a grade for it. The on-device vocabulary is
+    `est. sigma` (from the covariance) and, at a tunnel exit, `exit residual vs GNSS`.
+
+    The D-081 caption is allowed to say what a figure is *not*; a label is not."""
+    code = _strip_comments(UI_SOURCES[path])
+    for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', code):
+        assert not re.search(r"(?i)\bdrift\s*(est|accuracy|:|%|\()|\bm\s+drift\b", literal), (
+            f"{path}: drift used as a label: {literal!r}"
+        )
+        assert not re.search(r"\bGrade\b\s*:?", literal), (
+            f"{path}: a self-awarded grade: {literal!r}"
+        )
+
+
 def test_the_operator_ui_states_what_produced_its_numbers():
     """D-081, and the reason it is asserted rather than trusted: the caption is the first thing
     removed when the sheet is one line too tall for a slide."""
@@ -221,6 +300,14 @@ def test_the_operator_ui_states_what_produced_its_numbers():
     assert "not the evaluated InEKF" in flowed
     assert "200 Hz FOG configuration is not " in flowed
     assert "Not recording." in flowed
+    # D-121: the caption also names the map engine, per flavour, so a screenshot says whether the
+    # basemap under the track was OSMDroid or the Mapbox SDK.
+    assert "MapStack.engineCaption" in screen
+    for flavour in ("osm", "mapbox"):
+        stack = UI_SOURCES[
+            f"android-ui/app/src/{flavour}/java/com/sih/idr/demo/ui/components/MapStack.kt"
+        ]
+        assert "engineCaption" in stack, f"{flavour} flavour has no engine caption"
 
 
 def test_the_replay_caption_names_the_stream_and_the_rate_and_disclaims_200_hz():

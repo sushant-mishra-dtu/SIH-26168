@@ -14,6 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sih.idr.demo.backend.SensorForegroundService
 import com.sih.idr.demo.backend.TelemetryStore
 import com.sih.idr.demo.ui.NavigatorTheme
+import com.sih.idr.demo.ui.components.MapStack
 import com.sih.idr.demo.ui.screens.NavigationScreen
 
 class MainActivity : ComponentActivity() {
@@ -46,6 +47,10 @@ class MainActivity : ComponentActivity() {
         // Edge-to-edge
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        // Whatever the map flavour needs done once per activity (D-121). `osm` does nothing here;
+        // `mapbox` configures the Navigation SDK with our location provider and sensors off.
+        MapStack.onActivityCreated(this)
+
         // Check permissions on launch
         permissionsGranted = hasAllPermissions()
         if (permissionsGranted) {
@@ -57,14 +62,14 @@ class MainActivity : ComponentActivity() {
             var isDarkTheme by remember { mutableStateOf(systemDark) }
             var courseUpMode by remember { mutableStateOf(false) }
 
-            NavigatorTheme(darkTheme = isDarkTheme) {
-                // The one source of telemetry there is. Before the service starts this is a
-                // default-constructed TelemetryState -- zeros, INITIALIZING, an empty path -- and
-                // that empty state is what the screen shows. D-080: a surface with no data shows
-                // that it has no data. It does not stand in a plausible-looking drive, because a
-                // plausible-looking drive is indistinguishable from a real one in a photograph.
-                val telemetry by TelemetryStore.state.collectAsStateWithLifecycle()
+            // The one source of telemetry there is. Before the service starts this is a
+            // default-constructed TelemetryState -- zeros, INITIALIZING, an empty path -- and
+            // that empty state is what the screen shows. D-080: a surface with no data shows
+            // that it has no data. It does not stand in a plausible-looking drive, because a
+            // plausible-looking drive is indistinguishable from a real one in a photograph.
+            val telemetry by TelemetryStore.state.collectAsStateWithLifecycle()
 
+            NavigatorTheme(darkTheme = isDarkTheme, tunnelMode = telemetry.tunnelModeActive) {
                 var isRecording by remember { mutableStateOf(false) }
                 var permsGranted by remember { mutableStateOf(permissionsGranted) }
 
