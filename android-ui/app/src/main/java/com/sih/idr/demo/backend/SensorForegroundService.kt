@@ -19,9 +19,14 @@ import android.location.GnssStatus
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.sih.idr.demo.backend.tunnel.FixVerdict
+import com.sih.idr.demo.backend.tunnel.TunnelFsm
+import com.sih.idr.demo.backend.tunnel.TunnelState
 
 class SensorForegroundService : Service(), SensorEventListener, LocationListener {
     private lateinit var sensorManager: SensorManager
@@ -30,6 +35,12 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     private var sampleCount = 0
     private var rateWindowStartNs = 0L
     private val estimator = LocalNavigationEstimator()
+
+    // The autonomous tunnel machine (D-126). Every signal it consumes is a measurement this
+    // service already receives or registers below; its state is pushed into the estimator after
+    // each update and every transition is logged with its trigger.
+    private val fsm = TunnelFsm(startMs = SystemClock.elapsedRealtime())
+    private var syncedTunnelState = TunnelState.GNSS_HEALTHY
     private var satelliteCount = 0
     private var currentRate = 0f
     private var currentJitter = 0f
@@ -43,7 +54,25 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
             if (satelliteCount >= 3) {
                 estimator.notifyGnssHeartbeat()
             }
-            TelemetryStore.update { it.copy(satellites = satelliteCount) }
+            // Tunnel doc section 1.1.A: the mean C/N0 of the best four tracked satellites.
+            val top4 = (0 until status.satelliteCount)
+                .map { status.getCn0DbHz(it) }
+                .filter { it > 0f }
+                .sortedDescending()
+                .take(4)
+            val cn0Top4 = if (top4.isEmpty()) null else top4.average().toFloat()
+            val now = SystemClock.elapsedRealtime()
+            fsm.onGnssStatus(now, used, cn0Top4)
+            syncTunnelState(now)
+            TelemetryStore.update {
+                it.copy(
+                    satellites = satelliteCount,
+                    cn0Top4DbHz = cn0Top4,
+                    tunnelState = fsm.state,
+                    tunnelTrigger = fsm.lastTransition?.trigger,
+                    tunnelModeActive = fsm.state.suppressesGnss
+                )
+            }
         }
     }
 
@@ -60,10 +89,16 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         val rotVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        // Tunnel machine inputs (section 1.1.C and 1.1.D). Both are optional hardware: a phone
+        // without them simply never fires those triggers, and the telemetry shows null.
+        val light = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
+        val pressure = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE)
 
         accel?.let { sensorManager.registerListener(this, it, REQUESTED_PERIOD_US) }
         gyro?.let { sensorManager.registerListener(this, it, REQUESTED_PERIOD_US) }
         rotVector?.let { sensorManager.registerListener(this, it, REQUESTED_PERIOD_US) }
+        light?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        pressure?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
 
         TelemetryStore.update {
             it.copy(running = true, accelAvailable = accel != null, gyroAvailable = gyro != null)
@@ -120,6 +155,17 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 val estimate = estimator.onAccelerometer(event.values[0], event.values[1], event.values[2], event.timestamp)
                 applyEstimate(estimate)
             }
+            Sensor.TYPE_LIGHT -> {
+                val now = SystemClock.elapsedRealtime()
+                fsm.onLight(now, event.values[0])
+                syncTunnelState(now)
+                TelemetryStore.update { it.copy(ambientLux = event.values[0]) }
+            }
+            Sensor.TYPE_PRESSURE -> {
+                val now = SystemClock.elapsedRealtime()
+                fsm.onPressure(now, event.values[0])
+                syncTunnelState(now)
+            }
             Sensor.TYPE_ROTATION_VECTOR -> {
                 val rotationMatrix = FloatArray(9)
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
@@ -134,12 +180,33 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         }
     }
 
+    /**
+     * Push the machine's state into the estimator when it changes, and log the transition with
+     * its trigger so a demo can be audited from logcat (D-080; the sidecar of rule R5 comes with
+     * the trip-session milestone).
+     */
+    private fun syncTunnelState(nowMs: Long) {
+        val state = fsm.state
+        if (state == syncedTunnelState) return
+        val t = fsm.lastTransition
+        Log.i(
+            TAG,
+            "tunnel $syncedTunnelState -> $state via ${t?.trigger} at $nowMs ms " +
+                "(cn0 ${fsm.cn0Top4DbHz}, used ${fsm.satellitesUsed}, lux ${fsm.lux}, forced ${fsm.forced})"
+        )
+        syncedTunnelState = state
+        estimator.setTunnelState(state, nowMs)
+    }
+
     private fun applyEstimate(estimate: Estimate, force: Boolean = false) {
-        val nowMs = android.os.SystemClock.elapsedRealtime()
+        val nowMs = SystemClock.elapsedRealtime()
         if (!force && nowMs - lastUiPublishMs < 33L) {
             return
         }
         lastUiPublishMs = nowMs
+        // The 30 Hz publish tick doubles as the machine's clock for its timeouts.
+        fsm.tick(nowMs)
+        syncTunnelState(nowMs)
         TelemetryStore.update {
             it.copy(
                 mode = estimate.mode,
@@ -154,6 +221,16 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 poseElapsedMs = estimate.poseElapsedMs,
                 gnssAvailable = estimate.gnssAvailable,
                 tunnelModeActive = estimate.tunnelModeActive,
+                tunnelState = fsm.state,
+                tunnelTrigger = fsm.lastTransition?.trigger,
+                tunnelForced = fsm.forced,
+                cn0Top4DbHz = fsm.cn0Top4DbHz,
+                ambientLux = fsm.lux,
+                lastFixVerdict = estimate.lastFixVerdict,
+                lastFixChi2 = estimate.lastFixChi2,
+                outageAcceptedFixes = estimate.outageAcceptedFixes,
+                outageRejectedFixes = estimate.outageRejectedFixes,
+                lastExit = estimate.lastExit,
                 stepCount = estimate.stepCount,
                 latitude = estimate.latitude,
                 longitude = estimate.longitude,
@@ -173,13 +250,19 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     private var lastGpsFixElapsedMs = 0L
 
     override fun onLocationChanged(location: Location) {
-        val now = android.os.SystemClock.elapsedRealtime()
+        val now = SystemClock.elapsedRealtime()
         val isGpsOrFused = location.provider == LocationManager.GPS_PROVIDER || location.provider == "fused"
         if (isGpsOrFused) {
             lastGpsFixElapsedMs = now
         } else if (location.provider == LocationManager.NETWORK_PROVIDER) {
             // If GPS/fused fix was received recently, suppress coarse network fixes to eliminate jumping & drift
             if (now - lastGpsFixElapsedMs < 3_000L) {
+                return
+            }
+            // A cell-tower or Wi-Fi position is not a satellite fix. While the tunnel machine
+            // suppresses GNSS it must not see one as "satellites reappeared" (D-126), so network
+            // fixes are dropped entirely in those states rather than gated and counted.
+            if (fsm.state.suppressesGnss) {
                 return
             }
         }
@@ -192,8 +275,12 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
             return
         }
 
+        // The estimator gates the fix and reports its verdict; the machine decides what the
+        // verdict means for the state; the estimator is told the new state before the next fix.
         val estimate = estimator.onLocation(location)
-        applyEstimate(estimate, force = true)
+        fsm.onGnssFix(now, estimate.lastFixVerdict ?: FixVerdict.ACCEPTED)
+        syncTunnelState(now)
+        applyEstimate(estimator.snapshot(), force = true)
     }
 
     override fun onProviderDisabled(provider: String) {
@@ -232,17 +319,25 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     }
 
     companion object {
+        private const val TAG = "IDRTunnelFsm"
         const val CHANNEL_ID = "idr-recording"
         const val NOTIFICATION_ID = 26168
         const val REQUESTED_PERIOD_US = 5_000
         var startRequested = false
         private var activeInstance: SensorForegroundService? = null
 
+        /**
+         * The demo's manual override, kept next to the autonomous machine: forcing pins the
+         * machine in tunnel mode; releasing it runs the honest exit path (verification, then
+         * reconvergence) rather than snapping back to healthy.
+         */
         fun toggleTunnelMode(): Boolean {
             val service = activeInstance ?: return false
-            val active = service.estimator.toggleTunnelMode()
+            val now = SystemClock.elapsedRealtime()
+            service.fsm.setForced(now, !service.fsm.forced)
+            service.syncTunnelState(now)
             service.applyEstimate(service.estimator.snapshot(), force = true)
-            return active
+            return service.fsm.forced
         }
 
         fun resetOrigin() {

@@ -2,6 +2,8 @@ package com.sih.idr.demo.backend
 
 import android.location.Location
 import android.os.SystemClock
+import com.sih.idr.demo.backend.tunnel.FixVerdict
+import com.sih.idr.demo.backend.tunnel.TunnelState
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
@@ -43,7 +45,20 @@ class LocalNavigationEstimator {
     private var runningGravityNorm = 9.80665f
     private var filteredDynamicAccel = 0f
     private var lastGyroRate = 0f
-    private var tunnelModeActive = false
+
+    // Tunnel machine state (D-126). The machine decides; this estimator only obeys it: while the
+    // state suppresses GNSS, fixes are gated and counted but never applied to the pose.
+    private var tunnelState = TunnelState.GNSS_HEALTHY
+    private var consecutiveRejections = 0
+    private var outageStartMs = 0L
+    private var outageStartDistanceM = 0f
+    private var outageAccepted = 0
+    private var outageRejected = 0
+    private var outageResidualM: Float? = null
+    private var outageForced = false
+    private var lastFixVerdict: FixVerdict? = null
+    private var lastFixChi2: Float? = null
+    private var lastExit: TunnelExitSummary? = null
 
     // Step-driven PDR displacement queue (guarantees zero drift when stationary & exact retracing)
     private var pendingStepDistM = 0f
@@ -64,7 +79,7 @@ class LocalNavigationEstimator {
 
             val timeSinceLastStepNs = if (lastStepTimeNs != 0L) timestampNs - lastStepTimeNs else Long.MAX_VALUE
 
-            if (tunnelModeActive || !hasFreshGnss()) {
+            if (tunnelState.suppressesGnss || !hasFreshGnss()) {
                 // Dead Reckoning during GNSS denial (Vehicular coasting + pedestrian step integration):
                 if (pendingStepDistM > 0.001f && timeSinceLastStepNs < STEP_TIMEOUT_NS) {
                     val advance = min(pendingStepDistM, max(activeStepSpeed, 1.2f) * dt * 2.5f)
@@ -166,12 +181,11 @@ class LocalNavigationEstimator {
     fun hasOrigin(): Boolean = origin != null
 
     fun onLocation(location: Location): Estimate {
-        if (tunnelModeActive) {
-            // In tunnel/outage mode: suppress GNSS fixes entirely to demonstrate dead reckoning
-            return snapshot()
-        }
-
         if (origin == null) {
+            // No pose yet, so there is nothing to gate against: the first fix seeds the origin
+            // whatever the tunnel machine says, and is reported as accepted with no innovation.
+            lastFixVerdict = FixVerdict.ACCEPTED
+            lastFixChi2 = null
             origin = Location(location)
             originLat = location.latitude
             originLon = location.longitude
@@ -194,6 +208,49 @@ class LocalNavigationEstimator {
         val dNorth = measuredNorth - northM
         val dEast = measuredEast - eastM
         val deltaFixM = sqrt(dNorth * dNorth + dEast * dEast)
+
+        // Chi-square innovation gate, tunnel doc section 3.5, applied while the machine suppresses
+        // GNSS -- the states in which this estimator dead-reckons the pose, so the innovation is
+        // against a propagated prediction. Outside them the pose is anchored to the last fix and
+        // a 1 Hz fix at highway speed would sit tens of metres from it by construction, so the
+        // gate is not applied there (it would reject every fix at speed). S = P + R with this
+        // estimator's isotropic P; the InEKF's full block goes through the same function.
+        val acc = if (location.hasAccuracy()) location.accuracy.coerceAtLeast(1f) else 10f
+        val sVar = uncertaintyM * uncertaintyM + acc * acc
+        val chi2 = mahalanobisSquared(dNorth, dEast, sVar, 0f, sVar)
+        val gated = tunnelState.suppressesGnss
+        val verdict = when {
+            !gated -> FixVerdict.ACCEPTED
+            chi2 <= CHI2_GATE_2DOF_99 -> FixVerdict.ACCEPTED
+            // D-115's anti-lockout rule: a fix rejected this many times running is applied,
+            // on the record as forced. Without it a dead-reckoned pose that drifted past the
+            // gate's width would never re-acquire.
+            consecutiveRejections + 1 >= MAX_CONSECUTIVE_REJECTIONS -> FixVerdict.FORCED
+            else -> FixVerdict.REJECTED
+        }
+        lastFixVerdict = verdict
+        lastFixChi2 = chi2
+        if (gated) {
+            when (verdict) {
+                FixVerdict.REJECTED -> {
+                    consecutiveRejections++
+                    outageRejected++
+                }
+                FixVerdict.ACCEPTED -> {
+                    consecutiveRejections = 0
+                    outageAccepted++
+                    if (outageResidualM == null) outageResidualM = deltaFixM
+                }
+                FixVerdict.FORCED -> {
+                    consecutiveRejections = 0
+                    outageForced = true
+                    if (outageResidualM == null) outageResidualM = deltaFixM
+                }
+            }
+            // Evaluated, counted, not applied: the machine decides when fixes move the pose again.
+            lastGnssElapsedMs = SystemClock.elapsedRealtime()
+            return snapshot()
+        }
 
         // Motion detection:
         // A delta >= 0.7m or speed > 0.3 m/s indicates real vehicle/pedestrian motion, rejecting multipath jitter
@@ -230,19 +287,38 @@ class LocalNavigationEstimator {
         return snapshot()
     }
 
-    fun toggleTunnelMode(): Boolean {
-        tunnelModeActive = !tunnelModeActive
-        if (!tunnelModeActive) {
-            // Exiting tunnel: re-enable GNSS lock
-            lastGnssElapsedMs = SystemClock.elapsedRealtime()
-            uncertaintyM = 3.5f
-        } else {
+    /** The tunnel machine's state, applied by the service after every machine update (D-126). */
+    fun setTunnelState(state: TunnelState, nowMs: Long) {
+        if (state == tunnelState) return
+        val wasSuppressed = tunnelState.suppressesGnss
+        tunnelState = state
+        if (!wasSuppressed && state.suppressesGnss) {
+            // An outage begins: everything the exit summary reports is measured from here.
+            outageStartMs = nowMs
+            outageStartDistanceM = totalDistanceM
+            outageAccepted = 0
+            outageRejected = 0
+            outageResidualM = null
+            outageForced = false
+            consecutiveRejections = 0
             if (speedMps < 0.15f) {
                 isStationary = true
                 speedMps = 0f
             }
+        } else if (wasSuppressed && !state.suppressesGnss) {
+            // The outage ends: fixes apply again from the next one. The GNSS branch of onGyro
+            // caps the uncertainty as fixes arrive; nothing is reset to a nominal value here.
+            lastExit = TunnelExitSummary(
+                distanceOnIdrM = totalDistanceM - outageStartDistanceM,
+                elapsedMs = nowMs - outageStartMs,
+                exitResidualM = outageResidualM,
+                acceptedFixes = outageAccepted,
+                rejectedFixes = outageRejected,
+                reacquiredByForce = outageForced,
+                endedAtMs = nowMs
+            )
+            lastGnssElapsedMs = SystemClock.elapsedRealtime()
         }
-        return tunnelModeActive
     }
 
     fun notifyGnssHeartbeat() {
@@ -272,10 +348,19 @@ class LocalNavigationEstimator {
         stationaryFrames = 0
         totalDistanceM = 0f
         sessionStartMs = SystemClock.elapsedRealtime()
+        outageStartDistanceM = 0f
+        outageAccepted = 0
+        outageRejected = 0
+        outageResidualM = null
+        outageForced = false
+        consecutiveRejections = 0
+        lastFixVerdict = null
+        lastFixChi2 = null
+        lastExit = null
     }
 
     fun snapshot(): Estimate {
-        val gnssFresh = hasFreshGnss() && !tunnelModeActive
+        val gnssFresh = hasFreshGnss() && !tunnelState.suppressesGnss
         val latPerMetre = 1.0 / 111_320.0
         val lonPerMetre = 1.0 / (111_320.0 * cos(Math.toRadians(originLat)))
         val currentLat = originLat + northM * latPerMetre
@@ -299,7 +384,13 @@ class LocalNavigationEstimator {
             covEastM2 = sigmaSq,
             poseElapsedMs = SystemClock.elapsedRealtime(),
             gnssAvailable = gnssFresh,
-            tunnelModeActive = tunnelModeActive,
+            tunnelModeActive = tunnelState.suppressesGnss,
+            tunnelState = tunnelState,
+            lastFixVerdict = lastFixVerdict,
+            lastFixChi2 = lastFixChi2,
+            outageAcceptedFixes = outageAccepted,
+            outageRejectedFixes = outageRejected,
+            lastExit = lastExit,
             stepCount = stepCount,
             latitude = currentLat,
             longitude = currentLon,
@@ -348,6 +439,8 @@ class LocalNavigationEstimator {
         private const val STEP_PEAK_THRESHOLD = 1.20f
         private const val MIN_STEP_INTERVAL_NS = 260_000_000L // Max 3.8 steps/sec
         private const val STEP_TIMEOUT_NS = 1_100_000_000L // Decelerate if no step within 1.1s
+        /** D-115's rule, mirrored: the fix after this many consecutive rejections is applied, as forced. */
+        private const val MAX_CONSECUTIVE_REJECTIONS = 5
     }
 }
 
@@ -364,6 +457,12 @@ data class Estimate(
     val poseElapsedMs: Long,
     val gnssAvailable: Boolean,
     val tunnelModeActive: Boolean,
+    val tunnelState: TunnelState,
+    val lastFixVerdict: FixVerdict?,
+    val lastFixChi2: Float?,
+    val outageAcceptedFixes: Int,
+    val outageRejectedFixes: Int,
+    val lastExit: TunnelExitSummary?,
     val stepCount: Int,
     val latitude: Double,
     val longitude: Double,

@@ -75,3 +75,37 @@ fun errorEllipse(covNorthM2: Float, covNorthEastM2: Float, covEastM2: Float): Er
 }
 
 private fun sanitise(variance: Float): Float = if (variance.isNaN() || variance < 0f) 0f else variance
+
+/**
+ * The chi-square gate threshold for a 2-DoF innovation at the 99th percentile, tunnel doc
+ * section 3.5: an innovation whose normalised square exceeds this is rejected as multipath.
+ */
+const val CHI2_GATE_2DOF_99 = 9.21f
+
+/**
+ * Normalised innovation squared `y^T S^-1 y` for a 2-vector `y = (north, east)` against the
+ * symmetric innovation covariance `S = [[nn, ne], [ne, ee]]` (the position block of P plus the
+ * fix's own variance). Tunnel doc section 3.5, the Mahalanobis distance the exit gate compares
+ * with [CHI2_GATE_2DOF_99].
+ *
+ * A singular or non-positive `S` returns `Float.POSITIVE_INFINITY`: a gate with no width rejects
+ * everything, and the anti-lockout rule in the estimator is what then lets a fix through -- on
+ * the record, as a forced acceptance, never as a pass.
+ */
+fun mahalanobisSquared(
+    innovationNorthM: Float,
+    innovationEastM: Float,
+    sNorthM2: Float,
+    sNorthEastM2: Float,
+    sEastM2: Float,
+): Float {
+    val nn = sanitise(sNorthM2)
+    val ee = sanitise(sEastM2)
+    val ne = if (sNorthEastM2.isNaN()) 0f else sNorthEastM2
+    val det = nn * ee - ne * ne
+    if (det <= 0f || det.isNaN()) return Float.POSITIVE_INFINITY
+    val yN = innovationNorthM
+    val yE = innovationEastM
+    // S^-1 = (1/det) [[ee, -ne], [-ne, nn]]
+    return (yN * (ee * yN - ne * yE) + yE * (nn * yE - ne * yN)) / det
+}

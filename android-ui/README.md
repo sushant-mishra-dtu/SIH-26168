@@ -62,6 +62,37 @@ rules R1–R3). No trip session, no route, no SDK puck yet: those come with the 
 (§7.9), and the SDK's puck will then sit next to ours, both labelled, because the pair is the only
 visual that proves which estimator is driving.
 
+## The tunnel machine (D-126)
+
+`backend/tunnel/TunnelFsm.kt` is the autonomous tunnel state machine of
+[`docs/TUNNEL_MODE_AND_NAVIGATION_UPGRADES.md`](../docs/TUNNEL_MODE_AND_NAVIGATION_UPGRADES.md) §1.2:
+`GNSS_HEALTHY → PRE_ARMED_ENTRY → TUNNEL_ACTIVE_IDR → EXIT_VERIFICATION → SEAMLESS_RECONVERGENCE`.
+It is pure Kotlin with the clock injected, so every transition is reproducible from a list of
+signal events — 33 JUnit scenarios in `app/src/test` pin it, and CI runs them. It decides *when*
+the estimator suppresses GNSS and *when* a returning fix counts as verified; it computes no
+position.
+
+| Input | Source | Wired |
+|---|---|---|
+| used-in-fix count, mean C/N₀ of the best four satellites | `GnssStatus.Callback` (~1 Hz) | yes |
+| ambient light (lux derivative, bright→dark step) | `Sensor.TYPE_LIGHT` | yes |
+| barometric piston (+0.3 hPa over 200 ms) | `Sensor.TYPE_PRESSURE` | yes |
+| χ² verdict on every fix (`ACCEPTED` / `REJECTED` / `FORCED`) | `LocalNavigationEstimator` gate | yes |
+| distance to the next mapped portal, `inTunnel` | Mapbox `RouteProgress` (§7.5) | inputs exist, fed by nothing until the trip session |
+
+The thresholds are the document's and live in `TunnelFsmConfig`; **none has been measured on the
+team phone** — the D-116 rule (record, then set) applies before any of them is quoted, and the
+`GnssStatus` callback rate in particular bounds the entry latency. The class comment lists the
+five deliberate deviations from the document's diagram and why each exists. The "Tunnel: auto /
+Force tunnel" pill is the demo's override: forcing pins the machine in tunnel mode, releasing it
+runs the exit path (verification, then reconvergence) rather than snapping back. Every transition
+is logged to logcat under `IDRTunnelFsm` with its trigger.
+
+The Stage 5 toast (`ui/components/ReconvergenceToast.kt`) shows only what was measured: metres
+dead-reckoned, outage duration, the residual between the dead-reckoned pose and the first fix the
+gate let through (against a fix, not against truth), the gate's counts, and whether the
+re-acquisition was a pass or the anti-lockout rule. No drift figure, no grade (D-124).
+
 ## The rules this module is held to
 
 They are the seat-A constraints in [`android/HANDOVER.md`](../android/HANDOVER.md) §2 as amended
@@ -87,6 +118,9 @@ by D-117 and D-122, and `tests/test_android_demo_surface.py` fails if any of the
 
 ## Open work
 
+- Run the tunnel machine on the phone: the desk path (no fix → `GNSS_TIMEOUT` → IDR; force
+  on/off; the toast), then a drive through Pragati Maidan with logcat captured, and set the
+  `TunnelFsmConfig` thresholds from what the A55 actually reports.
 - The replay milestone (§7.9): `startReplayTripSession()` over a logger session converted to
   InEKF-output `ReplayEventUpdateLocation`s with `IS_MOCK = true`, through this same screen, in
   airplane mode. First, before the live drive.
@@ -109,6 +143,8 @@ Open this folder — not `android/` — as a project, or from here:
 ```bash
 ./gradlew :app:assembleOsmDebug :app:testOsmDebugUnitTest
 ```
+
+(46 unit tests: the covariance helpers and the tunnel machine.)
 
 ```bash
 ./gradlew :app:assembleMapboxDebug

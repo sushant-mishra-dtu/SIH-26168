@@ -272,6 +272,42 @@ def test_the_operator_ui_shows_no_telemetry_it_was_not_given():
         assert not re.search(r"\btimestampJitterMs\s*=\s*[0-9]", code), f"{path}: literal jitter"
 
 
+def test_the_tunnel_machine_is_pure_kotlin_with_an_injected_clock():
+    """D-126: `TunnelFsm` decides when GNSS is suppressed and when a fix counts as verified, and
+    it is the one piece of the demo whose every transition is reproducible from a list of signal
+    events. That holds only while it has no Android import and reads no clock of its own -- the
+    moment it calls `SystemClock` it can no longer be driven by a JUnit test on a laptop, which is
+    where the 33 scenarios that pin its behaviour run."""
+    fsm = UI_SOURCES["android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelFsm.kt"]
+    code = _strip_comments(fsm)
+    assert not re.search(r"^\s*import\s+android[x]?\.", code, re.MULTILINE), (
+        "Android import in the FSM"
+    )
+    assert "SystemClock" not in code and "System.currentTimeMillis" not in code, (
+        "the FSM reads a clock"
+    )
+    assert "nowMs: Long" in code, "the FSM no longer takes its time from the caller"
+    test = REPO / "android-ui" / "app" / "src" / "test" / "java" / "com" / "sih" / "idr" / "demo"
+    assert (test / "backend" / "tunnel" / "TunnelFsmTest.kt").exists(), "the FSM tests are gone"
+
+
+def test_the_estimator_reports_forced_acceptances_as_forced():
+    """D-126 deviation 3 / D-115: the fix applied after N consecutive rejections is on the record
+    as `FORCED`, never as `ACCEPTED`, so the exit toast cannot say a verification happened when the
+    anti-lockout rule fired instead."""
+    est = UI_SOURCES[
+        "android-ui/app/src/main/java/com/sih/idr/demo/backend/LocalNavigationEstimator.kt"
+    ]
+    code = _strip_comments(est)
+    assert "FixVerdict.FORCED" in code, "no forced verdict path"
+    assert "MAX_CONSECUTIVE_REJECTIONS" in code
+    assert "CHI2_GATE_2DOF_99" in code, "the gate threshold is not the shared constant"
+    toast = UI_SOURCES[
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/ReconvergenceToast.kt"
+    ]
+    assert "reacquiredByForce" in toast, "the toast does not distinguish a forced re-acquisition"
+
+
 @pytest.mark.parametrize("path", sorted(UI_SOURCES))
 def test_no_operator_ui_surface_labels_a_drift_or_a_grade(path):
     """D-124, restating D-112 for every new screen: drift is error against truth as a percentage

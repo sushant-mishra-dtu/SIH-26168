@@ -84,6 +84,36 @@ class CovarianceTest {
         assertEquals(2f, e.semiMajorM, 1e-5f)
     }
 
+    // ── The chi-square gate's distance ───────────────────────────────────────────────────
+
+    @Test
+    fun isotropicMahalanobisReducesToDistanceOverSigma() {
+        // |y| = 5 m, S = 4 m^2 I  ->  25 / 4
+        assertEquals(6.25f, mahalanobisSquared(3f, 4f, 4f, 0f, 4f), 1e-5f)
+    }
+
+    @Test
+    fun aCorrelatedInnovationCovarianceIsInvertedNotDiagonalised() {
+        // S = [[4, 1], [1, 2]], det 7, S^-1 = (1/7) [[2, -1], [-1, 4]]; y = (1, 2):
+        // y^T S^-1 y = (1/7) (2*1*1 - 2*1*1*2 + 4*2*2) = (2 - 4 + 16) / 7 = 2
+        assertEquals(2f, mahalanobisSquared(1f, 2f, 4f, 1f, 2f), 1e-5f)
+    }
+
+    @Test
+    fun theGateThresholdIsTheTwoDofNinetyNinthPercentile() {
+        assertEquals(9.21f, CHI2_GATE_2DOF_99, 1e-6f)
+        // An innovation of 3.03 sigma in one axis is just outside; 3 sigma is just inside.
+        assertTrue(mahalanobisSquared(3.0f, 0f, 1f, 0f, 1f) <= CHI2_GATE_2DOF_99)
+        assertTrue(mahalanobisSquared(3.04f, 0f, 1f, 0f, 1f) > CHI2_GATE_2DOF_99)
+    }
+
+    @Test
+    fun aSingularOrNegativeInnovationCovarianceRejectsEverything() {
+        assertEquals(Float.POSITIVE_INFINITY, mahalanobisSquared(0.1f, 0f, 0f, 0f, 0f), 0f)
+        assertEquals(Float.POSITIVE_INFINITY, mahalanobisSquared(0.1f, 0f, 1f, 2f, 1f), 0f) // det < 0
+        assertEquals(Float.POSITIVE_INFINITY, mahalanobisSquared(0.1f, 0f, -1f, 0f, 1f), 0f)
+    }
+
     @Test
     fun theMajorAxisSigmaIsWhatTheMetricCardWouldPrint() {
         // TelemetryState keeps `uncertaintyM` next to the covariance; the producer must keep them

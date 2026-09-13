@@ -1,5 +1,8 @@
 package com.sih.idr.demo.backend
 
+import com.sih.idr.demo.backend.tunnel.FixVerdict
+import com.sih.idr.demo.backend.tunnel.TunnelState
+import com.sih.idr.demo.backend.tunnel.TunnelTrigger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,7 +42,25 @@ data class TelemetryState(
     val accelAvailable: Boolean = false,
     val gyroAvailable: Boolean = false,
     val gnssAvailable: Boolean = false,
+    /** True while the tunnel machine suppresses GNSS (`TUNNEL_ACTIVE_IDR`, `EXIT_VERIFICATION`). */
     val tunnelModeActive: Boolean = false,
+    /** The autonomous tunnel machine's state (D-126) and what last moved it. */
+    val tunnelState: TunnelState = TunnelState.GNSS_HEALTHY,
+    val tunnelTrigger: TunnelTrigger? = null,
+    /** The demo's manual override is on: the machine is pinned in tunnel mode. */
+    val tunnelForced: Boolean = false,
+    /** Mean C/N0 of the best four satellites, dB-Hz, as `GnssStatus` last reported; null before any report. */
+    val cn0Top4DbHz: Float? = null,
+    /** Ambient light, lux, as the sensor last reported; null if the phone has none or it has not fired. */
+    val ambientLux: Float? = null,
+    /** The estimator's chi-square verdict on the most recent fix, and the normalised innovation squared. */
+    val lastFixVerdict: FixVerdict? = null,
+    val lastFixChi2: Float? = null,
+    /** Gate counts for the outage in progress (or the last one, once it has ended). */
+    val outageAcceptedFixes: Int = 0,
+    val outageRejectedFixes: Int = 0,
+    /** Measured summary of the last completed outage, for the Stage 5 toast (D-124). */
+    val lastExit: TunnelExitSummary? = null,
     val stepCount: Int = 0,
     val latitude: Double = 28.6129,
     val longitude: Double = 77.2295,
@@ -62,6 +83,26 @@ enum class NavigationMode(val label: String) {
 }
 
 data class TrackPoint(val northM: Float, val eastM: Float)
+
+/**
+ * What can honestly be said about a tunnel outage once GNSS is back (D-124). Every field is
+ * measured on the device: the distance dead-reckoned while GNSS was suppressed, how long that
+ * lasted, the residual between the dead-reckoned pose and the first fix the gate let through
+ * (against a fix, not against truth -- a phone has no truth), and how the gate voted. There is
+ * no drift figure and no grade here, and there must not be.
+ */
+data class TunnelExitSummary(
+    val distanceOnIdrM: Float,
+    val elapsedMs: Long,
+    /** ‖p_IDR − p_GNSS,first accepted‖ in metres; null if no fix was accepted (only forced). */
+    val exitResidualM: Float?,
+    val acceptedFixes: Int,
+    val rejectedFixes: Int,
+    /** The first applied fix was a forced acceptance under the anti-lockout rule, not a pass. */
+    val reacquiredByForce: Boolean,
+    /** `SystemClock.elapsedRealtime()` when the outage ended. */
+    val endedAtMs: Long,
+)
 
 object TelemetryStore {
     private val mutableState = MutableStateFlow(TelemetryState())

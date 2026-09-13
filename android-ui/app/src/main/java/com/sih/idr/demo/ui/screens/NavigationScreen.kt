@@ -22,9 +22,11 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DirectionsRun
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.NearMe
 import androidx.compose.material.icons.rounded.Route
+import androidx.compose.material.icons.rounded.SatelliteAlt
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.*
@@ -43,11 +45,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.NavigationMode
 import com.sih.idr.demo.backend.TelemetryState
+import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.IDRColors
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
 import com.sih.idr.demo.ui.components.MapStack
 import com.sih.idr.demo.ui.components.MapView
+import com.sih.idr.demo.ui.components.ReconvergenceToast
 import com.sih.idr.demo.ui.components.TelemetryPanel
 import kotlin.math.roundToInt
 
@@ -71,7 +75,10 @@ fun NavigationScreen(
 ) {
     val palette = LocalIDRPalette.current
     val isDark = LocalIsDarkTheme.current
-    val isIns = telemetry.mode == NavigationMode.INS || telemetry.tunnelModeActive
+    // The status pill follows the tunnel machine (D-126): anything but a healthy lock is amber,
+    // and the label is the machine's own state name so a screenshot says which one it was.
+    val tunnelState = telemetry.tunnelState
+    val isIns = telemetry.mode == NavigationMode.INS || tunnelState != TunnelState.GNSS_HEALTHY
 
     Box(
         modifier = modifier
@@ -184,7 +191,12 @@ fun NavigationScreen(
                                     tint = Color(0xFFFBBF24)
                                 )
                                 Text(
-                                    "INS Coast",
+                                    text = when {
+                                        !telemetry.running -> "INS Coast"
+                                        tunnelState == TunnelState.GNSS_HEALTHY -> "INS Coast"
+                                        telemetry.tunnelForced -> "${tunnelState.label} (forced)"
+                                        else -> tunnelState.label
+                                    },
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                     color = Color(0xFFFDE68A)
                                 )
@@ -206,15 +218,19 @@ fun NavigationScreen(
                 }
             }
 
+            // Stage 5: the measured exit summary, for a few seconds after GNSS is back (D-124).
+            ReconvergenceToast(summary = telemetry.lastExit)
+
             // 2. Secondary Floating Bar (Tunnel toggle + Course-Up + Theme Switcher + Recenter)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Tunnel Mode Simulation Toggle Pill
+                // The tunnel machine runs on its own (D-126); this pill is the demo's override
+                // that pins it in tunnel mode. Releasing it runs the honest exit path.
                 TunnelModeTogglePill(
-                    active = telemetry.tunnelModeActive,
+                    active = telemetry.tunnelForced,
                     enabled = isRecording,
                     onClick = onToggleTunnelMode
                 )
@@ -280,6 +296,28 @@ fun NavigationScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.textSecondary
                                 )
+                            }
+                            // Tunnel-machine inputs, shown only once the hardware has reported
+                            // them (D-080): no reading, no number.
+                            telemetry.cn0Top4DbHz?.let { cn0 ->
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Icon(Icons.Rounded.SatelliteAlt, contentDescription = null, modifier = Modifier.size(14.dp), tint = palette.textSecondary)
+                                    Text(
+                                        text = "${cn0.roundToInt()} dB-Hz",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textSecondary
+                                    )
+                                }
+                            }
+                            telemetry.ambientLux?.let { lux ->
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Icon(Icons.Rounded.Lightbulb, contentDescription = null, modifier = Modifier.size(14.dp), tint = palette.textSecondary)
+                                    Text(
+                                        text = "${lux.roundToInt()} lx",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textSecondary
+                                    )
+                                }
                             }
                             if (telemetry.stepCount > 0) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -452,7 +490,7 @@ private fun TunnelModeTogglePill(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = if (active) "Tunnel: ON" else "Tunnel: OFF",
+                text = if (active) "Force tunnel: ON" else "Tunnel: auto",
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                 color = if (active) palette.statusWarn else palette.textPrimary
             )
