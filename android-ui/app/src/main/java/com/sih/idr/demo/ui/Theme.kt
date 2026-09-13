@@ -2,6 +2,8 @@ package com.sih.idr.demo.ui
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -13,10 +15,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -47,6 +58,9 @@ interface IDRPalette {
     val overlayBg: Color
     val border: Color
     val speedLimitRing: Color
+    val glassSurface: Color
+    val glassBorder: Color
+    val glassGlow: Color
 }
 
 object IDRLightPalette : IDRPalette {
@@ -65,6 +79,9 @@ object IDRLightPalette : IDRPalette {
     override val overlayBg = Color(0xE6FFFFFF)
     override val border = Color(0xFFE5E7EB)
     override val speedLimitRing = Color(0xFFDC2626)
+    override val glassSurface = Color(0xF2FFFFFF)
+    override val glassBorder = Color(0x1F000000)
+    override val glassGlow = Color.Transparent
 }
 
 object IDRDarkPalette : IDRPalette {
@@ -75,14 +92,17 @@ object IDRDarkPalette : IDRPalette {
     override val statusWarn = Color(0xFFFBBF24)
     override val statusError = Color(0xFFF87171)
     override val bgPrimary = Color(0xFF0B0F19) // Deep slate night
-    override val bgSheet = Color(0xFF111827) // Refined dark sheet
-    override val bgCard = Color(0xFF1E293B) // Slate 800 card
+    override val bgSheet = Color(0xF20F172A) // Refined dark sheet
+    override val bgCard = Color(0xF51E293B) // Slate 800 card
     override val textPrimary = Color(0xFFF8FAFC)
     override val textSecondary = Color(0xFF94A3B8)
     override val textDim = Color(0xFF64748B)
     override val overlayBg = Color(0xE60F172A) // Slate 900 glass
-    override val border = Color(0xFF334155) // Slate 700 border
+    override val border = Color(0x3338BDF8) // Subtle border
     override val speedLimitRing = Color(0xFFEF4444)
+    override val glassSurface = Color(0xF00F172A)
+    override val glassBorder = Color(0x2E38BDF8)
+    override val glassGlow = Color.Transparent
 }
 
 /**
@@ -95,8 +115,11 @@ object IDRDarkPalette : IDRPalette {
  */
 object IDRTunnelPalette : IDRPalette by IDRDarkPalette {
     override val bgPrimary = Color(0xFF080B11) // Ultra-deep obsidian
-    override val bgSheet = Color(0xFF0F172A)   // Slate 900 glass
-    override val bgCard = Color(0xFF1E293B)    // Slate 800
+    override val bgSheet = Color(0xF20B0F19)   // Ultra-deep glass
+    override val bgCard = Color(0xF51E293B)    // Slate 800
+    override val glassSurface = Color(0xF2080B11)
+    override val glassBorder = Color(0x4D00E5FF)
+    override val glassGlow = Color.Transparent
 }
 
 /** Colours that only the tunnel corridor and its chrome use. Not part of [IDRPalette] on purpose. */
@@ -106,6 +129,70 @@ object TunnelTokens {
     val roadPavement = Color(0xFF131A29)     // Midnight asphalt
     val exitProgressFill = Color(0xFF0284C7) // Progress bar fill
     val sosAlcoveRed = Color(0xFFEF4444)     // Emergency SOS badge
+}
+
+// ── Glassmorphism Modifiers & Helpers ───────────────────────────────────────
+/**
+ * Clean artifact-free glassmorphic modifier.
+ * Synchronous shape clipping, frosted translucent fill, and subtle specular gradient rim border.
+ */
+fun Modifier.glassmorphic(
+    shape: Shape = RoundedCornerShape(20.dp),
+    backgroundColor: Color,
+    borderWidth: Dp = 1.dp,
+    borderColor: Color,
+    glowColor: Color = Color.Transparent,
+    glowRadius: Dp = 0.dp
+): Modifier = this
+    .clip(shape)
+    .background(backgroundColor)
+    .border(borderWidth, borderColor, shape)
+
+fun Modifier.glassmorphic(
+    shape: Shape = RoundedCornerShape(20.dp),
+    backgroundBrush: Brush,
+    borderWidth: Dp = 1.dp,
+    borderBrush: Brush,
+    glowColor: Color = Color.Transparent,
+    glowRadius: Dp = 0.dp
+): Modifier = this
+    .clip(shape)
+    .background(backgroundBrush)
+    .border(borderWidth, borderBrush, shape)
+
+fun Modifier.glassmorphic(
+    shape: Shape = RoundedCornerShape(20.dp),
+    backgroundColor: Color,
+    borderWidth: Dp = 1.dp,
+    borderBrush: Brush,
+    glowColor: Color = Color.Transparent,
+    glowRadius: Dp = 0.dp
+): Modifier = this
+    .clip(shape)
+    .background(backgroundColor)
+    .border(borderWidth, borderBrush, shape)
+
+fun glassBorderBrush(
+    isDark: Boolean,
+    primaryColor: Color = Color.White
+): Brush {
+    return if (isDark) {
+        Brush.linearGradient(
+            listOf(
+                Color.White.copy(alpha = 0.22f),
+                primaryColor.copy(alpha = 0.12f),
+                Color.White.copy(alpha = 0.05f)
+            )
+        )
+    } else {
+        Brush.linearGradient(
+            listOf(
+                Color.Black.copy(alpha = 0.12f),
+                Color.Black.copy(alpha = 0.06f),
+                Color.Black.copy(alpha = 0.03f)
+            )
+        )
+    }
 }
 
 object IDRColors {

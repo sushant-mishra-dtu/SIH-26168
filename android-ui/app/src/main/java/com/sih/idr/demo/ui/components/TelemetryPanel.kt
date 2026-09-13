@@ -17,6 +17,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.glassmorphic
+import com.sih.idr.demo.ui.glassBorderBrush
 import kotlin.math.roundToInt
 
 /**
@@ -87,13 +90,19 @@ private fun MetricCard(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalIDRPalette.current
+    val isDark = LocalIsDarkTheme.current
 
-    Surface(
-        color = palette.bgCard,
-        shape = RoundedCornerShape(20.dp),
+    Box(
         modifier = modifier
             .aspectRatio(1f) // Makes it a square
-            .border(1.dp, palette.border, RoundedCornerShape(20.dp))
+            .glassmorphic(
+                shape = RoundedCornerShape(20.dp),
+                backgroundColor = palette.glassSurface,
+                borderBrush = glassBorderBrush(isDark = isDark, primaryColor = palette.primary),
+                borderWidth = 1.dp,
+                glowColor = palette.glassGlow.copy(alpha = 0.2f),
+                glowRadius = 4.dp
+            )
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,

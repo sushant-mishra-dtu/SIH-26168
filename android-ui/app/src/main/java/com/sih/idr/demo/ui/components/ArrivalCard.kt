@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -46,14 +47,18 @@ fun ArrivalCard(
         exit = fadeOut() + slideOutVertically { it / 2 },
         modifier = modifier
     ) {
-        Surface(
-            color = palette.bgSheet,
-            shape = RoundedCornerShape(24.dp),
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
-                .shadow(16.dp, RoundedCornerShape(24.dp), spotColor = Color(0xFF10B981))
-                .border(1.5.dp, Color(0xFF10B981).copy(alpha = 0.8f), RoundedCornerShape(24.dp))
+                .glassmorphic(
+                    shape = RoundedCornerShape(24.dp),
+                    backgroundColor = palette.glassSurface,
+                    borderColor = Color(0xFF10B981).copy(alpha = 0.8f),
+                    borderWidth = 1.5.dp,
+                    glowColor = Color(0xFF10B981).copy(alpha = 0.3f),
+                    glowRadius = 16.dp
+                )
         ) {
             Column(
                 modifier = Modifier
@@ -104,7 +109,12 @@ fun ArrivalCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(palette.bgCard, RoundedCornerShape(16.dp))
+                        .glassmorphic(
+                            shape = RoundedCornerShape(16.dp),
+                            backgroundColor = palette.glassSurface,
+                            borderColor = palette.border.copy(alpha = 0.5f),
+                            borderWidth = 1.dp
+                        )
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
@@ -177,7 +187,8 @@ fun ArrivalCard(
                         .fillMaxWidth()
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Text(
                         text = "Done",

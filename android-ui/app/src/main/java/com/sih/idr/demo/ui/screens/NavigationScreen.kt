@@ -34,7 +34,9 @@ import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +44,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +61,7 @@ import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.IDRColors
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.glassmorphic
 import com.sih.idr.demo.ui.components.ArrivalCard
 import com.sih.idr.demo.ui.components.DestinationSearchBar
 import com.sih.idr.demo.ui.components.ExitProgressBar
@@ -99,6 +103,13 @@ fun NavigationScreen(
     val tunnelState = telemetry.tunnelState
     val inTunnel = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
     val activeRoute = telemetry.activeRoute
+    var isSearchExpanded by remember { mutableStateOf(false) }
+
+    val quickActionsAlpha by animateFloatAsState(
+        targetValue = if (isSearchExpanded) 0.15f else 1f,
+        animationSpec = spring(stiffness = 300f),
+        label = "quick_actions_alpha"
+    )
 
     Box(
         modifier = modifier
@@ -158,6 +169,7 @@ fun NavigationScreen(
                 DestinationSearchBar(
                     userLat = telemetry.latitude,
                     userLon = telemetry.longitude,
+                    onExpandedChange = { isSearchExpanded = it },
                     onSelectDestination = { item ->
                         scope.launch {
                             val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)
@@ -189,7 +201,10 @@ fun NavigationScreen(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(top = if (activeRoute != null) 96.dp else 126.dp, end = 16.dp),
+                .padding(top = if (activeRoute != null) 96.dp else 126.dp, end = 16.dp)
+                .graphicsLayer {
+                    alpha = quickActionsAlpha
+                },
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.End
         ) {
@@ -213,13 +228,6 @@ fun NavigationScreen(
                 icon = Icons.Rounded.GpsFixed,
                 contentDescription = "Reset Origin",
                 onClick = onResetOrigin
-            )
-
-            // 3-way tunnel selector pill
-            TunnelOptionsSelector(
-                currentOverride = telemetry.tunnelOverride,
-                enabled = isRecording,
-                onSelect = onSetTunnelOverride
             )
         }
 
@@ -256,6 +264,8 @@ fun NavigationScreen(
                 telemetry = telemetry,
                 isRecording = isRecording,
                 permissionsGranted = permissionsGranted,
+                tunnelOverride = telemetry.tunnelOverride,
+                onSetTunnelOverride = onSetTunnelOverride,
                 onStartStop = {
                     if (telemetry.activeRoute != null && isRecording) {
                         TelemetryStore.clearActiveRoute()
@@ -290,123 +300,6 @@ fun NavigationScreen(
 
 
 @Composable
-private fun TunnelOptionsSelector(
-    currentOverride: TunnelOverride,
-    enabled: Boolean,
-    onSelect: (TunnelOverride) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val palette = LocalIDRPalette.current
-
-    Surface(
-        color = palette.bgPrimary,
-        shape = RoundedCornerShape(20.dp),
-        modifier = modifier
-            .shadow(6.dp, RoundedCornerShape(20.dp), spotColor = palette.textDim)
-            .border(1.dp, palette.border, RoundedCornerShape(20.dp))
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text(
-                text = "Tunnel",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                color = palette.textSecondary,
-                modifier = Modifier.padding(start = 4.dp, end = 2.dp)
-            )
-
-            TunnelOptionSegment(
-                label = "Auto",
-                selected = currentOverride == TunnelOverride.AUTO,
-                activeColor = palette.primary,
-                enabled = enabled,
-                onClick = { onSelect(TunnelOverride.AUTO) }
-            )
-
-            TunnelOptionSegment(
-                label = "On",
-                selected = currentOverride == TunnelOverride.FORCE_ON,
-                activeColor = palette.statusWarn,
-                enabled = enabled,
-                onClick = { onSelect(TunnelOverride.FORCE_ON) }
-            )
-
-            TunnelOptionSegment(
-                label = "Off",
-                selected = currentOverride == TunnelOverride.FORCE_OFF,
-                activeColor = Color(0xFFEF5350),
-                enabled = enabled,
-                onClick = { onSelect(TunnelOverride.FORCE_OFF) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun TunnelOptionSegment(
-    label: String,
-    selected: Boolean,
-    activeColor: Color,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    val palette = LocalIDRPalette.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed && enabled) 0.90f else 1f,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
-        label = "segment_scale_$label"
-    )
-
-    val bgColor by animateColorAsState(
-        targetValue = if (selected) activeColor.copy(alpha = 0.18f) else Color.Transparent,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
-        label = "segment_bg_$label"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (selected) activeColor.copy(alpha = 0.85f) else Color.Transparent,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
-        label = "segment_border_$label"
-    )
-    val textColor by animateColorAsState(
-        targetValue = if (selected) activeColor else palette.textSecondary,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
-        label = "segment_text_$label"
-    )
-
-    Surface(
-        color = bgColor,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .scale(scale)
-            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                enabled = enabled,
-                onClick = onClick
-            )
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
-                ),
-                color = textColor
-            )
-        }
-    }
-}
-
-@Composable
 private fun FloatingActionPill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean = false,
@@ -422,27 +315,33 @@ private fun FloatingActionPill(
         label = "icon_scale"
     )
 
-    Surface(
-        color = if (active) palette.primary.copy(alpha = 0.2f) else palette.bgPrimary,
-        shape = CircleShape,
+    val pillBg = if (active) palette.primary.copy(alpha = 0.25f) else palette.glassSurface
+    val pillBorder = if (active) palette.primary else palette.glassBorder
+
+    Box(
         modifier = Modifier
-            .size(40.dp)
+            .size(42.dp)
             .scale(scale)
-            .shadow(6.dp, CircleShape, spotColor = palette.textDim)
-            .border(1.dp, if (active) palette.primary else palette.border, CircleShape)
+            .glassmorphic(
+                shape = CircleShape,
+                backgroundColor = pillBg,
+                borderWidth = 1.dp,
+                borderColor = pillBorder,
+                glowColor = Color.Transparent,
+                glowRadius = 4.dp
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick
-            )
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = if (active) palette.primary else palette.textPrimary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (active) palette.primary else palette.textPrimary,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
