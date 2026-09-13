@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -28,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mapbox.android.gestures.MoveGestureDetector
 import com.mapbox.geojson.Point
@@ -73,7 +73,9 @@ fun MapView(
     telemetry: TelemetryState,
     modifier: Modifier = Modifier,
     courseUpMode: Boolean = false,
-    onToggleCourseUp: () -> Unit = {}
+    onToggleCourseUp: () -> Unit = {},
+    /** Height of whatever the screen stacks over the bottom of the map; the Re-center pill clears it. */
+    bottomInset: Dp = 0.dp
 ) {
     val context = LocalContext.current
     val isDark = LocalIsDarkTheme.current
@@ -209,8 +211,7 @@ fun MapView(
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 128.dp)
+                .padding(bottom = bottomInset + 16.dp)
         ) {
             RecenterPill(onClick = {
                 followVehicle = true

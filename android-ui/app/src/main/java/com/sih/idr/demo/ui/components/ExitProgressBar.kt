@@ -65,7 +65,7 @@ fun ExitProgressBar(
         val tSec = max(0, (rawT / 5.0).roundToInt() * 5)
         "Exit in ~${tSec}s"
     } else {
-        "stopped"
+        "Stopped"
     }
 
     Box(

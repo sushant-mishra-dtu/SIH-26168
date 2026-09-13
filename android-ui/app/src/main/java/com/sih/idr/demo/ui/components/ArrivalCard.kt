@@ -121,7 +121,7 @@ fun ArrivalCard(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "Distance",
+                            text = "Logged",
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textSecondary
                         )
@@ -151,9 +151,9 @@ fun ArrivalCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textSecondary
                         )
-                        val durMin = (telemetry.tripDurationSec / 60).coerceAtLeast(1)
+                        val durSec = telemetry.tripDurationSec
                         Text(
-                            text = "$durMin min",
+                            text = if (durSec >= 60) "${durSec / 60} min" else "$durSec s",
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
                             color = palette.textPrimary
                         )
@@ -168,14 +168,16 @@ fun ArrivalCard(
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "Tracking",
+                            text = "Estimator",
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textSecondary
                         )
+                        // The on-device demo estimator, named as such: it is not the evaluated
+                        // InEKF, and a card that said so would be quoting a filter that never ran.
                         Text(
-                            text = "InEKF",
+                            text = "on-device demo",
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                            color = Color(0xFF38BDF8)
+                            color = palette.primary
                         )
                     }
                 }

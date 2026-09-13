@@ -20,6 +20,7 @@ import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
 import com.sih.idr.demo.ui.glassmorphic
 import com.sih.idr.demo.ui.glassBorderBrush
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -54,7 +55,7 @@ fun TelemetryPanel(
             modifier = Modifier.weight(1f),
             value = when {
                 !telemetry.running -> NO_READING
-                speedKmh < 100 -> "%.1f".format(speedKmh)
+                speedKmh < 100 -> "%.1f".format(Locale.US, speedKmh)
                 else -> speedKmh.roundToInt().toString()
             },
             unit = "km/h"

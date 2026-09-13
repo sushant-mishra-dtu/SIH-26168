@@ -8,20 +8,32 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sih.idr.demo.backend.SensorForegroundService
 import com.sih.idr.demo.backend.TelemetryStore
+import com.sih.idr.demo.ui.LocalIsDarkTheme
 import com.sih.idr.demo.ui.NavigatorTheme
 import com.sih.idr.demo.ui.components.MapStack
 import com.sih.idr.demo.ui.screens.NavigationScreen
 
 class MainActivity : ComponentActivity() {
 
-    private val requiredPermissions = buildList {
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
-        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+    /**
+     * The permissions recording cannot run without. Only location is in this set: the foreground
+     * service starts and the sensors deliver whether or not the notification is allowed, and
+     * `HIGH_SAMPLING_RATE_SENSORS` is install-time on every API level that has it.
+     */
+    private val requiredPermissions = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+
+    /** Everything we ask for in one dialog; a refusal here degrades, it does not block. */
+    private val requestedPermissions = buildList {
+        addAll(requiredPermissions)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -33,8 +45,8 @@ class MainActivity : ComponentActivity() {
     // Permission launcher
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        permissionsGranted = results.values.all { it }
+    ) { _ ->
+        permissionsGranted = hasRequiredPermissions()
         if (permissionsGranted) {
             seedLocationIfPossible()
         }
@@ -52,7 +64,7 @@ class MainActivity : ComponentActivity() {
         MapStack.onActivityCreated(this)
 
         // Check permissions on launch
-        permissionsGranted = hasAllPermissions()
+        permissionsGranted = hasRequiredPermissions()
         if (permissionsGranted) {
             seedLocationIfPossible()
         }
@@ -70,23 +82,27 @@ class MainActivity : ComponentActivity() {
             val telemetry by TelemetryStore.state.collectAsStateWithLifecycle()
 
             NavigatorTheme(darkTheme = isDarkTheme, tunnelMode = telemetry.tunnelModeActive) {
-                var isRecording by remember { mutableStateOf(false) }
-                var permsGranted by remember { mutableStateOf(permissionsGranted) }
-
-                // Sync permission state
-                LaunchedEffect(permissionsGranted) {
-                    permsGranted = permissionsGranted
+                // Status-bar icons follow the palette actually on screen: the style sheet cannot
+                // know whether the user has toggled the theme or the tunnel palette has taken over.
+                val view = LocalView.current
+                val paletteIsDark = LocalIsDarkTheme.current
+                SideEffect {
+                    val controller = WindowCompat.getInsetsController(window, view)
+                    controller.isAppearanceLightStatusBars = !paletteIsDark
+                    controller.isAppearanceLightNavigationBars = !paletteIsDark
                 }
 
-                // If service is running, sync recording state
+                // `isRecording` flips on the tap so the button answers immediately; the service
+                // then confirms (or, if it was killed, denies) through `telemetry.running`.
+                var isRecording by remember { mutableStateOf(telemetry.running) }
                 LaunchedEffect(telemetry.running) {
-                    if (telemetry.running) isRecording = true
+                    isRecording = telemetry.running
                 }
 
                 NavigationScreen(
                     telemetry = telemetry,
                     isRecording = isRecording,
-                    permissionsGranted = permsGranted,
+                    permissionsGranted = permissionsGranted,
                     darkTheme = isDarkTheme,
                     onToggleTheme = { isDarkTheme = !isDarkTheme },
                     courseUpMode = courseUpMode,
@@ -101,8 +117,8 @@ class MainActivity : ComponentActivity() {
                         SensorForegroundService.resetOrigin()
                     },
                     onStartStop = {
-                        if (!permsGranted) {
-                            permissionLauncher.launch(requiredPermissions)
+                        if (!permissionsGranted) {
+                            permissionLauncher.launch(requestedPermissions)
                             return@NavigationScreen
                         }
 
@@ -127,12 +143,12 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun hasAllPermissions(): Boolean = requiredPermissions.all {
+    private fun hasRequiredPermissions(): Boolean = requiredPermissions.all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun seedLocationIfPossible() {
-        if (hasAllPermissions()) {
+        if (hasRequiredPermissions()) {
             val lm = getSystemService(LOCATION_SERVICE) as? android.location.LocationManager ?: return
             val lastFused = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 try { lm.getLastKnownLocation(android.location.LocationManager.FUSED_PROVIDER) } catch (e: Exception) { null }

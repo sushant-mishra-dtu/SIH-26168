@@ -1,5 +1,6 @@
 package com.sih.idr.demo.ui.components
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
@@ -78,24 +79,39 @@ fun DestinationSearchBar(
         onExpandedChange(isExpanded && suggestions.isNotEmpty())
     }
 
-    // Initialise suggestions from presets
-    LaunchedEffect(selectedCategory, userLat, userLon) {
-        suggestions = SearchPreset.findPresets(query, selectedCategory, userLat, userLon)
-    }
-
-    // Trigger debounced search when query changes
-    fun updateQuery(newQuery: String) {
-        query = newQuery
+    // Trigger debounced search when query or category changes. Not keyed on the user's position:
+    // while recording that moves at the pose rate, and a preset refresh on every pose overwrote
+    // the Nominatim results under the operator's finger. Distances in the list are computed at
+    // render time from the live position, so nothing is lost by not refreshing here.
+    fun refreshSuggestions(newQuery: String, category: String) {
         searchJob?.cancel()
         searchJob = scope.launch {
             if (newQuery.length >= 3) {
                 delay(250) // Debounce network request
-                suggestions = RouteService.searchLocations(newQuery, userLat, userLon, selectedCategory)
+                suggestions = RouteService.searchLocations(newQuery, userLat, userLon, category)
             } else {
-                suggestions = SearchPreset.findPresets(newQuery, selectedCategory, userLat, userLon)
+                suggestions = SearchPreset.findPresets(newQuery, category, userLat, userLon)
             }
         }
     }
+
+    fun updateQuery(newQuery: String) {
+        query = newQuery
+        refreshSuggestions(newQuery, selectedCategory)
+    }
+
+    // Initialise suggestions from presets, once
+    LaunchedEffect(Unit) {
+        suggestions = SearchPreset.findPresets(query, selectedCategory, userLat, userLon)
+    }
+
+    fun dismiss() {
+        isExpanded = false
+        focusManager.clearFocus()
+    }
+
+    // The system back gesture closes the list before it leaves the app
+    BackHandler(enabled = isExpanded && suggestions.isNotEmpty()) { dismiss() }
 
     Column(
         modifier = modifier
@@ -165,10 +181,8 @@ fun DestinationSearchBar(
                     modifier = Modifier
                         .size(20.dp)
                         .clickable {
-                            query = ""
                             updateQuery("")
-                            isExpanded = false
-                            focusManager.clearFocus()
+                            dismiss()
                         }
                 )
             }
@@ -195,7 +209,7 @@ fun DestinationSearchBar(
                         .clip(RoundedCornerShape(12.dp))
                         .clickable {
                             selectedCategory = category
-                            suggestions = SearchPreset.findPresets(query, category, userLat, userLon)
+                            refreshSuggestions(query, category)
                             isExpanded = true
                         }
                 ) {
@@ -255,8 +269,7 @@ fun DestinationSearchBar(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                isExpanded = false
-                                focusManager.clearFocus()
+                                dismiss()
                                 onSelectDestination(item)
                             }
                             .padding(horizontal = 14.dp, vertical = 8.dp),

@@ -121,8 +121,15 @@ fun NavigationHeader(
                     // Maneuver distance countdown and street instruction
                     Column(modifier = Modifier.weight(1f)) {
                         val effectiveDistM = distanceToNextStepM ?: currentStep?.distanceM ?: 0f
+                        val nowText = when (maneuverType) {
+                            ManeuverType.ARRIVE -> "Arriving"
+                            ManeuverType.STRAIGHT -> "Continue"
+                            ManeuverType.TUNNEL_ENTRY -> "Entering tunnel"
+                            ManeuverType.TUNNEL_EXIT -> "Leaving tunnel"
+                            else -> "Turn now"
+                        }
                         val distanceText = when {
-                            effectiveDistM <= 15f -> "Turn now"
+                            effectiveDistM <= 15f -> nowText
                             effectiveDistM < 1000f -> "In ${effectiveDistM.roundToInt()} m"
                             else -> "In %.1f km".format(Locale.US, effectiveDistM / 1000f)
                         }

@@ -175,7 +175,7 @@ reappear, culminating in the D-124 exit toast.
 - **Exit Summary Toast (`ReconvergenceToast`)**:
   - A dark floating dialog appears at the top displaying measured outage metrics:
     ```
-    GPS restored
+    GNSS restored
     [dist] m on IDR · [duration]s
     exit residual vs GNSS: [res] m
     [accepted] passed, [rejected] rejected

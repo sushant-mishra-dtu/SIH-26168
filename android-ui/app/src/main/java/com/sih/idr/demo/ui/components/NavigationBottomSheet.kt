@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -95,7 +96,7 @@ fun NavigationBottomSheet(
                     modifier = Modifier
                         .width(40.dp)
                         .height(4.dp)
-                        .background(palette.textDim.copy(alpha = 0.5f), CircleShape)
+                        .background(palette.textSecondary.copy(alpha = 0.45f), CircleShape)
                 )
             }
 
@@ -142,7 +143,7 @@ fun NavigationBottomSheet(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 26.sp
                                 ),
-                                color = Color(0xFF10B981)
+                                color = palette.navGreen
                             )
 
                             // Distance and Arrival Time
@@ -159,7 +160,7 @@ fun NavigationBottomSheet(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                text = "via ${activeRoute.destinationName}",
+                                text = "to ${activeRoute.destinationName}",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                                 color = palette.textPrimary,
                                 maxLines = 1,
@@ -208,7 +209,11 @@ fun NavigationBottomSheet(
                         }
 
                         Text(
-                            text = if (telemetry.running) "IDR dead-reckoning engine active" else "Tap destination or start navigation",
+                            text = when {
+                                telemetry.running -> "IDR dead-reckoning engine active"
+                                !permissionsGranted -> "Location access is needed before recording can start"
+                                else -> "Pick a destination or tap Start"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.textSecondary
                         )
@@ -253,7 +258,11 @@ fun NavigationBottomSheet(
                         label = "btn_scale"
                     )
 
-                    val isStopState = isRecording || activeRoute != null
+                    // The button reads the recording, and only the recording: a route chosen
+                    // before Start is not something to stop, and a "Stop" that started the
+                    // service is the wrong verb on the wrong button. With no permission it is
+                    // the one way to ask for it, so it stays enabled and says so.
+                    val isStopState = isRecording
                     val buttonBg by animateColorAsState(
                         targetValue = if (isStopState) palette.statusError else palette.primary,
                         animationSpec = spring(stiffness = 400f),
@@ -262,7 +271,6 @@ fun NavigationBottomSheet(
 
                     Button(
                         onClick = onStartStop,
-                        enabled = permissionsGranted,
                         interactionSource = interactionSource,
                         modifier = Modifier
                             .height(48.dp)
@@ -275,7 +283,11 @@ fun NavigationBottomSheet(
                         elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                     ) {
                         Text(
-                            text = if (isStopState) "Stop" else "Start",
+                            text = when {
+                                isStopState -> "Stop"
+                                !permissionsGranted -> "Allow location"
+                                else -> "Start"
+                            },
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             color = if (isDark && !isStopState) Color(0xFF0F172A) else Color.White
                         )
@@ -370,7 +382,7 @@ fun NavigationBottomSheet(
                                 color = palette.textSecondary
                             )
                             Text(
-                                text = "Simulate GNSS-denied mode",
+                                text = if (isRecording) "Pin or release GNSS suppression" else "Available while recording",
                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                 color = palette.textDim
                             )
@@ -420,9 +432,15 @@ private fun TunnelOptionsSelector(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalIDRPalette.current
+    val disabledAlpha by animateFloatAsState(
+        targetValue = if (enabled) 1f else 0.4f,
+        animationSpec = spring(stiffness = 300f),
+        label = "tunnel_selector_alpha"
+    )
 
     Box(
         modifier = modifier
+            .alpha(disabledAlpha)
             .glassmorphic(
                 shape = RoundedCornerShape(18.dp),
                 backgroundColor = palette.glassSurface,

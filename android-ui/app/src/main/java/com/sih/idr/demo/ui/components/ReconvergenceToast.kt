@@ -34,6 +34,7 @@ import com.sih.idr.demo.backend.TunnelExitSummary
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.glassmorphic
 import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -90,7 +91,7 @@ fun ReconvergenceToast(
                     )
                     Spacer(Modifier.size(8.dp))
                     Text(
-                        text = if (forced) "GPS re-acquired by timeout" else "GPS restored",
+                        text = if (forced) "GNSS re-acquired by timeout" else "GNSS restored",
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = palette.textPrimary
                     )
@@ -98,7 +99,7 @@ fun ReconvergenceToast(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = "${s.distanceOnIdrM.roundToInt()} m on IDR · ${formatElapsed(s.elapsedMs)} · " +
-                        (s.exitResidualM?.let { "exit residual ${"%.1f".format(it)} m vs GNSS" }
+                        (s.exitResidualM?.let { "exit residual ${"%.1f".format(Locale.US, it)} m vs GNSS" }
                             ?: "no fix accepted"),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.textSecondary

@@ -1,66 +1,45 @@
 package com.sih.idr.demo.ui.screens
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DarkMode
-import androidx.compose.material.icons.rounded.DirectionsRun
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Navigation
-import androidx.compose.material.icons.rounded.NearMe
-import androidx.compose.material.icons.rounded.Route
-import androidx.compose.material.icons.rounded.SatelliteAlt
-import androidx.compose.material.icons.rounded.Sensors
-import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import com.sih.idr.demo.backend.NavigationMode
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.TelemetryStore
 import com.sih.idr.demo.backend.routing.GeoCoordinate
 import com.sih.idr.demo.backend.routing.RouteService
-import com.sih.idr.demo.backend.routing.SearchItem
 import com.sih.idr.demo.backend.tunnel.TunnelOverride
 import com.sih.idr.demo.backend.tunnel.TunnelState
-import com.sih.idr.demo.ui.IDRColors
 import com.sih.idr.demo.ui.LocalIDRPalette
-import com.sih.idr.demo.ui.LocalIsDarkTheme
 import com.sih.idr.demo.ui.glassmorphic
 import com.sih.idr.demo.ui.components.ArrivalCard
 import com.sih.idr.demo.ui.components.DestinationSearchBar
@@ -73,10 +52,7 @@ import com.sih.idr.demo.ui.components.NavigationBottomSheet
 import com.sih.idr.demo.ui.components.NavigationHeader
 import com.sih.idr.demo.ui.components.ReconvergenceToast
 import com.sih.idr.demo.ui.components.SpeedHud
-import com.sih.idr.demo.ui.components.TelemetryPanel
-import com.sih.idr.demo.ui.components.TunnelCorridor
 import com.sih.idr.demo.ui.components.TunnelStatusBadge
-import kotlin.math.roundToInt
 
 /**
  * Main screen — Google Maps-style navigation UI with full-bleed map, turn guidance banner,
@@ -98,12 +74,18 @@ fun NavigationScreen(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalIDRPalette.current
-    val isDark = LocalIsDarkTheme.current
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val tunnelState = telemetry.tunnelState
     val inTunnel = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
     val activeRoute = telemetry.activeRoute
     var isSearchExpanded by remember { mutableStateOf(false) }
+
+    // The bottom chrome (speed HUD + sheet) is measured, not assumed: the sheet roughly triples
+    // in height when the diagnostics drawer opens, and anything anchored to the bottom of the map
+    // -- the arrival card, the map's own Re-center pill -- has to clear whatever height it has.
+    var bottomChromeHeightPx by remember { mutableIntStateOf(0) }
+    val bottomChromeHeight = with(density) { bottomChromeHeightPx.toDp() }
 
     val quickActionsAlpha by animateFloatAsState(
         targetValue = if (isSearchExpanded) 0.15f else 1f,
@@ -121,6 +103,7 @@ fun NavigationScreen(
             telemetry = telemetry,
             courseUpMode = courseUpMode,
             onToggleCourseUp = onToggleCourseUp,
+            bottomInset = bottomChromeHeight,
             modifier = Modifier.fillMaxSize()
         )
 
@@ -132,8 +115,8 @@ fun NavigationScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // A. Active Turn-by-Turn Navigation Header
             if (activeRoute != null) {
+                // A. Active Turn-by-Turn Navigation Header
                 NavigationHeader(
                     route = activeRoute,
                     stepIndex = telemetry.activeStepIndex,
@@ -143,26 +126,6 @@ fun NavigationScreen(
                     onCancelRoute = {
                         TelemetryStore.clearActiveRoute()
                     }
-                )
-
-                // Exit progress bar inside tunnel
-                AnimatedVisibility(
-                    visible = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR && telemetry.tunnelFix?.inside == true,
-                    enter = fadeIn(),
-                    exit = fadeOut()
-                ) {
-                    telemetry.tunnelFix?.let { fix ->
-                        ExitProgressBar(
-                            fix = fix,
-                            speedMps = telemetry.speedMps
-                        )
-                    }
-                }
-
-                // Contextual Hazard Chips
-                HazardChips(
-                    telemetry = telemetry,
-                    modifier = Modifier.fillMaxWidth()
                 )
             } else {
                 // B. Idle Mode: Clean floating search bar
@@ -191,6 +154,27 @@ fun NavigationScreen(
                 }
             }
 
+            // The tunnel strip is the same with or without a route: the machine does not know
+            // whether a destination was picked, and the DESK_RUN checklist reads these chips on
+            // the idle screen (Steps 1, 2 and 4).
+            AnimatedVisibility(
+                visible = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR && telemetry.tunnelFix?.inside == true,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                telemetry.tunnelFix?.let { fix ->
+                    ExitProgressBar(
+                        fix = fix,
+                        speedMps = telemetry.speedMps
+                    )
+                }
+            }
+
+            HazardChips(
+                telemetry = telemetry,
+                modifier = Modifier.fillMaxWidth()
+            )
+
             // Stage 5: Measured exit summary toast after GNSS returns (D-124)
             ReconvergenceToast(summary = telemetry.lastExit)
 
@@ -217,10 +201,11 @@ fun NavigationScreen(
                         onClick = onToggleCourseUp
                     )
 
-                    // Dark Mode / Light Mode Toggle Button
+                    // Dark Mode / Light Mode Toggle Button. The icon follows the user's choice,
+                    // not the palette on screen: the tunnel palette overrides it and reverts.
                     FloatingActionPill(
-                        icon = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
-                        contentDescription = "Toggle Dark Mode",
+                        icon = if (darkTheme) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                        contentDescription = if (darkTheme) "Switch to light theme" else "Switch to dark theme",
                         onClick = onToggleTheme
                     )
 
@@ -242,27 +227,32 @@ fun NavigationScreen(
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 128.dp)
+                .padding(bottom = bottomChromeHeight)
         )
 
         // ── 5. Bottom Sheet Area & Speed HUD ───────────────────────────
         Column(
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .onSizeChanged { bottomChromeHeightPx = it.height }
         ) {
-            // Speed HUD placed bottom-left directly above the bottom sheet (D-081)
-            val postedLimit = if (telemetry.tunnelFix?.inside == true) {
-                telemetry.tunnelFix.tunnel.postedLimitKmh
-            } else {
-                null
+            // Speed HUD placed bottom-left directly above the bottom sheet (D-081). It exists only
+            // while the estimator is producing a speed: before Start there is no reading, and a
+            // gauge at zero is a reading (D-080).
+            if (telemetry.running) {
+                val postedLimit = if (telemetry.tunnelFix?.inside == true) {
+                    telemetry.tunnelFix.tunnel.postedLimitKmh
+                } else {
+                    null
+                }
+                SpeedHud(
+                    speedMps = telemetry.speedMps,
+                    postedLimitKmh = postedLimit,
+                    modifier = Modifier
+                        .padding(start = 16.dp, bottom = 8.dp)
+                        .align(Alignment.Start)
+                )
             }
-            SpeedHud(
-                speedMps = telemetry.speedMps,
-                postedLimitKmh = postedLimit,
-                modifier = Modifier
-                    .padding(start = 16.dp, bottom = 8.dp)
-                    .align(Alignment.Start)
-            )
 
             NavigationBottomSheet(
                 telemetry = telemetry,
@@ -271,6 +261,8 @@ fun NavigationScreen(
                 tunnelOverride = telemetry.tunnelOverride,
                 onSetTunnelOverride = onSetTunnelOverride,
                 onStartStop = {
+                    // Stopping the recording ends the trip with it; a route with no estimator
+                    // behind it would sit on screen with a countdown that never moves.
                     if (telemetry.activeRoute != null && isRecording) {
                         TelemetryStore.clearActiveRoute()
                     }

@@ -345,7 +345,24 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         sensorManager.unregisterListener(this)
         locationManager.removeUpdates(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) locationManager.unregisterGnssStatusCallback(gnssCallback)
-        TelemetryStore.update { it.copy(running = false) }
+        // The machine and the estimator die with this instance; the state they published must
+        // not outlive them, or the idle screen keeps a tunnel badge and a "GNSS suppressed" chip
+        // over a recording that has ended. The pose, path and totals stay so the last drive
+        // remains visible until the next Start.
+        TelemetryStore.update {
+            it.copy(
+                running = false,
+                mode = NavigationMode.INIT,
+                tunnelModeActive = false,
+                tunnelState = TunnelState.GNSS_HEALTHY,
+                tunnelTrigger = null,
+                tunnelForced = false,
+                tunnelOverride = TunnelOverride.AUTO,
+                tunnelFix = null,
+                gnssAvailable = false,
+                satellites = 0
+            )
+        }
         super.onDestroy()
     }
 

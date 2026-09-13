@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -64,7 +65,9 @@ fun MapView(
     telemetry: TelemetryState,
     modifier: Modifier = Modifier,
     courseUpMode: Boolean = false,
-    onToggleCourseUp: () -> Unit = {}
+    onToggleCourseUp: () -> Unit = {},
+    /** Height of whatever the screen stacks over the bottom of the map; the Re-center pill clears it. */
+    bottomInset: Dp = 0.dp
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -382,8 +385,7 @@ fun MapView(
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 128.dp)
+                .padding(bottom = bottomInset + 16.dp)
         ) {
             RecenterPill(onClick = {
                 followVehicle = true

@@ -69,7 +69,10 @@ fun GuidanceBanner(
     val palette = LocalIDRPalette.current
     val isDark = LocalIsDarkTheme.current
     val tunnelState = telemetry.tunnelState
-    val isIns = telemetry.mode == NavigationMode.INS || tunnelState != TunnelState.GNSS_HEALTHY
+    // Before Start there is no estimator, so there is no mode: the pill says so instead of
+    // borrowing the inertial-coast look for a screen with no data behind it.
+    val isIns = telemetry.running &&
+        (telemetry.mode == NavigationMode.INS || tunnelState != TunnelState.GNSS_HEALTHY)
 
     // Determine primary and secondary banner content by tunnel state and map-matched fix (R-F).
     val (primaryText, secondaryText) = when {
@@ -211,14 +214,15 @@ fun GuidanceBanner(
             }
 
             // Status Pill (GNSS Lock vs INS Coasting)
+            val pillTint = when {
+                isIns -> Color(0xFFFBBF24)
+                !telemetry.running -> Color.White.copy(alpha = 0.6f)
+                else -> Color(0xFF34D399)
+            }
             Surface(
-                color = if (isIns) Color(0x33F59E0B) else Color(0x3310B981),
+                color = pillTint.copy(alpha = 0.2f),
                 shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.border(
-                    1.dp,
-                    if (isIns) Color(0xFFFBBF24) else Color(0xFF34D399),
-                    RoundedCornerShape(14.dp)
-                )
+                modifier = Modifier.border(1.dp, pillTint, RoundedCornerShape(14.dp))
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -234,13 +238,18 @@ fun GuidanceBanner(
                         )
                         Text(
                             text = when {
-                                !telemetry.running -> "INS Coast"
                                 tunnelState == TunnelState.GNSS_HEALTHY -> "INS Coast"
                                 telemetry.tunnelForced -> "${tunnelState.label} (forced)"
                                 else -> tunnelState.label
                             },
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color(0xFFFDE68A)
+                        )
+                    } else if (!telemetry.running) {
+                        Text(
+                            "Not recording",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White.copy(alpha = 0.85f)
                         )
                     } else {
                         Icon(

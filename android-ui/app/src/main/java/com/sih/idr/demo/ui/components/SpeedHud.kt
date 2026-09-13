@@ -20,7 +20,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
@@ -155,7 +154,7 @@ fun SpeedHud(
                 )
 
                 drawLine(
-                    color = if (isOverLimit) palette.statusWarn else Color.White,
+                    color = if (isOverLimit) palette.statusWarn else palette.textPrimary,
                     start = p1,
                     end = p2,
                     strokeWidth = 2.dp.toPx(),
