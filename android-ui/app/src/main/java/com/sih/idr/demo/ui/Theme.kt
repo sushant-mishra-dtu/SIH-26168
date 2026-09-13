@@ -85,6 +85,29 @@ object IDRDarkPalette : IDRPalette {
     override val speedLimitRing = Color(0xFFEF4444)
 }
 
+/**
+ * Stage 3 "tunnel vision" palette, `docs/UI_UX_NAVIGATION_PLAN.md` section 4 as corrected by
+ * section 7.3: it delegates to [IDRDarkPalette] for everything it does not override, so it satisfies
+ * the whole [IDRPalette] contract and the accents (cyan, emerald, amber, red) stay the dark
+ * palette's. Only the backgrounds go deeper, to hold the 7:1 contrast target against a night map.
+ * The tunnel-only colours live on [TunnelTokens] so that other [IDRPalette] implementers do not grow
+ * fields nothing outside a tunnel reads.
+ */
+object IDRTunnelPalette : IDRPalette by IDRDarkPalette {
+    override val bgPrimary = Color(0xFF080B11) // Ultra-deep obsidian
+    override val bgSheet = Color(0xFF0F172A)   // Slate 900 glass
+    override val bgCard = Color(0xFF1E293B)    // Slate 800
+}
+
+/** Colours that only the tunnel corridor and its chrome use. Not part of [IDRPalette] on purpose. */
+object TunnelTokens {
+    val wallGlow = Color(0x3338BDF8)         // Translucent cyan tube
+    val ceilingLamp = Color(0xFFFFE082)      // Warm incandescent lamp
+    val roadPavement = Color(0xFF131A29)     // Midnight asphalt
+    val exitProgressFill = Color(0xFF0284C7) // Progress bar fill
+    val sosAlcoveRed = Color(0xFFEF4444)     // Emergency SOS badge
+}
+
 object IDRColors {
     val current: IDRPalette
         @Composable
@@ -190,12 +213,19 @@ object IDRAnimations {
 @Composable
 fun NavigatorTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    tunnelMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val palette = if (darkTheme) IDRDarkPalette else IDRLightPalette
-    val colorScheme = if (darkTheme) DarkScheme else LightScheme
+    // Tunnel mode overrides the user's day/night choice: the Stage 3 inversion is automatic and is
+    // driven by the estimator's state, not by a toggle (plan section 2, Stage 3).
+    val palette = when {
+        tunnelMode -> IDRTunnelPalette
+        darkTheme -> IDRDarkPalette
+        else -> IDRLightPalette
+    }
+    val colorScheme = if (palette.isDark) DarkScheme else LightScheme
     val extendedColors = ExtendedColors(
-        isDark = darkTheme,
+        isDark = palette.isDark,
         statusOk = palette.statusOk,
         statusWarn = palette.statusWarn,
         statusError = palette.statusError,
@@ -205,7 +235,7 @@ fun NavigatorTheme(
 
     CompositionLocalProvider(
         LocalIDRPalette provides palette,
-        LocalIsDarkTheme provides darkTheme,
+        LocalIsDarkTheme provides palette.isDark,
         LocalExtendedColors provides extendedColors
     ) {
         MaterialTheme(

@@ -24,6 +24,7 @@ enforces, so a failure is a conversation about that decision rather than a puzzl
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -31,7 +32,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 LOGGER_APP = REPO / "android" / "app" / "src" / "main"
-UI_APP = REPO / "android-ui" / "app" / "src" / "main"
+#: The whole `src/` tree, not `src/main`: the operator UI has two product flavours since D-121
+#: (`osm`, `mapbox`), each with its own source set, and every rule below applies to both.
+UI_APP = REPO / "android-ui" / "app" / "src"
+UI_MAPBOX_FLAVOUR = UI_APP / "mapbox"
 REPLAY_PKG = LOGGER_APP / "kotlin" / "org" / "idr26168" / "logger" / "replay"
 
 
@@ -59,6 +63,16 @@ def test_both_modules_are_present_so_an_empty_glob_cannot_pass_this_file():
     assert UI_SOURCES, f"no Kotlin sources under {UI_APP}"
     assert "android/app/src/main/kotlin/org/idr26168/logger/replay/ReplayActivity.kt" in ALL_SOURCES
     assert "android-ui/app/src/main/java/com/sih/idr/demo/MainActivity.kt" in ALL_SOURCES
+    for path in (
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/TunnelCorridor.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/HazardChips.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/SpeedHud.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/ExitProgressBar.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/GuidanceBanner.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelGeometry.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelAssetLoader.kt",
+    ):
+        assert path in ALL_SOURCES, f"missing expected source file: {path}"
 
 
 # ------------------------------------------------------------------------------------------
@@ -118,14 +132,72 @@ def test_logger_manifest_asks_for_no_internet():
     assert "android.permission.ACCESS_NETWORK_STATE" not in declared, manifest
 
 
-def test_the_ui_module_declares_no_proprietary_map_sdk_or_downloaded_font_dependency():
-    """Checked at the dependency rather than the call site: ensure android-ui does not depend
-    on proprietary Google Play Services maps or downloadable fonts. Online maps use open
-    OSMDroid (D-116)."""
-    build = (REPO / "android-ui" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
-    code = _strip_comments(build)
-    for coordinate in ("ui-text-google-fonts", "play-services-maps", "maps-compose"):
+def _ui_build_script() -> str:
+    return _strip_comments(
+        (REPO / "android-ui" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    )
+
+
+def test_the_ui_module_declares_no_play_services_or_downloaded_font_dependency():
+    """Checked at the dependency rather than the call site. Downloadable fonts were a network
+    call disguised as a `FontFamily` (D-111). `play-services-maps` is a proprietary map SDK the
+    project never chose. `play-services-location` is the one the Mapbox docs recommend for "better
+    raw location": it would be a second location source next to the InEKF's, which is precisely
+    what D-123 rule R1 forbids -- the SDK must see one feed, ours, with no gap for its own
+    extrapolator to fill.
+
+    `maps-compose` was on this list until D-122 admitted the Mapbox stack for the `mapbox`
+    flavour; the flavour split below is what now keeps it out of the `osm` build."""
+    code = _ui_build_script()
+    for coordinate in ("ui-text-google-fonts", "play-services-maps", "play-services-location"):
         assert coordinate not in code, f"android-ui depends on {coordinate}"
+
+
+def test_each_map_engine_is_confined_to_its_own_product_flavour():
+    """D-121: `osm` is the flavour CI can always build (no account, no token); `mapbox` is the one
+    the navigation plan is built on. A map engine added to the shared `implementation`
+    configuration would leak into both -- and, for Mapbox, would make the whole module depend on a
+    Maven repository that refuses anonymous downloads."""
+    code = _ui_build_script()
+    assert re.search(r'"osmImplementation"\("org\.osmdroid', code), "osmdroid is not osm-only"
+    assert re.search(r'"mapboxImplementation"\("com\.mapbox', code), "no mapbox flavour deps"
+    assert not re.search(r'(?<!["\w])implementation\("(org\.osmdroid|com\.mapbox)', code), (
+        "a map engine is declared for every flavour"
+    )
+
+
+def test_the_mapbox_flavour_switches_the_sdks_own_dead_reckoning_off():
+    """D-123 rule R2, the single most important line in the Mapbox integration. The SDK's own
+    words: with sensors enabled it "ignores location updates which don't match data from
+    sensors". A demo that showed Mapbox's extrapolation instead of the InEKF's would be
+    indistinguishable from ours on screen, and the option that causes it is one boolean."""
+    sources = _kotlin(UI_MAPBOX_FLAVOUR)
+    assert sources, f"no Kotlin sources under {UI_MAPBOX_FLAVOUR}"
+    joined = "\n".join(_strip_comments(text) for text in sources.values())
+    assert "enableSensors(false)" in joined, "the mapbox flavour never disables SDK sensors"
+    assert "enableSensors(true)" not in joined, "the mapbox flavour enables SDK sensors"
+    assert "locationProviderFactory(" in joined, "the SDK is not given the InEKF location provider"
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(
+        p.relative_to(REPO).as_posix()
+        for p in (REPO / "android-ui").rglob("*")
+        if p.is_file()
+        and p.suffix in {".kt", ".kts", ".xml", ".properties", ".md", ".yml", ".json"}
+        and "build" not in p.parts
+        and ".gradle" not in p.parts
+        and p.name != "local.properties"
+    ),
+)
+def test_no_mapbox_token_is_committed_under_the_ui_module(path):
+    """D-122: the secret `sk.` downloads token lives in the per-machine Gradle user home and the
+    public `pk.` token in the gitignored `local.properties`, injected at build time. Neither
+    belongs in the tree, for the same reason D-111 removed a Google API key placeholder: a token
+    that works in rehearsal and is revoked before the venue is worse than none."""
+    text = (REPO / path).read_text(encoding="utf-8", errors="replace")
+    assert not re.search(r"\b[ps]k\.[A-Za-z0-9_-]{20,}", text), f"{path}: Mapbox token literal"
 
 
 # ------------------------------------------------------------------------------------------
@@ -211,6 +283,60 @@ def test_the_operator_ui_shows_no_telemetry_it_was_not_given():
         assert not re.search(r"\btimestampJitterMs\s*=\s*[0-9]", code), f"{path}: literal jitter"
 
 
+def test_the_tunnel_machine_is_pure_kotlin_with_an_injected_clock():
+    """D-126: `TunnelFsm` decides when GNSS is suppressed and when a fix counts as verified, and
+    it is the one piece of the demo whose every transition is reproducible from a list of signal
+    events. That holds only while it has no Android import and reads no clock of its own -- the
+    moment it calls `SystemClock` it can no longer be driven by a JUnit test on a laptop, which is
+    where the 33 scenarios that pin its behaviour run."""
+    fsm = UI_SOURCES["android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelFsm.kt"]
+    code = _strip_comments(fsm)
+    assert not re.search(r"^\s*import\s+android[x]?\.", code, re.MULTILINE), (
+        "Android import in the FSM"
+    )
+    assert "SystemClock" not in code and "System.currentTimeMillis" not in code, (
+        "the FSM reads a clock"
+    )
+    assert "nowMs: Long" in code, "the FSM no longer takes its time from the caller"
+    test = REPO / "android-ui" / "app" / "src" / "test" / "java" / "com" / "sih" / "idr" / "demo"
+    assert (test / "backend" / "tunnel" / "TunnelFsmTest.kt").exists(), "the FSM tests are gone"
+
+
+def test_the_estimator_reports_forced_acceptances_as_forced():
+    """D-126 deviation 3 / D-115: the fix applied after N consecutive rejections is on the record
+    as `FORCED`, never as `ACCEPTED`, so the exit toast cannot say a verification happened when the
+    anti-lockout rule fired instead."""
+    est = UI_SOURCES[
+        "android-ui/app/src/main/java/com/sih/idr/demo/backend/LocalNavigationEstimator.kt"
+    ]
+    code = _strip_comments(est)
+    assert "FixVerdict.FORCED" in code, "no forced verdict path"
+    assert "MAX_CONSECUTIVE_REJECTIONS" in code
+    assert "CHI2_GATE_2DOF_99" in code, "the gate threshold is not the shared constant"
+    toast = UI_SOURCES[
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/ReconvergenceToast.kt"
+    ]
+    assert "reacquiredByForce" in toast, "the toast does not distinguish a forced re-acquisition"
+
+
+@pytest.mark.parametrize("path", sorted(UI_SOURCES))
+def test_no_operator_ui_surface_labels_a_drift_or_a_grade(path):
+    """D-124, restating D-112 for every new screen: drift is error against truth as a percentage
+    of distance -- the graded metric -- and a phone has no truth, so no Android surface may print
+    a number under that name, nor award itself a grade for it. The on-device vocabulary is
+    `est. sigma` (from the covariance) and, at a tunnel exit, `exit residual vs GNSS`.
+
+    The D-081 caption is allowed to say what a figure is *not*; a label is not."""
+    code = _strip_comments(UI_SOURCES[path])
+    for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', code):
+        assert not re.search(r"(?i)\bdrift\s*(est|accuracy|:|%|\()|\bm\s+drift\b", literal), (
+            f"{path}: drift used as a label: {literal!r}"
+        )
+        assert not re.search(r"\bGrade\b\s*:?", literal), (
+            f"{path}: a self-awarded grade: {literal!r}"
+        )
+
+
 def test_the_operator_ui_states_what_produced_its_numbers():
     """D-081, and the reason it is asserted rather than trusted: the caption is the first thing
     removed when the sheet is one line too tall for a slide."""
@@ -221,6 +347,14 @@ def test_the_operator_ui_states_what_produced_its_numbers():
     assert "not the evaluated InEKF" in flowed
     assert "200 Hz FOG configuration is not " in flowed
     assert "Not recording." in flowed
+    # D-121: the caption also names the map engine, per flavour, so a screenshot says whether the
+    # basemap under the track was OSMDroid or the Mapbox SDK.
+    assert "MapStack.engineCaption" in screen
+    for flavour in ("osm", "mapbox"):
+        stack = UI_SOURCES[
+            f"android-ui/app/src/{flavour}/java/com/sih/idr/demo/ui/components/MapStack.kt"
+        ]
+        assert "engineCaption" in stack, f"{flavour} flavour has no engine caption"
 
 
 def test_the_replay_caption_names_the_stream_and_the_rate_and_disclaims_200_hz():
@@ -246,3 +380,71 @@ def test_the_replay_view_shows_an_empty_state_rather_than_inventing_a_record():
     assert catches, "the load path has no catch -- has it stopped handling a bad file?"
     for body in catches:
         assert not re.search(r"random|generate|simulat|synth", body, re.IGNORECASE)
+
+
+# ------------------------------------------------------------------------------------------
+# D-126 / D-081 / R-F: autonomous tunnel chrome honesty rules
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_corridor_moves_only_on_the_pose_clock():
+    """D-080 / R-B: TunnelCorridor must advance strictly on the estimator's pose clock
+    (poseElapsedMs). It must never use frame-clock timers, infinite transitions, or delay loops
+    that would simulate motion while stationary."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/TunnelCorridor.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    assert "poseElapsedMs" in code, f"{path} does not read poseElapsedMs"
+    for forbidden in ("withFrameNanos", "withFrameMillis", "rememberInfiniteTransition", "delay("):
+        assert forbidden not in code, f"{path} contains forbidden animation driver: {forbidden!r}"
+
+
+def test_hazard_chips_are_the_declared_set():
+    """R-F / D-126: hazard chips are strictly limited to the declared set derived from measured
+    states or asset fields. The OSM flavour has no data source for speed breakers or traffic, so
+    no other chip labels may appear."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/HazardChips.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    literals = set(re.findall(r'"((?:[^"\\]|\\.)*)"', code))
+    allowed = {
+        "Headlights",
+        "Limit ${fix.tunnel.postedLimitKmh} km/h",
+        "Limit $limitKmh km/h",
+        "GNSS suppressed",
+        "Forced",
+        "Low light",
+    }
+    assert literals <= allowed, f"{path} has unexpected string literals: {literals - allowed}"
+
+
+def test_the_speed_hud_names_its_source():
+    """D-081 caption discipline: the speedometer HUD explicitly names its source ('filter speed')
+    so that numbers on screen say what produced them and cannot be mistaken for raw GNSS or wheel
+    speed."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/SpeedHud.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    assert "filter speed" in code, f"{path} must contain 'filter speed'"
+
+
+def test_the_tunnel_asset_is_a_placeholder_until_surveyed():
+    """D-126: the bundled tunnel asset JSON must parse, declare schema idr.tunnels.v1, and its
+    top-level 'note' field must state that it is a placeholder pending a real corridor survey."""
+    asset_path = REPO / "android-ui" / "app" / "src" / "main" / "assets" / "tunnels.json"
+    assert asset_path.is_file(), f"missing asset: {asset_path}"
+    data = json.loads(asset_path.read_text(encoding="utf-8"))
+    assert data.get("schema") == "idr.tunnels.v1", f"unexpected schema: {data.get('schema')}"
+    note = data.get("note", "")
+    assert "placeholder" in note.lower(), f"top-level note must contain 'placeholder': {note!r}"
+
+
+def test_the_tunnel_geometry_is_pure_kotlin():
+    """D-126: TunnelGeometry must remain pure Kotlin without Android framework dependencies so it
+    can be tested on any host JVM and reused on edge runtimes without an Android context."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelGeometry.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    assert not re.search(r"^\s*import\s+android[x]?\.", code, re.MULTILINE), (
+        f"{path} must not import Android classes"
+    )
