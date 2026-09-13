@@ -35,6 +35,9 @@ import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.routing.NavigationRoute
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -99,13 +102,33 @@ fun NavigationBottomSheet(
                 // Left Column: ETA & Destination or Active Trip Summary
                 Column(modifier = Modifier.weight(1f)) {
                     if (activeRoute != null) {
+                        // Live dynamic route distance, ETA and arrival time
+                        val liveDistanceM = telemetry.remainingDistanceM ?: activeRoute.distanceMeters
+                        val liveDurationSec = telemetry.remainingDurationSec ?: activeRoute.durationSeconds
+                        val liveMinutes = (liveDurationSec / 60).coerceAtLeast(1)
+                        val liveEtaStr = if (liveMinutes < 60) {
+                            "$liveMinutes min"
+                        } else {
+                            val hours = liveMinutes / 60
+                            val remMin = liveMinutes % 60
+                            if (remMin > 0) "$hours hr $remMin min" else "$hours hr"
+                        }
+                        val liveDistStr = if (liveDistanceM < 1000f) {
+                            "${liveDistanceM.roundToInt()} m"
+                        } else {
+                            "%.1f km".format(Locale.US, liveDistanceM / 1000f)
+                        }
+                        val arrivalEpochMs = System.currentTimeMillis() + (liveDurationSec * 1000L)
+                        val sdf = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+                        val liveArrivalClock = sdf.format(Date(arrivalEpochMs))
+
                         Row(
                             verticalAlignment = Alignment.Bottom,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             // Bold Emerald ETA
                             Text(
-                                text = activeRoute.formattedEta,
+                                text = liveEtaStr,
                                 style = MaterialTheme.typography.headlineMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 26.sp
@@ -115,19 +138,42 @@ fun NavigationBottomSheet(
 
                             // Distance and Arrival Time
                             Text(
-                                text = "(${activeRoute.formattedDistance} · ${activeRoute.formattedArrivalTime})",
+                                text = "($liveDistStr · $liveArrivalClock)",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                                 color = palette.textSecondary,
                                 modifier = Modifier.padding(bottom = 3.dp)
                             )
                         }
 
-                        Text(
-                            text = "via ${activeRoute.destinationName}",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                            color = palette.textPrimary,
-                            maxLines = 1
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "via ${activeRoute.destinationName}",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                color = palette.textPrimary,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+
+                            if (telemetry.isOffRoute) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color(0xFFD97706), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Off route",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp
+                                        ),
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
                     } else {
                         // Free Map Browsing / Active Recording State
                         Row(

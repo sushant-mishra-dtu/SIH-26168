@@ -24,6 +24,7 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.sih.idr.demo.backend.routing.RouteTracker
 import com.sih.idr.demo.backend.tunnel.FixVerdict
 import com.sih.idr.demo.backend.tunnel.TunnelAssetLoader
 import com.sih.idr.demo.backend.tunnel.TunnelFsm
@@ -231,6 +232,19 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         // The 30 Hz publish tick doubles as the machine's clock for its timeouts.
         fsm.tick(nowMs)
         syncTunnelState(nowMs)
+
+        // Route tracking: update along-track progress, maneuver countdown, ETA, and arrival
+        val currentRoute = TelemetryStore.state.value.activeRoute
+        val routeProgress = if (currentRoute != null) {
+            RouteTracker.trackProgress(
+                route = currentRoute,
+                currentLat = estimate.latitude,
+                currentLon = estimate.longitude,
+                speedMps = estimate.speedMps,
+                currentStepIndex = TelemetryStore.state.value.activeStepIndex
+            )
+        } else null
+
         TelemetryStore.update {
             it.copy(
                 mode = estimate.mode,
@@ -268,7 +282,14 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 sampleRateHz = currentRate,
                 timestampJitterMs = currentJitter,
                 lastSensorAgeMs = 0,
-                satellites = satelliteCount
+                satellites = satelliteCount,
+                activeStepIndex = routeProgress?.stepIndex ?: it.activeStepIndex,
+                remainingDistanceM = routeProgress?.remainingDistanceM ?: it.remainingDistanceM,
+                remainingDurationSec = routeProgress?.remainingDurationSec ?: it.remainingDurationSec,
+                distanceToNextStepM = routeProgress?.distanceToNextStepM ?: it.distanceToNextStepM,
+                hasArrivedAtDestination = routeProgress?.hasArrived ?: it.hasArrivedAtDestination,
+                isOffRoute = routeProgress?.isOffRoute ?: it.isOffRoute,
+                routeProgressFraction = routeProgress?.progressFraction ?: it.routeProgressFraction
             )
         }
     }

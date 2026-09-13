@@ -79,7 +79,19 @@ data class TelemetryState(
     /** Active destination turn-by-turn route, if selected; null when browsing map freely. */
     val activeRoute: NavigationRoute? = null,
     /** Current maneuver step index in activeRoute. */
-    val activeStepIndex: Int = 0
+    val activeStepIndex: Int = 0,
+    /** Live remaining distance to destination along the route polyline, metres. */
+    val remainingDistanceM: Float? = null,
+    /** Dynamic estimated duration remaining to destination, seconds. */
+    val remainingDurationSec: Long? = null,
+    /** Live distance countdown to the upcoming maneuver step, metres. */
+    val distanceToNextStepM: Float? = null,
+    /** True when vehicle is within destination arrival threshold. */
+    val hasArrivedAtDestination: Boolean = false,
+    /** True when vehicle cross-track deviation exceeds off-route threshold. */
+    val isOffRoute: Boolean = false,
+    /** Fraction of active route completed (0.0 to 1.0). */
+    val routeProgressFraction: Float = 0f
 ) {
     companion object {
         /** The estimator's prior before any fix, metres. Also what a reset returns to. */
@@ -130,7 +142,13 @@ object TelemetryStore {
     fun setActiveRoute(route: NavigationRoute?) {
         mutableState.value = mutableState.value.copy(
             activeRoute = route,
-            activeStepIndex = 0
+            activeStepIndex = 0,
+            remainingDistanceM = route?.distanceMeters,
+            remainingDurationSec = route?.durationSeconds,
+            distanceToNextStepM = route?.steps?.firstOrNull()?.distanceM,
+            hasArrivedAtDestination = false,
+            isOffRoute = false,
+            routeProgressFraction = 0f
         )
     }
 
@@ -138,10 +156,36 @@ object TelemetryStore {
         mutableState.value = mutableState.value.copy(activeStepIndex = index)
     }
 
+    fun updateRouteProgress(
+        stepIndex: Int,
+        distToNextStepM: Float,
+        remainingDistM: Float,
+        durationSec: Long,
+        progressFraction: Float,
+        hasArrived: Boolean,
+        offRoute: Boolean
+    ) {
+        mutableState.value = mutableState.value.copy(
+            activeStepIndex = stepIndex,
+            distanceToNextStepM = distToNextStepM,
+            remainingDistanceM = remainingDistM,
+            remainingDurationSec = durationSec,
+            routeProgressFraction = progressFraction,
+            hasArrivedAtDestination = hasArrived,
+            isOffRoute = offRoute
+        )
+    }
+
     fun clearActiveRoute() {
         mutableState.value = mutableState.value.copy(
             activeRoute = null,
-            activeStepIndex = 0
+            activeStepIndex = 0,
+            remainingDistanceM = null,
+            remainingDurationSec = null,
+            distanceToNextStepM = null,
+            hasArrivedAtDestination = false,
+            isOffRoute = false,
+            routeProgressFraction = 0f
         )
     }
 }

@@ -58,6 +58,7 @@ import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.IDRColors
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.components.ArrivalCard
 import com.sih.idr.demo.ui.components.DestinationSearchBar
 import com.sih.idr.demo.ui.components.ExitProgressBar
 import com.sih.idr.demo.ui.components.GuidanceBanner
@@ -91,20 +92,20 @@ fun NavigationScreen(
     courseUpMode: Boolean = false,
     onToggleCourseUp: () -> Unit = {},
     modifier: Modifier = Modifier
-) {    val palette = LocalIDRPalette.current
+) {
+    val palette = LocalIDRPalette.current
     val isDark = LocalIsDarkTheme.current
     val scope = rememberCoroutineScope()
-    // The status pill follows the tunnel machine (D-126): anything but a healthy lock is amber,
-    // and the label is the machine's own state name so a screenshot says which one it was.
     val tunnelState = telemetry.tunnelState
-    val isIns = telemetry.mode == NavigationMode.INS || tunnelState != TunnelState.GNSS_HEALTHY
+    val inTunnel = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
+    val activeRoute = telemetry.activeRoute
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(palette.bgPrimary)
     ) {
-        // ── Full-bleed map (D-121, D-126) ──────────────────────────
+        // ── 1. Full-bleed map (D-121, D-126) ──────────────────────────
         MapView(
             telemetry = telemetry,
             courseUpMode = courseUpMode,
@@ -112,25 +113,48 @@ fun NavigationScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // ── Top Navigation Area (Google Maps & Mappls Style) ────────
+        // ── 2. Top Navigation Guidance / Search Area ───────────────────
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 1. Destination Search Bar or Active Maneuver Guidance Header
-            val activeRoute = telemetry.activeRoute
+            // A. Active Turn-by-Turn Navigation Header
             if (activeRoute != null) {
                 NavigationHeader(
                     route = activeRoute,
                     stepIndex = telemetry.activeStepIndex,
+                    distanceToNextStepM = telemetry.distanceToNextStepM,
+                    routeProgressFraction = telemetry.routeProgressFraction,
+                    inTunnel = inTunnel,
                     onCancelRoute = {
                         TelemetryStore.clearActiveRoute()
                     }
                 )
+
+                // Exit progress bar inside tunnel
+                AnimatedVisibility(
+                    visible = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR && telemetry.tunnelFix?.inside == true,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    telemetry.tunnelFix?.let { fix ->
+                        ExitProgressBar(
+                            fix = fix,
+                            speedMps = telemetry.speedMps
+                        )
+                    }
+                }
+
+                // Contextual Hazard Chips
+                HazardChips(
+                    telemetry = telemetry,
+                    modifier = Modifier.fillMaxWidth()
+                )
             } else {
+                // B. Idle Mode: Clean floating search bar
                 DestinationSearchBar(
                     userLat = telemetry.latitude,
                     userLon = telemetry.longitude,
@@ -142,81 +166,75 @@ fun NavigationScreen(
                         }
                     }
                 )
-            }
 
-            // 2. Non-intrusive floating GPS-denied tunnel status badge (D-126)
-            TunnelStatusBadge(telemetry = telemetry)
+                // Floating tunnel status badge only when GPS-denied
+                TunnelStatusBadge(telemetry = telemetry)
 
-            // 3. State-driven tunnel guidance banner and exit progress bar (D-126)
-            GuidanceBanner(
-                telemetry = telemetry,
-                courseUpMode = courseUpMode
-            )
-
-            AnimatedVisibility(
-                visible = telemetry.tunnelState == TunnelState.TUNNEL_ACTIVE_IDR && telemetry.tunnelFix?.inside == true,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                telemetry.tunnelFix?.let { fix ->
-                    ExitProgressBar(
-                        fix = fix,
-                        speedMps = telemetry.speedMps
+                // Tunnel guidance banner only when tunnel FSM is active and without active route
+                if (tunnelState != TunnelState.GNSS_HEALTHY) {
+                    GuidanceBanner(
+                        telemetry = telemetry,
+                        courseUpMode = courseUpMode
                     )
                 }
             }
 
-            // 4. Contextual hazard chips directly under ExitProgressBar (R-F)
-            HazardChips(
-                telemetry = telemetry,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            // Stage 5: the measured exit summary, for a few seconds after GNSS is back (D-124).
+            // Stage 5: Measured exit summary toast after GNSS returns (D-124)
             ReconvergenceToast(summary = telemetry.lastExit)
-
-            // 5. Secondary Floating Bar (Tunnel toggle + Course-Up + Theme Switcher + Recenter)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 3-way tunnel options selector (D-126): Auto (autonomous FSM), On (force tunnel IDR),
-                // Off (force GNSS healthy / suppress tunnel mode)
-                TunnelOptionsSelector(
-                    currentOverride = telemetry.tunnelOverride,
-                    enabled = isRecording,
-                    onSelect = onSetTunnelOverride
-                )
-
-                // Quick Action Buttons
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Course-Up / North-Up Toggle Button
-                    FloatingActionPill(
-                        icon = Icons.Rounded.Navigation,
-                        active = courseUpMode,
-                        contentDescription = if (courseUpMode) "Switch to North-Up" else "Switch to Course-Up",
-                        onClick = onToggleCourseUp
-                    )
-
-                    // Dark Mode / Light Mode Toggle Button
-                    FloatingActionPill(
-                        icon = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
-                        contentDescription = "Toggle Dark Mode",
-                        onClick = onToggleTheme
-                    )
-
-                    // Reset Origin Button
-                    FloatingActionPill(
-                        icon = Icons.Rounded.GpsFixed,
-                        contentDescription = "Reset Origin",
-                        onClick = onResetOrigin
-                    )
-                }
-            }
         }
 
-        // ── Bottom Sheet Area & Speed HUD ───────────────────────────
+        // ── 3. Floating Quick Action Controls (Right-side column) ──────
+        // Placed cleanly on the upper-right below the search bar / header
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = if (activeRoute != null) 96.dp else 126.dp, end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            // Course-Up / North-Up Toggle Button
+            FloatingActionPill(
+                icon = Icons.Rounded.Navigation,
+                active = courseUpMode,
+                contentDescription = if (courseUpMode) "Switch to North-Up" else "Switch to Course-Up",
+                onClick = onToggleCourseUp
+            )
+
+            // Dark Mode / Light Mode Toggle Button
+            FloatingActionPill(
+                icon = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                contentDescription = "Toggle Dark Mode",
+                onClick = onToggleTheme
+            )
+
+            // Reset Origin Button
+            FloatingActionPill(
+                icon = Icons.Rounded.GpsFixed,
+                contentDescription = "Reset Origin",
+                onClick = onResetOrigin
+            )
+
+            // 3-way tunnel selector pill
+            TunnelOptionsSelector(
+                currentOverride = telemetry.tunnelOverride,
+                enabled = isRecording,
+                onSelect = onSetTunnelOverride
+            )
+        }
+
+        // ── 4. Destination Arrival Celebration Modal ───────────────────
+        ArrivalCard(
+            telemetry = telemetry,
+            onDismiss = {
+                TelemetryStore.clearActiveRoute()
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 120.dp)
+        )
+
+        // ── 5. Bottom Sheet Area & Speed HUD ───────────────────────────
         Column(
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
