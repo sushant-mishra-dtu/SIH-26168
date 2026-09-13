@@ -8,7 +8,7 @@ environment. The APK here is the `osm` flavour of `android-ui/` (the operator UI
 
 | Flavour | File | Built from | Description |
 |---|---|---|---|
-| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | `main` @ `1bad521`, 14 Sep 2026 | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, and the error covariance ellipse (D-125). |
+| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | `main` @ `130e130`, 14 Sep 2026 | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, and the error covariance ellipse (D-125). |
 
 The `mapbox` flavour is **not** published: it needs a Mapbox downloads token to build and a public
 token to run (D-122), and neither is checked in. Build it locally per
