@@ -1,0 +1,29 @@
+name: Publish GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish-release:
+    name: Publish Release with APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: releases/app-osm-debug.apk
+          name: ${{ github.ref_name }} — Android Demo APK
+          body: |
+            ### Intelligent Dead Reckoning — Android Demo Build
+            - **Flavour:** `osm` (bundled offline basemap, no API keys required)
+            - **Includes:** Turn guidance banner, autonomous tunnel state machine, covariance ellipse, and updated navigation UI layout.
+            - **File:** `app-osm-debug.apk`
+          draft: false
+          prerelease: false
