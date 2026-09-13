@@ -25,6 +25,17 @@ run on the Actions tab and download the artifact from the summary page — it is
 built from the exact commit under test, which is what to install when checking a change before it
 is copied here.
 
+### GitHub Releases
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml), which
+attaches the committed `app-osm-debug.apk` to a GitHub Release named after the tag — the stable
+link to hand to judges or teammates who should not be browsing the repo. Note that it publishes
+the file *in this folder* at the tagged commit, not a fresh build, so copy the APK in and update
+the table above before tagging:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
 ### Installation
 1. Tap the download link on your phone.
 2. If prompted, enable "Install unknown apps" for your browser.
