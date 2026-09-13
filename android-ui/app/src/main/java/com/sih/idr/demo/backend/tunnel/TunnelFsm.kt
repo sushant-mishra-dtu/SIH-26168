@@ -143,6 +143,18 @@ data class TunnelFsmConfig(
     val historySize: Int = 64,
 )
 
+/**
+ * Manual override mode for the autonomous tunnel state machine (D-126).
+ * - AUTO: Autonomous state transitions driven by sensor triggers (C/N0, lux, baro, map portal).
+ * - FORCE_ON: Manually pin the machine in [TunnelState.TUNNEL_ACTIVE_IDR] (dead reckoning active, GNSS suppressed).
+ * - FORCE_OFF: Manually pin the machine in [TunnelState.GNSS_HEALTHY] (tunnel suppression disabled, fixes applied).
+ */
+enum class TunnelOverride {
+    AUTO,
+    FORCE_ON,
+    FORCE_OFF,
+}
+
 class TunnelFsm(
     private val config: TunnelFsmConfig = TunnelFsmConfig(),
     startMs: Long = 0L,
@@ -156,9 +168,13 @@ class TunnelFsm(
     val transitions: List<TunnelTransition> get() = history.toList()
     val lastTransition: TunnelTransition? get() = history.lastOrNull()
 
-    /** The manual override. While set, the machine sits in `TUNNEL_ACTIVE_IDR` whatever the signals. */
-    var forced: Boolean = false
+    /** The manual override mode. */
+    var overrideMode: TunnelOverride = TunnelOverride.AUTO
         private set
+
+    /** The manual override flag. While true, the machine sits in `TUNNEL_ACTIVE_IDR` whatever the signals. */
+    val forced: Boolean get() = overrideMode == TunnelOverride.FORCE_ON
+
 
     // ── Signals, as last reported ────────────────────────────────────────────────────────
     /** The start counts as the last fix: a receiver that never fixes times out like a lost one. */
@@ -280,20 +296,42 @@ class TunnelFsm(
     }
 
     /**
+     * Set the manual override mode (D-126):
+     * - [TunnelOverride.FORCE_ON]: transition immediately to `TUNNEL_ACTIVE_IDR`.
+     * - [TunnelOverride.FORCE_OFF]: transition immediately to `GNSS_HEALTHY`.
+     * - [TunnelOverride.AUTO]: return to autonomous evaluation. If coming from `FORCE_ON` and fixes
+     *   are flowing, transition to `EXIT_VERIFICATION` to run the reconvergence path.
+     */
+    fun setOverride(nowMs: Long, mode: TunnelOverride) {
+        if (this.overrideMode == mode) return
+        val old = this.overrideMode
+        this.overrideMode = mode
+        when (mode) {
+            TunnelOverride.FORCE_ON -> {
+                if (state != TunnelState.TUNNEL_ACTIVE_IDR) {
+                    transition(TunnelState.TUNNEL_ACTIVE_IDR, TunnelTrigger.MANUAL_ON, nowMs)
+                }
+            }
+            TunnelOverride.FORCE_OFF -> {
+                if (state != TunnelState.GNSS_HEALTHY) {
+                    transition(TunnelState.GNSS_HEALTHY, TunnelTrigger.MANUAL_OFF, nowMs)
+                }
+            }
+            TunnelOverride.AUTO -> {
+                if (old == TunnelOverride.FORCE_ON && state == TunnelState.TUNNEL_ACTIVE_IDR && !fixSilent(nowMs)) {
+                    transition(TunnelState.EXIT_VERIFICATION, TunnelTrigger.MANUAL_OFF, nowMs)
+                }
+            }
+        }
+        evaluate(nowMs)
+    }
+
+    /**
      * The demo's manual override. On: tunnel mode now, whatever the signals say. Off: the exit
      * path runs -- through `EXIT_VERIFICATION` if fixes are arriving, otherwise the signals decide.
      */
     fun setForced(nowMs: Long, forced: Boolean) {
-        if (this.forced == forced) return
-        this.forced = forced
-        if (forced) {
-            if (state != TunnelState.TUNNEL_ACTIVE_IDR) {
-                transition(TunnelState.TUNNEL_ACTIVE_IDR, TunnelTrigger.MANUAL_ON, nowMs)
-            }
-        } else if (state == TunnelState.TUNNEL_ACTIVE_IDR && !fixSilent(nowMs)) {
-            transition(TunnelState.EXIT_VERIFICATION, TunnelTrigger.MANUAL_OFF, nowMs)
-        }
-        evaluate(nowMs)
+        setOverride(nowMs, if (forced) TunnelOverride.FORCE_ON else TunnelOverride.AUTO)
     }
 
     /** Call periodically (the estimator's publish tick is enough) so timeouts fire without a signal. */
@@ -312,9 +350,15 @@ class TunnelFsm(
     }
 
     private fun step(nowMs: Long) {
-        if (forced) {
+        if (overrideMode == TunnelOverride.FORCE_ON) {
             if (state != TunnelState.TUNNEL_ACTIVE_IDR) {
                 transition(TunnelState.TUNNEL_ACTIVE_IDR, TunnelTrigger.MANUAL_ON, nowMs)
+            }
+            return
+        }
+        if (overrideMode == TunnelOverride.FORCE_OFF) {
+            if (state != TunnelState.GNSS_HEALTHY) {
+                transition(TunnelState.GNSS_HEALTHY, TunnelTrigger.MANUAL_OFF, nowMs)
             }
             return
         }
@@ -367,14 +411,18 @@ class TunnelFsm(
 
             TunnelState.EXIT_VERIFICATION -> {
                 // Entered on C/N0 recovery, the receiver gets the timeout to produce a fix.
-                if (fixSilentSinceEntry(nowMs)) {
+                // If C/N0 is healthy and fresh, give the receiver adequate time to compute the fix.
+                // If the signal is lost again (!cn0Healthy), fall back immediately on timeout.
+                val timeout = if (cn0Healthy(nowMs)) config.statusFreshMs * 2 else config.gnssTimeoutMs
+                if (nowMs - maxOf(lastFixMs, stateEnteredMs) > timeout) {
                     transition(TunnelState.TUNNEL_ACTIVE_IDR, TunnelTrigger.GNSS_TIMEOUT, nowMs)
                 }
             }
 
             TunnelState.SEAMLESS_RECONVERGENCE -> {
+                val timeout = if (cn0Healthy(nowMs)) config.statusFreshMs * 2 else config.gnssTimeoutMs
                 when {
-                    fixSilentSinceEntry(nowMs) ->
+                    nowMs - maxOf(lastFixMs, stateEnteredMs) > timeout ->
                         transition(TunnelState.TUNNEL_ACTIVE_IDR, TunnelTrigger.GNSS_TIMEOUT, nowMs)
                     nowMs - stateEnteredMs >= config.reconvergeSettleMs && !cn0Lost() ->
                         transition(TunnelState.GNSS_HEALTHY, TunnelTrigger.RECONVERGED, nowMs)

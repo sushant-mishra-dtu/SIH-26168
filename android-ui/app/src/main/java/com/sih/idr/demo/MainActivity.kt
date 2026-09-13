@@ -94,6 +94,9 @@ class MainActivity : ComponentActivity() {
                     onToggleTunnelMode = {
                         SensorForegroundService.toggleTunnelMode()
                     },
+                    onSetTunnelOverride = { mode ->
+                        SensorForegroundService.setTunnelOverride(mode)
+                    },
                     onResetOrigin = {
                         SensorForegroundService.resetOrigin()
                     },

@@ -1,0 +1,21 @@
+{
+  "schema": "idr.tunnels.v1",
+  "note": "Placeholder coordinates pending a survey of the demo tunnel.",
+  "tunnels": [
+    {
+      "id": "demo-tunnel-1",
+      "name": "Pragati Maidan Tunnel (Placeholder)",
+      "centreline": [
+        {
+          "lat": 28.6129,
+          "lon": 77.2295
+        },
+        {
+          "lat": 28.6183,
+          "lon": 77.2295
+        }
+      ],
+      "postedLimitKmh": null
+    }
+  ]
+}

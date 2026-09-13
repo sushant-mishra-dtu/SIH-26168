@@ -32,6 +32,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.errorEllipse
+import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.LocalIsDarkTheme
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -40,8 +41,11 @@ import org.osmdroid.views.MapView as OsmMapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * The `osm` flavour's map canvas (D-117, D-121): OpenStreetMap raster tiles through OSMDroid, with
@@ -63,6 +67,16 @@ fun MapView(
     var mapViewInstance by remember { mutableStateOf<OsmMapView?>(null) }
     var followVehicle by remember { mutableStateOf(true) }
 
+    // Google Maps-style navigation smoother (continuous camera glide, lookahead, heading dampening)
+    val smoother = remember {
+        object {
+            var isInitialized = false
+            var smoothedCamLat = 0.0
+            var smoothedCamLon = 0.0
+            var smoothedHeadingDeg = 0f
+        }
+    }
+
     // Night Mode Color Filter for OSM Tiles (Google Maps Night Mode look)
     val nightFilter = remember {
         val cm = ColorMatrix(floatArrayOf(
@@ -81,6 +95,23 @@ fun MapView(
             outlinePaint.strokeWidth = 6f * density
             outlinePaint.strokeCap = Paint.Cap.ROUND
             outlinePaint.strokeJoin = Paint.Join.ROUND
+        }
+    }
+
+    val routePolyline = remember {
+        Polyline().apply {
+            val density = context.resources.displayMetrics.density
+            outlinePaint.strokeWidth = 7f * density
+            outlinePaint.strokeCap = Paint.Cap.ROUND
+            outlinePaint.strokeJoin = Paint.Join.ROUND
+        }
+    }
+
+    val destMarker = remember {
+        Marker(OsmMapView(context)).apply {
+            icon = getDestinationIcon(context)
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            infoWindow = null
         }
     }
 
@@ -139,6 +170,8 @@ fun MapView(
                     }
 
                     // Add overlays in back-to-front order
+                    overlays.add(routePolyline)
+                    overlays.add(destMarker)
                     overlays.add(uncertaintyPolygon)
                     overlays.add(polyline)
                     overlays.add(vehicleMarker)
@@ -148,24 +181,37 @@ fun MapView(
             },
             update = { osmView ->
                 val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
-                val headingDeg = Math.toDegrees(telemetry.yawRad.toDouble()).toFloat()
+                val rawHeadingDeg = Math.toDegrees(telemetry.yawRad.toDouble()).toFloat()
+                val speedMps = telemetry.speedMps
+                val isMoving = speedMps >= 0.35f // ~1.26 km/h threshold
 
-                // 1. Dark/Night mode tile filter
+                // 1. Heading Smoothing with Stationary Deadband & Shortest-Arc Interpolation
+                val diff = ((rawHeadingDeg - smoother.smoothedHeadingDeg + 180f) % 360f + 360f) % 360f - 180f
+                if (!smoother.isInitialized) {
+                    smoother.smoothedHeadingDeg = rawHeadingDeg
+                } else if (isMoving || abs(diff) > 45f) {
+                    val alpha = if (isMoving) 0.18f else 0.08f
+                    smoother.smoothedHeadingDeg = (smoother.smoothedHeadingDeg + diff * alpha) % 360f
+                    if (smoother.smoothedHeadingDeg < 0f) smoother.smoothedHeadingDeg += 360f
+                }
+                val effectiveHeading = smoother.smoothedHeadingDeg
+
+                // 2. Dark/Night mode tile filter
                 osmView.overlayManager.tilesOverlay.setColorFilter(if (isDark) nightFilter else null)
 
-                // 2. Camera Orientation: Course-Up vs North-Up
+                // 3. Camera Orientation: Course-Up vs North-Up
                 if (courseUpMode) {
-                    osmView.mapOrientation = -headingDeg
+                    osmView.mapOrientation = -effectiveHeading
                     vehicleMarker.rotation = 0f // Straight ahead in course-up
                 } else {
                     osmView.mapOrientation = 0f
-                    vehicleMarker.rotation = headingDeg // Rotates relative to north
+                    vehicleMarker.rotation = effectiveHeading // Rotates relative to north
                 }
 
-                // 3. Update vehicle position
+                // 4. Update vehicle position
                 vehicleMarker.position = currentPoint
 
-                // 4. Update the 1 sigma error ellipse from the reported covariance (D-125). For the
+                // 5. Update the 1 sigma error ellipse from the reported covariance (D-125). For the
                 //    demo estimator it is a circle, because that estimator carries one scalar.
                 if (telemetry.running && telemetry.uncertaintyM > 0f) {
                     uncertaintyPolygon.points = ellipseGeoPoints(telemetry)
@@ -180,7 +226,7 @@ fun MapView(
                     uncertaintyPolygon.points = ArrayList()
                 }
 
-                // 5. Update trajectory path
+                // 6. Update trajectory path
                 val latPerMetre = 1.0 / 111_320.0
                 val lonPerMetre = 1.0 / (111_320.0 * cos(Math.toRadians(telemetry.originLat)))
                 val oLat = telemetry.originLat
@@ -202,9 +248,65 @@ fun MapView(
                     android.graphics.Color.parseColor("#2563EB")
                 }
 
-                // 6. Camera follow
-                if (followVehicle) {
-                    osmView.controller.setCenter(currentPoint)
+                // 6b. Update active route polyline and destination marker
+                val activeRoute = telemetry.activeRoute
+                if (activeRoute != null && activeRoute.points.isNotEmpty()) {
+                    val rPoints = ArrayList<GeoPoint>(activeRoute.points.size)
+                    for (p in activeRoute.points) {
+                        rPoints.add(GeoPoint(p.latitude, p.longitude))
+                    }
+                    routePolyline.setPoints(rPoints)
+
+                    val inTunnel = telemetry.tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
+                    routePolyline.outlinePaint.color = if (inTunnel) {
+                        android.graphics.Color.parseColor("#00E5FF")
+                    } else if (isDark) {
+                        android.graphics.Color.parseColor("#38BDF8")
+                    } else {
+                        android.graphics.Color.parseColor("#008CFF")
+                    }
+
+                    destMarker.position = GeoPoint(activeRoute.destinationCoord.latitude, activeRoute.destinationCoord.longitude)
+                    destMarker.isEnabled = true
+                } else {
+                    routePolyline.setPoints(ArrayList())
+                    destMarker.isEnabled = false
+                }
+
+                // 7. Navigation Lookahead Lead & Continuous Camera Gliding (Google Maps style)
+                val hasValidPos = (telemetry.latitude != 0.0 || telemetry.longitude != 0.0)
+                if (hasValidPos) {
+                    val lookaheadM = if (courseUpMode && isMoving) {
+                        (speedMps * 2.2f).coerceIn(15f, 60f)
+                    } else {
+                        0f
+                    }
+                    val headingRad = Math.toRadians(effectiveHeading.toDouble())
+                    val targetCamLat = telemetry.latitude + lookaheadM * cos(headingRad) * latPerMetre
+                    val targetCamLon = telemetry.longitude + lookaheadM * sin(headingRad) * lonPerMetre
+
+                    if (followVehicle) {
+                        val dLat = targetCamLat - smoother.smoothedCamLat
+                        val dLon = targetCamLon - smoother.smoothedCamLon
+                        val dLatM = dLat * 111_320.0
+                        val dLonM = dLon * 111_320.0 * cos(Math.toRadians(targetCamLat))
+                        val distM = sqrt(dLatM * dLatM + dLonM * dLonM)
+
+                        if (!smoother.isInitialized || distM > 80.0) {
+                            smoother.smoothedCamLat = targetCamLat
+                            smoother.smoothedCamLon = targetCamLon
+                            smoother.isInitialized = true
+                        } else {
+                            val posAlpha = 0.22f
+                            smoother.smoothedCamLat += dLat * posAlpha
+                            smoother.smoothedCamLon += dLon * posAlpha
+                        }
+
+                        osmView.controller.setCenter(GeoPoint(smoother.smoothedCamLat, smoother.smoothedCamLon))
+                    } else {
+                        smoother.smoothedCamLat = targetCamLat
+                        smoother.smoothedCamLon = targetCamLon
+                    }
                 }
 
                 osmView.invalidate()
@@ -241,6 +343,8 @@ fun MapView(
         ) {
             RecenterPill(onClick = {
                 followVehicle = true
+                smoother.smoothedCamLat = telemetry.latitude
+                smoother.smoothedCamLon = telemetry.longitude
                 val currentPoint = GeoPoint(telemetry.latitude, telemetry.longitude)
                 mapViewInstance?.controller?.animateTo(currentPoint)
                 mapViewInstance?.controller?.setZoom(18.0)
@@ -312,3 +416,32 @@ private fun getVehicleIcon(context: Context): Drawable {
 
     return BitmapDrawable(context.resources, bitmap)
 }
+
+private fun getDestinationIcon(context: Context): Drawable {
+    val density = context.resources.displayMetrics.density
+    val sizePx = (32 * density).roundToInt()
+    val center = sizePx / 2f
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // Red pin head
+    paint.color = android.graphics.Color.parseColor("#EF4444")
+    canvas.drawCircle(center, sizePx * 0.38f, sizePx * 0.32f, paint)
+
+    // Pin point stem
+    val path = Path().apply {
+        moveTo(sizePx * 0.22f, sizePx * 0.44f)
+        lineTo(center, sizePx * 0.95f)
+        lineTo(sizePx * 0.78f, sizePx * 0.44f)
+        close()
+    }
+    canvas.drawPath(path, paint)
+
+    // White inner dot
+    paint.color = android.graphics.Color.WHITE
+    canvas.drawCircle(center, sizePx * 0.38f, sizePx * 0.12f, paint)
+
+    return BitmapDrawable(context.resources, bitmap)
+}
+

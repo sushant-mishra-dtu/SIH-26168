@@ -24,6 +24,7 @@ enforces, so a failure is a conversation about that decision rather than a puzzl
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -62,6 +63,16 @@ def test_both_modules_are_present_so_an_empty_glob_cannot_pass_this_file():
     assert UI_SOURCES, f"no Kotlin sources under {UI_APP}"
     assert "android/app/src/main/kotlin/org/idr26168/logger/replay/ReplayActivity.kt" in ALL_SOURCES
     assert "android-ui/app/src/main/java/com/sih/idr/demo/MainActivity.kt" in ALL_SOURCES
+    for path in (
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/TunnelCorridor.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/HazardChips.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/SpeedHud.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/ExitProgressBar.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/GuidanceBanner.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelGeometry.kt",
+        "android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelAssetLoader.kt",
+    ):
+        assert path in ALL_SOURCES, f"missing expected source file: {path}"
 
 
 # ------------------------------------------------------------------------------------------
@@ -369,3 +380,71 @@ def test_the_replay_view_shows_an_empty_state_rather_than_inventing_a_record():
     assert catches, "the load path has no catch -- has it stopped handling a bad file?"
     for body in catches:
         assert not re.search(r"random|generate|simulat|synth", body, re.IGNORECASE)
+
+
+# ------------------------------------------------------------------------------------------
+# D-126 / D-081 / R-F: autonomous tunnel chrome honesty rules
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_corridor_moves_only_on_the_pose_clock():
+    """D-080 / R-B: TunnelCorridor must advance strictly on the estimator's pose clock
+    (poseElapsedMs). It must never use frame-clock timers, infinite transitions, or delay loops
+    that would simulate motion while stationary."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/TunnelCorridor.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    assert "poseElapsedMs" in code, f"{path} does not read poseElapsedMs"
+    for forbidden in ("withFrameNanos", "withFrameMillis", "rememberInfiniteTransition", "delay("):
+        assert forbidden not in code, f"{path} contains forbidden animation driver: {forbidden!r}"
+
+
+def test_hazard_chips_are_the_declared_set():
+    """R-F / D-126: hazard chips are strictly limited to the declared set derived from measured
+    states or asset fields. The OSM flavour has no data source for speed breakers or traffic, so
+    no other chip labels may appear."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/HazardChips.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    literals = set(re.findall(r'"((?:[^"\\]|\\.)*)"', code))
+    allowed = {
+        "Headlights",
+        "Limit ${fix.tunnel.postedLimitKmh} km/h",
+        "Limit $limitKmh km/h",
+        "GNSS suppressed",
+        "Forced",
+        "Low light",
+    }
+    assert literals <= allowed, f"{path} has unexpected string literals: {literals - allowed}"
+
+
+def test_the_speed_hud_names_its_source():
+    """D-081 caption discipline: the speedometer HUD explicitly names its source ('filter speed')
+    so that numbers on screen say what produced them and cannot be mistaken for raw GNSS or wheel
+    speed."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/ui/components/SpeedHud.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    assert "filter speed" in code, f"{path} must contain 'filter speed'"
+
+
+def test_the_tunnel_asset_is_a_placeholder_until_surveyed():
+    """D-126: the bundled tunnel asset JSON must parse, declare schema idr.tunnels.v1, and its
+    top-level 'note' field must state that it is a placeholder pending a real corridor survey."""
+    asset_path = REPO / "android-ui" / "app" / "src" / "main" / "assets" / "tunnels.json"
+    assert asset_path.is_file(), f"missing asset: {asset_path}"
+    data = json.loads(asset_path.read_text(encoding="utf-8"))
+    assert data.get("schema") == "idr.tunnels.v1", f"unexpected schema: {data.get('schema')}"
+    note = data.get("note", "")
+    assert "placeholder" in note.lower(), f"top-level note must contain 'placeholder': {note!r}"
+
+
+def test_the_tunnel_geometry_is_pure_kotlin():
+    """D-126: TunnelGeometry must remain pure Kotlin without Android framework dependencies so it
+    can be tested on any host JVM and reused on edge runtimes without an Android context."""
+    path = "android-ui/app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelGeometry.kt"
+    assert path in UI_SOURCES, f"missing {path}"
+    code = _strip_comments(UI_SOURCES[path])
+    assert not re.search(r"^\s*import\s+android[x]?\.", code, re.MULTILINE), (
+        f"{path} must not import Android classes"
+    )

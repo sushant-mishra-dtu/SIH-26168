@@ -1,6 +1,9 @@
 package com.sih.idr.demo.backend
 
+import com.sih.idr.demo.backend.routing.NavigationRoute
 import com.sih.idr.demo.backend.tunnel.FixVerdict
+import com.sih.idr.demo.backend.tunnel.TunnelFix
+import com.sih.idr.demo.backend.tunnel.TunnelOverride
 import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.backend.tunnel.TunnelTrigger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +52,10 @@ data class TelemetryState(
     val tunnelTrigger: TunnelTrigger? = null,
     /** The demo's manual override is on: the machine is pinned in tunnel mode. */
     val tunnelForced: Boolean = false,
+    /** The demo's manual override mode (AUTO, FORCE_ON, FORCE_OFF). */
+    val tunnelOverride: TunnelOverride = TunnelOverride.AUTO,
+    /** Map-matched tunnel projection from the bundled asset geometry; null when outside all coverage. */
+    val tunnelFix: TunnelFix? = null,
     /** Mean C/N0 of the best four satellites, dB-Hz, as `GnssStatus` last reported; null before any report. */
     val cn0Top4DbHz: Float? = null,
     /** Ambient light, lux, as the sensor last reported; null if the phone has none or it has not fired. */
@@ -68,7 +75,11 @@ data class TelemetryState(
     val originLon: Double = 77.2295,
     val path: List<TrackPoint> = emptyList(),
     val totalDistanceM: Float = 0f,
-    val tripDurationSec: Long = 0L
+    val tripDurationSec: Long = 0L,
+    /** Active destination turn-by-turn route, if selected; null when browsing map freely. */
+    val activeRoute: NavigationRoute? = null,
+    /** Current maneuver step index in activeRoute. */
+    val activeStepIndex: Int = 0
 ) {
     companion object {
         /** The estimator's prior before any fix, metres. Also what a reset returns to. */
@@ -114,5 +125,23 @@ object TelemetryStore {
 
     fun reset() {
         mutableState.value = TelemetryState()
+    }
+
+    fun setActiveRoute(route: NavigationRoute?) {
+        mutableState.value = mutableState.value.copy(
+            activeRoute = route,
+            activeStepIndex = 0
+        )
+    }
+
+    fun setStepIndex(index: Int) {
+        mutableState.value = mutableState.value.copy(activeStepIndex = index)
+    }
+
+    fun clearActiveRoute() {
+        mutableState.value = mutableState.value.copy(
+            activeRoute = null,
+            activeStepIndex = 0
+        )
     }
 }

@@ -25,8 +25,13 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.sih.idr.demo.backend.tunnel.FixVerdict
+import com.sih.idr.demo.backend.tunnel.TunnelAssetLoader
 import com.sih.idr.demo.backend.tunnel.TunnelFsm
+import com.sih.idr.demo.backend.tunnel.TunnelFsmConfig
+import com.sih.idr.demo.backend.tunnel.TunnelGeometry
+import com.sih.idr.demo.backend.tunnel.TunnelOverride
 import com.sih.idr.demo.backend.tunnel.TunnelState
+import com.sih.idr.demo.backend.tunnel.portalDistanceM
 
 class SensorForegroundService : Service(), SensorEventListener, LocationListener {
     private lateinit var sensorManager: SensorManager
@@ -39,7 +44,20 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     // The autonomous tunnel machine (D-126). Every signal it consumes is a measurement this
     // service already receives or registers below; its state is pushed into the estimator after
     // each update and every transition is logged with its trigger.
-    private val fsm = TunnelFsm(startMs = SystemClock.elapsedRealtime())
+    // Calibrated for device GNSS reception (D-116): 2.5s timeout prevents 1 Hz GPS scheduling
+    // jitter false alarms; 24 dB-Hz healthy threshold accommodates urban & desk tracking.
+    private val fsm = TunnelFsm(
+        config = TunnelFsmConfig(
+            cn0HealthyDbHz = 24f,
+            cn0SuspectDbHz = 20f,
+            cn0LostDbHz = 16f,
+            gnssTimeoutMs = 2_500L,
+            statusFreshMs = 3_500L
+        ),
+        startMs = SystemClock.elapsedRealtime()
+    )
+    // Tunnel map-based geometry loaded from bundled asset (D-126).
+    private var tunnelGeometry = TunnelGeometry(emptyList())
     private var syncedTunnelState = TunnelState.GNSS_HEALTHY
     private var satelliteCount = 0
     private var currentRate = 0f
@@ -79,6 +97,7 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     override fun onCreate() {
         super.onCreate()
         activeInstance = this
+        tunnelGeometry = TunnelAssetLoader.load(assets)
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification())
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
@@ -111,7 +130,9 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
             val lastNet = try { locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
             val initialLoc = lastFused ?: lastGps ?: lastNet
             initialLoc?.let { loc ->
+                val now = SystemClock.elapsedRealtime()
                 val estimate = estimator.onLocation(loc)
+                fsm.onGnssFix(now, estimate.lastFixVerdict ?: FixVerdict.ACCEPTED)
                 applyEstimate(estimate, force = true)
             }
             // Continuous periodic updates with minDistance = 0f to prevent disconnects when stopped
@@ -204,6 +225,9 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
             return
         }
         lastUiPublishMs = nowMs
+        val fix = tunnelGeometry.locate(estimate.latitude, estimate.longitude)
+        fsm.onPortalDistance(nowMs, portalDistanceM(fix))
+        fsm.onMapInTunnel(nowMs, fix?.inside)
         // The 30 Hz publish tick doubles as the machine's clock for its timeouts.
         fsm.tick(nowMs)
         syncTunnelState(nowMs)
@@ -224,6 +248,8 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 tunnelState = fsm.state,
                 tunnelTrigger = fsm.lastTransition?.trigger,
                 tunnelForced = fsm.forced,
+                tunnelOverride = fsm.overrideMode,
+                tunnelFix = fix,
                 cn0Top4DbHz = fsm.cn0Top4DbHz,
                 ambientLux = fsm.lux,
                 lastFixVerdict = estimate.lastFixVerdict,
@@ -327,16 +353,26 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
         private var activeInstance: SensorForegroundService? = null
 
         /**
+         * Set the manual override mode for the tunnel state machine (D-126).
+         */
+        fun setTunnelOverride(mode: TunnelOverride): TunnelOverride {
+            val service = activeInstance ?: return mode
+            val now = SystemClock.elapsedRealtime()
+            service.fsm.setOverride(now, mode)
+            service.syncTunnelState(now)
+            service.applyEstimate(service.estimator.snapshot(), force = true)
+            return service.fsm.overrideMode
+        }
+
+        /**
          * The demo's manual override, kept next to the autonomous machine: forcing pins the
          * machine in tunnel mode; releasing it runs the honest exit path (verification, then
          * reconvergence) rather than snapping back to healthy.
          */
         fun toggleTunnelMode(): Boolean {
             val service = activeInstance ?: return false
-            val now = SystemClock.elapsedRealtime()
-            service.fsm.setForced(now, !service.fsm.forced)
-            service.syncTunnelState(now)
-            service.applyEstimate(service.estimator.snapshot(), force = true)
+            val next = if (service.fsm.forced) TunnelOverride.AUTO else TunnelOverride.FORCE_ON
+            setTunnelOverride(next)
             return service.fsm.forced
         }
 

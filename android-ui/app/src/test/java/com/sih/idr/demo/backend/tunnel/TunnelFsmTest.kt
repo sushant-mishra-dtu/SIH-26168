@@ -443,6 +443,58 @@ class TunnelFsmTest {
         assertEquals(TunnelState.EXIT_VERIFICATION, fsm.state)
     }
 
+    @Test
+    fun forceOffPinsStateInGnssHealthyEvenIfGnssTimesOut() {
+        val fsm = TunnelFsm(config, startMs = 0)
+        fsm.setOverride(100, TunnelOverride.FORCE_OFF)
+        assertEquals(TunnelOverride.FORCE_OFF, fsm.overrideMode)
+        assertFalse(fsm.forced)
+        assertEquals(TunnelState.GNSS_HEALTHY, fsm.state)
+
+        // 30 seconds with no GNSS fixes and no signals
+        fsm.tick(30_000)
+        assertEquals(TunnelState.GNSS_HEALTHY, fsm.state)
+    }
+
+    @Test
+    fun forceOffTransitionsFromActiveTunnelToGnssHealthy() {
+        val fsm = TunnelFsm(config, startMs = 0)
+        fsm.setOverride(100, TunnelOverride.FORCE_ON)
+        assertEquals(TunnelState.TUNNEL_ACTIVE_IDR, fsm.state)
+        assertTrue(fsm.forced)
+
+        fsm.setOverride(500, TunnelOverride.FORCE_OFF)
+        assertEquals(TunnelState.GNSS_HEALTHY, fsm.state)
+        assertFalse(fsm.forced)
+        assertEquals(TunnelTrigger.MANUAL_OFF, fsm.lastTrigger())
+    }
+
+    @Test
+    fun switchingBetweenAutoOnAndOffRestoresAutonomousBehavior() {
+        val fsm = TunnelFsm(config, startMs = 0)
+        fsm.driveHealthy(0, 5_000)
+        assertEquals(TunnelState.GNSS_HEALTHY, fsm.state)
+
+        // Force ON
+        fsm.setOverride(5_100, TunnelOverride.FORCE_ON)
+        assertEquals(TunnelState.TUNNEL_ACTIVE_IDR, fsm.state)
+
+        // Force OFF
+        fsm.setOverride(6_000, TunnelOverride.FORCE_OFF)
+        assertEquals(TunnelState.GNSS_HEALTHY, fsm.state)
+
+        // Switch back to AUTO under clear sky
+        fsm.driveHealthy(6_000, 10_000)
+        fsm.setOverride(10_100, TunnelOverride.AUTO)
+        assertEquals(TunnelState.GNSS_HEALTHY, fsm.state)
+
+        // Under AUTO, a signal collapse naturally pre-arms and enters tunnel
+        fsm.onGnssStatus(10_400, satellitesUsed = 2, cn0Top4DbHz = 20f)
+        assertEquals(TunnelState.PRE_ARMED_ENTRY, fsm.state)
+        fsm.tick(12_000) // Timeout
+        assertEquals(TunnelState.TUNNEL_ACTIVE_IDR, fsm.state)
+    }
+
     // ── Bookkeeping ──────────────────────────────────────────────────────────────────────
 
     @Test
