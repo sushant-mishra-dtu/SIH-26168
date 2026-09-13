@@ -55,10 +55,16 @@ SMALL_ANGLE = 1e-3
 #: group is slow but not zero, and a non-orthonormal R makes R.T stop being R^-1 in every Jacobian.
 REORTHONORMALISE_EVERY = 1000
 
-#: Measured angular random walk, worst axis, from IO-VNBD's own stationary segments (D-045,
-#: docs/ERROR_BUDGET.md section 9.1). Named at module scope because two `FilterConfig` fields are
-#: derived from it and a copy-paste between them is exactly the drift a test cannot see.
-GYRO_ARW_MEASURED = 4.11e-4  # rad/s/sqrt(Hz) == 1.41 deg/sqrt(hr)
+#: Measured angular random walk, worst white axis, from IO-VNBD's own stationary segments
+#: (D-045, re-measured by D-120; docs/ERROR_BUDGET.md section 9.1). Named at module scope because
+#: two `FilterConfig` fields are derived from it and a copy-paste between them is exactly the
+#: drift a test cannot see. D-045 read 4.11e-4 (1.41 deg/sqrt(hr)) off segments that still held
+#: the car's settle and pull-away at each end; with those excluded the same sensor reads half.
+GYRO_ARW_MEASURED = 2.18e-4  # rad/s/sqrt(Hz) == 0.75 deg/sqrt(hr)
+
+#: Measured accelerometer bias instability, worst axis, same run (D-120; D-045 read 0.34 mg). It
+#: is the accel-bias block of `P0` (`initial_covariance`), which is why it has a name here.
+ACCEL_BIAS_INSTABILITY_MEASURED = 2.48e-3  # m/s^2 == 0.25 mg
 
 #: `S-` stream rate, measured from the timestamps (D-047: median dt = 100.0 ms).
 IMU_RATE_HZ = 10.0
@@ -207,33 +213,37 @@ def propagate_nominal(
 class FilterConfig:
     """Tuning. Process noise is seeded from a measured Allan-variance run, never guessed.
 
-    The four noise defaults are **measured**, from IO-VNBD's own stationary segments (D-045), by
-    `eval/allan.py`. They are the worst axis across the two segments quiet enough to characterise
-    a sensor on -- `S-T2[31422:36490]` (507 s) and `S-T7[47809:52285]` (448 s) -- because an
-    undersized Q makes the filter over-trust its own propagation and reject good measurements at
-    the chi-squared gate, and that failure reads as a sensor fault rather than a tuning error.
+    The four noise defaults are **measured**, from IO-VNBD's own stationary segments (D-045,
+    D-120), by `eval/allan.py`. They are the worst axis across the two segments quiet enough to
+    characterise a sensor on -- `S-T2[31532:36371]` (484 s) and `S-T7[47918:52176]` (426 s) --
+    because an undersized Q makes the filter over-trust its own propagation and reject good
+    measurements at the chi-squared gate, and that failure reads as a sensor fault rather than a
+    tuning error.
 
     Regenerate with::
 
-        python -m eval.allan --paths-from <list of S- csv paths> --out-dir eval/figures
+        python -m eval.allan --paths-from data/manifest/allan_segments_input.txt \
+            --out-dir eval/figures
 
-    The measured `gyro_arw` is 1.41 deg/sqrt(hr), inside the 0.5-5 deg/sqrt(hr) phone-MEMS range
-    in docs/ERROR_BUDGET.md section 9. It replaces a 3.0e-3 placeholder that was 10.3 deg/sqrt(hr)
-    -- 7x pessimistic and outside our own stated range (plan item R-2, self-flagged in
-    SE23_PROPAGATION.md section 10).
+    The measured `gyro_arw` is 0.75 deg/sqrt(hr), inside the 0.5-5 deg/sqrt(hr) phone-MEMS range
+    in docs/ERROR_BUDGET.md section 9. D-045 read 1.41 from the same two stops with a segment
+    rule that kept the car's settle and pull-away -- ten to twenty samples at each end carrying
+    10-74x the interior gyro RMS -- and every seed was about 2x pessimistic for it (D-120). Both
+    replace a 3.0e-3 placeholder that was 10.3 deg/sqrt(hr), outside our own stated range (plan
+    item R-2, self-flagged in SE23_PROPAGATION.md section 10).
     """
 
     # Allan-variance-derived, per docs/ERROR_BUDGET.md section 9. Measured on IO-VNBD, not assumed.
-    gyro_arw: float = GYRO_ARW_MEASURED  # rad/s/sqrt(Hz)  == 1.41 deg/sqrt(hr)
-    accel_vrw: float = 7.46e-3  # m/s^2/sqrt(Hz) == 0.45 m/s/sqrt(hr)
+    gyro_arw: float = GYRO_ARW_MEASURED  # rad/s/sqrt(Hz)  == 0.75 deg/sqrt(hr)
+    accel_vrw: float = 4.03e-3  # m/s^2/sqrt(Hz) == 0.24 m/s/sqrt(hr)
 
-    # Not measured: a 507 s record cannot resolve the +1/2 rate-random-walk slope (it reaches
-    # tau = 51 s). Derived instead from the two quantities that *were* measured, by modelling each
+    # Not measured: a 484 s record cannot resolve the +1/2 rate-random-walk slope (it reaches
+    # tau = 48 s). Derived instead from the two quantities that *were* measured, by modelling each
     # bias as first-order Gauss-Markov with steady-state spread B and correlation time tau_c taken
     # from the Allan minimum: q = B sqrt(2 / tau_c). A modelling choice, labelled as one, and the
     # conservative direction. See eval.allan.gauss_markov_bias_driving_noise and D-045.
-    gyro_bias_rw: float = 5.48e-5  # rad/s^2/sqrt(Hz), from B = 42 deg/hr, tau_c = 27.7 s
-    accel_bias_rw: float = 1.04e-3  # m/s^3/sqrt(Hz), from B = 0.34 mg, tau_c = 20.3 s
+    gyro_bias_rw: float = 3.10e-5  # rad/s^2/sqrt(Hz), from B = 22 deg/hr, tau_c = 23.7 s
+    accel_bias_rw: float = 9.67e-4  # m/s^3/sqrt(Hz), from B = 0.25 mg, tau_c = 13.2 s
 
     # Mount-rotation process noise, the sigma_sv block of Q_c in SE23_PROPAGATION.md section 5.3.
     # Was zero (D-048) because nothing in the repo gave it a magnitude. It is now non-zero for a
@@ -255,15 +265,15 @@ class FilterConfig:
     zupt_sigma: float = 0.02  # m/s
 
     # Gyro **turn-on** bias, 1-sigma per axis: the uncertainty of a bias nothing has estimated
-    # yet, which is what `P0` has to carry. It is not the bias *instability* (D-045's 42 deg/hr,
-    # 0.012 deg/s), which is how far an already-estimated bias wanders and is the floor the block
-    # converges to, not where it starts. Measured as the mean gyro over every stationary run of
-    # 5 s or longer in the TRAIN stems that have one (M, S1, S2, S4 -- 638 s at a standstill):
-    # worst-axis RMS 0.14 deg/s, largest single axis 0.20 deg/s (M, vertical). 0.2 deg/s puts the
-    # largest measured bias at one sigma. With 42 deg/hr in the block, a 0.1 deg/s reading at a
-    # standstill was a 9-sigma event and **every ZARU on every held-out stem was rejected** --
-    # 0 of 103 accepted on Vta1a -- so the one update that observes the dominant error term never
-    # ran (D-115).
+    # yet, which is what `P0` has to carry. It is not the bias *instability* (22 deg/hr =
+    # 0.006 deg/s, D-120; D-045 read 42), which is how far an already-estimated bias wanders and
+    # is the floor the block converges to, not where it starts. Measured as the mean gyro over
+    # every stationary run of 5 s or longer in the TRAIN stems that have one (M, S1, S2, S4 --
+    # 638 s at a standstill): worst-axis RMS 0.14 deg/s, largest single axis 0.20 deg/s (M,
+    # vertical). 0.2 deg/s puts the largest measured bias at one sigma. With 42 deg/hr in the
+    # block, a 0.1 deg/s reading at a standstill was a 9-sigma event and **every ZARU on every
+    # held-out stem was rejected** -- 0 of 103 accepted on Vta1a -- so the one update that
+    # observes the dominant error term never ran (D-115).
     gyro_bias_turn_on: float = float(np.deg2rad(0.2))  # rad/s
 
     # The receiver's course over ground, `gps_orientation_deg` in the `S-` stream, is a Doppler
@@ -292,9 +302,9 @@ class FilterConfig:
     # the gyro *white* noise per sample -- so R is not a free parameter, it is the Allan run's
     # own number at the stream's own rate: `gyro_arw / sqrt(dt) = gyro_arw * sqrt(rate)`
     # (D-056). Derived here rather than typed, so it cannot drift away from `gyro_arw`; the
-    # relationship is pinned by a test. The 1.0e-3 it replaces predated the Allan run and was
-    # 1.3x understated in sigma, 1.7x in variance -- over-confident, the unsafe direction.
-    zaru_sigma: float = GYRO_ARW_MEASURED * _SQRT_IMU_RATE_HZ  # rad/s == 1.2997e-3 at 10 Hz
+    # relationship is pinned by a test. The 1.0e-3 it replaced predated the Allan run; D-045's
+    # 1.2997e-3 was 1.9x this, read off segments that still held the stop's settle (D-120).
+    zaru_sigma: float = GYRO_ARW_MEASURED * _SQRT_IMU_RATE_HZ  # rad/s == 6.894e-4 at 10 Hz
 
     #: `S-` stream sample rate. Measured, not nominal: D-047 confirmed median dt = 100.0 ms from
     #: the timestamps. Named here because `zaru_sigma` is rate-dependent and the 200 Hz FOG build
@@ -709,7 +719,7 @@ def initial_covariance(
         yaw            1.81 deg        14.56 deg       8x too tight
         roll, pitch    1.81 deg        0.83 deg        2.2x too loose
         gyro bias      1810 deg/hr     720 deg/hr      2.5x too loose
-        accel bias     3.2 mm/s^2      3.3 mm/s^2      9.5x too loose
+        accel bias     3.2 cm/s^2      2.5 mm/s^2      12.7x too loose
         mount          1.81 deg        5 deg           2.8x too tight
 
     (The gyro-bias row read 42 deg/hr and the roll/pitch row 1.31 deg until D-115; see
@@ -726,7 +736,7 @@ def initial_covariance(
     * **Roll and pitch** come from the gravity vector at a **detected stop**, so the levelling
       error is bounded by the largest specific-force disturbance the stop detector still admits:
       `sqrt(zupt_accel_var_thresh) / g` = 0.83 deg. The sensor *floor* is far tighter -- the
-      measured 0.34 mg accel bias instability is 0.019 deg -- but the floor is not what bounds a
+      measured 0.25 mg accel bias instability is 0.015 deg -- but the floor is not what bounds a
       real alignment, the detector's own admission threshold is.
     * **Yaw** comes from GNSS course over ground, which needs motion, so it is not observable at
       that same stationary epoch and the prior stands until the vehicle moves: differencing two
@@ -737,7 +747,8 @@ def initial_covariance(
       the honest value is `UNALIGNED_YAW_SIGMA_RAD`, and 14.6 deg would be a claim to know a
       heading nobody has measured (D-115).
     * **Position** is the fix itself; **velocity** is that same differenced pair.
-    * **Both bias blocks** are the D-045 Allan run's measured bias instabilities.
+    * **The gyro bias block** is the measured turn-on bias (D-115); **the accel bias block** is
+      the Allan run's measured bias instability (`ACCEL_BIAS_INSTABILITY_MEASURED`, D-120).
     * **The mount block** takes `mount_sigma_rad` when the PCA initialiser (`pca_mount_yaw`)
       has run and measured a spread; without one it falls back to a stated 5 degrees. See below.
 
@@ -777,12 +788,13 @@ def initial_covariance(
         sigma_yaw = float(yaw_sigma_rad)
 
     # Gyro: the measured turn-on bias (`FilterConfig.gyro_bias_turn_on`), because the block
-    # starts from a bias nothing has estimated. Accel: still the D-045 bias instability, which is
-    # too tight for the same reason and is an open item in D-115 -- there is no clean standstill
-    # measurement of an accelerometer offset to replace it with, since at rest the offset is
-    # confounded with the levelling that was derived from the same sensor.
+    # starts from a bias nothing has estimated. Accel: still the Allan run's bias instability
+    # (0.25 mg since D-120; D-045 read 0.34), which is too tight for the same reason and is an
+    # open item in D-115 -- there is no clean standstill measurement of an accelerometer offset
+    # to replace it with, since at rest the offset is confounded with the levelling that was
+    # derived from the same sensor.
     sigma_bg = cfg.gyro_bias_turn_on
-    sigma_ba = 0.34e-3 * g  # 0.34 mg -> m/s^2
+    sigma_ba = ACCEL_BIAS_INSTABILITY_MEASURED
 
     # The mount block. Without a PCA spread the block starts from no measurement, and the prior
     # therefore must not assert knowledge we do not have. The ~1.15 deg figure in

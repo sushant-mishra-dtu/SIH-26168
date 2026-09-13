@@ -374,9 +374,9 @@ protocol frozen with the CRSE convention unverified is not frozen; it is postpon
 
 **Goal.** Implement propagation exactly as derived, against a derivation that is already CI-checked.
 
-**Preconditions.** P-01. `docs/SE23_PROPAGATION.md` §8.1–8.2 read in full. `Q_c` from D-045 in use
-(gyro ARW 4.11e-4 rad/s/√Hz, accel VRW 7.46e-3 m/s²/√Hz; bias driving noises **derived**, and
-labelled as derived everywhere they appear).
+**Preconditions.** P-01. `docs/SE23_PROPAGATION.md` §8.1–8.2 read in full. `Q_c` from the Allan
+run in use (D-045, re-seeded by D-120: gyro ARW 2.18e-4 rad/s/√Hz, accel VRW 4.03e-3 m/s²/√Hz;
+bias driving noises **derived**, and labelled as derived everywhere they appear).
 
 **Files in scope.** `core/reference/inekf.py`, `tests/test_se23_derivation.py`,
 `docs/DECISION_LOG.md` (append), `docs/ERROR_BUDGET.md` §9.

@@ -253,13 +253,21 @@ carrying the commit SHA and seed that produced it.
 
 | Parameter | Measured | Worst axis | In SI, as `FilterConfig` takes it |
 |---|---|---|---|
-| Angular random walk | **1.41 °/√hr** (range 0.60–1.41 across axes) | `gyro_pitch`, S-T2 | `gyro_arw = 4.11e-4` rad/s/√Hz |
-| Velocity random walk | **0.45 m/s/√hr** | `accel_z`, S-T7 | `accel_vrw = 7.46e-3` m/s²/√Hz |
-| Gyro bias instability | **42 °/hr** at τ ≈ 45 s | `gyro_yaw`, S-T7 | 2.04e-4 rad/s |
-| Accel bias instability | **0.34 mg** at τ ≈ 20 s | `accel_x`, S-T7 | 3.32e-3 m/s² |
-| Gyro bias driving noise | *derived, not measured* | — | `gyro_bias_rw = 5.48e-5` rad/s²/√Hz |
-| Accel bias driving noise | *derived, not measured* | — | `accel_bias_rw = 1.04e-3` m/s³/√Hz |
+| Angular random walk | **0.75 °/√hr** (range 0.41–0.75 across the white axes) | `gyro_roll`, S-T2 | `gyro_arw = 2.18e-4` rad/s/√Hz |
+| Velocity random walk | **0.24 m/s/√hr** (range 0.18–0.24) | `accel_x`, S-T2 | `accel_vrw = 4.03e-3` m/s²/√Hz |
+| Gyro bias instability | **22 °/hr** at τ ≈ 32 s | `gyro_roll`, S-T2 | 1.07e-4 rad/s |
+| Accel bias instability | **0.25 mg** at τ ≈ 48 s | `accel_x`, S-T2 | 2.48e-3 m/s² (`ACCEL_BIAS_INSTABILITY_MEASURED`) |
+| Gyro bias driving noise | *derived, not measured* | — | `gyro_bias_rw = 3.10e-5` rad/s²/√Hz |
+| Accel bias driving noise | *derived, not measured* | — | `accel_bias_rw = 9.67e-4` m/s³/√Hz |
 | Mount driving noise `σ_sv` | **not measured, and not guessed** | — | `mount_rw = 0.0` rad/s/√Hz (D-048) |
+
+*(D-045's table read 1.41 °/√hr, 0.45 m/s/√hr, 42 °/hr and 0.34 mg from the same two stops.
+Every one was about 2× pessimistic, and for one reason: the segment finder kept the samples that
+*some* 10 s window passed on, and a 10 s mean lets up to a second of vehicle motion through at
+each end of a stop. The first and last second of the two segments carried 10–74× the interior
+gyro RMS — the car settling on its suspension and pulling away — and ARW is read at τ = 0.2–2 s.
+D-120 keeps a sample only if *every* window containing it passes; trimming a further 5 s beyond
+that moves no seed by more than 1%.)*
 
 The last row is the one to read twice. [SE23_PROPAGATION.md](SE23_PROPAGATION.md) §5.3 names `σ_sv`
 in `Q_c`, but nothing in this repo measures it — the Allan run characterises the IMU, not the way a
@@ -270,7 +278,7 @@ wires `detect_mount_disturbance` to re-inflate it, the ~1° requirement in §5 r
 initialiser alone. That is a limitation to state in the write-up, not a term the filter models.
 
 All four measured values land inside the phone-MEMS column of §9.3. The ARW replaces a `3.0e-3`
-placeholder that was 10.3 °/√hr — 7× pessimistic and outside our own stated range (plan item R-2).
+placeholder that was 10.3 °/√hr — 14× pessimistic and outside our own stated range (plan item R-2).
 
 **Method.** Overlapping Allan deviation per axis at 10 Hz (the `S-` stream's rate, confirmed from
 the timestamps: median Δt = 100.0 ms). ARW/VRW is the white-noise coefficient at τ = 1 s, taken as
@@ -278,7 +286,10 @@ the log-mean of σ(τ)√τ over τ ∈ [0.2, 2] s and **accepted only if the fi
 within 0.15 of −½**. Bias instability is the flat minimum, `B = σ_min / 0.664` (IEEE Std 952).
 The scalar seeding `FilterConfig` is the worst axis over both segments: an undersized Q makes the
 filter reject good measurements at the χ² gate, and that failure reads as a sensor problem rather
-than a tuning one (D-031).
+than a tuning one (D-031). Segments are found with the filter's own stop thresholds over a 10 s
+window, and a sample is kept only if every window containing it passes (D-120); the summary
+records the rule and a test holds it against the current `FilterConfig`, so a retune of the
+detector can no longer leave these artefacts silently stale (as D-115's did for sixteen days).
 
 ### 9.2 What these numbers do not cover — read before quoting them
 
@@ -287,7 +298,8 @@ Four limits, each of which changes how far the numbers can be pushed:
 1. **There is no >20 min stationary segment in the `S-` stream.** [DATASETS.md](DATASETS.md) §1.4
    said there was; that claim did not survive being checked against the files. Sweeping all 168
    distinct `S-` files, the longest continuous, uniformly-sampled, genuinely-still stretch is
-   **507 s (8.4 min)**, in `S-T2`. Consequence: τ_max is ~51 s at the usual T/10 confidence limit.
+   **484 s (8.1 min)**, in `S-T2` — 507 s before D-120 excluded the settle and the pull-away at
+   its ends. Consequence: τ_max is ~48 s at the usual T/10 confidence limit.
 2. **Bias instability is an upper bound, not a floor.** At τ_max most axes are still descending —
    the curve has not been observed to turn back up, so what is reported is σ at the longest τ the
    record supports. The true floor is at some larger τ and is *smaller*. Conservative for Q,
@@ -295,10 +307,17 @@ Four limits, each of which changes how far the numbers can be pushed:
 3. **`gyro_bias_rw` / `accel_bias_rw` are derived, not measured.** The +½ rate-random-walk slope
    needs a record an order of magnitude longer. They come from modelling each bias as first-order
    Gauss–Markov with the measured `B` and the measured Allan-minimum τ: `q = B √(2/τ_c)`.
-4. **VRW rests on a single axis.** Five of six accelerometer fits failed the −½ slope check: a
-   parked car genuinely accelerates at low frequency (thermal settle, wind, suspension), and that
-   is signal, not sensor noise. Only `accel_z` on S-T7 gave a clean white band. Stated as one axis
-   rather than dressed up as three.
+4. **The white-band gate decides which axes count, and it is a knife edge.** Five of six
+   accelerometer fits pass the −½ slope check (`accel_z` on S-T7, slope −0.32, is refused); three
+   of six gyro fits do *not* — `gyro_pitch` on S-T2 and `gyro_yaw`/`gyro_pitch` on S-T7 sit at
+   −0.26 to −0.32 over τ = 0.2–2 s, flatter than white, so at this floor the 10 Hz gyro's short-τ
+   behaviour on those axes is not a random walk and ARW rests on the three that are. D-045 had
+   the accelerometer the other way round — one axis white, five refused — because the settle's
+   low-frequency energy was in the band; and its S-T2 `gyro_pitch` passed at −0.51 where the
+   same axis without the settle reads −0.32. Two consequences to carry: the seed can move by 20%
+   on which side of ±0.15 one slope falls, and a rounding residue in the timestamp median once
+   decided it (`eval/allan.py::random_walk_coefficient`, D-120). Stated as a range rather than
+   dressed up as a point.
 
 **These are bench-quiet numbers.** Both usable segments sit an order of magnitude inside the ZUPT
 thresholds. Segments that pass the ZUPT detector but *not* that quietness margin — a car idling
@@ -347,7 +366,7 @@ both directions at once.
 | Attitude roll, pitch | **1.31°** | `√(zupt_accel_var_thresh)/g` — levelling from gravity, bounded by the largest specific-force disturbance the stop detector still admits | 1.81° — 1.4× too loose |
 | Attitude yaw | **14.56°** | `(√2·σ_p/Δt_gnss)/v_ref` — GNSS course over ground at the §1 reference speed | 1.81° — **8× too tight** |
 | Gyro bias | **42 °/hr** | §9.1, measured (D-045) | 1810 °/hr — 43× too loose |
-| Accel bias | **0.34 mg** | §9.1, measured (D-045) | 3.2 mm/s² — 9.5× too loose |
+| Accel bias | **0.25 mg** | §9.1, measured (D-120; D-045 read 0.34) | 3.2 cm/s² — 12.7× too loose |
 | Mount `ξ_sv` | **5°** | §5's knock. **Not** §5's requirement — see below | 1.81° — 2.8× too tight |
 
 *(The gyro-bias, roll/pitch and mount rows above are the D-055 values; §10.3 records what D-115
@@ -364,8 +383,8 @@ stationary epoch. The yaw prior therefore stands until the vehicle moves. This i
 levelling followed by course alignment, and it is stated because the two rows above would
 otherwise look inconsistent.
 
-**Why roll/pitch is the detector's threshold and not the sensor floor.** The measured 0.34 mg accel
-bias instability implies a levelling floor of 0.019° — 60× tighter. That floor is what the sensor
+**Why roll/pitch is the detector's threshold and not the sensor floor.** The measured 0.25 mg accel
+bias instability implies a levelling floor of 0.015° — nearly two orders tighter. That floor is what the sensor
 *could* do; it is not what bounds a real alignment. `zupt_accel_var_thresh = 0.05 (m/s²)²` is how
 much residual specific force the stop detector still calls a stop, so σ = √0.05/g = 1.31° is the
 levelling error an alignment at a detected stop must tolerate. Using the floor would assert an
@@ -385,10 +404,10 @@ and until it does, the ~1° requirement in §5 rests on nothing the filter model
 
 `zaru_sigma` is the noise on `z = ω̃ − b̂_g` ([SE23_PROPAGATION.md](SE23_PROPAGATION.md) §7.3),
 which is the gyro *white* noise per sample — so it is the Allan run's own number at the stream's
-own rate, `gyro_arw·√f = 4.11e-4·√10 = 1.2997e-3` rad/s, and it is computed in `FilterConfig`
-rather than typed so the two cannot drift apart (D-056). It replaces a `1.0e-3` that predated the
-Allan run and was 1.3× understated in σ, 1.7× in variance — over-confident, the unsafe direction.
-The value is **rate-dependent**: the 200 Hz FOG build needs its own.
+own rate, `gyro_arw·√f = 2.18e-4·√10 = 6.894e-4` rad/s, and it is computed in `FilterConfig`
+rather than typed so the two cannot drift apart (D-056). The `1.0e-3` it replaced predated the
+Allan run; D-045's `1.2997e-3` was 1.9× this, read off segments that still held the stop's settle
+(D-120). The value is **rate-dependent**: the 200 Hz FOG build needs its own.
 
 ### 10.2 Filter consistency at Gate 1 — measured
 
@@ -397,11 +416,15 @@ for 18 dof; per-block against 3.0 expected. Tool: `tests/test_se23_derivation.py
 
 | Case | NEES | Band | Gyro-bias block |
 |---|---|---|---|
-| Propagation only | 18.29 | in | 2.94 |
-| + ZUPT | 18.93 | in | 2.87 |
-| + ZARU *(D-053: 27.67, over-confident)* | **17.03** | **in** | **3.05** *(was 13.14)* |
-| ZUPT + ZARU together | **19.03** | **in** | 3.16 |
-| Full, with NHC | **14.14** | under | 2.73 |
+| Propagation only | 17.42 | in | 2.94 |
+| + ZUPT | 18.59 | in | 2.83 |
+| + ZARU *(D-053: 27.67, over-confident)* | **16.62** | 1.3% under | **3.03** *(was 13.14)* |
+| ZUPT + ZARU together | **18.67** | **in** | 3.14 |
+| Full, with NHC | **13.57** | under | 2.78 |
+
+*(Re-measured under D-120's `Q` and `P₀`; under D-045's the five rows read 18.29 / 18.93 / 17.03 /
+19.03 / 14.14. The ZARU-only row has sat 1.3% under the band since D-115 put the turn-on bias in
+`P₀`, and asserts one-sided for the reason its test gives.)*
 
 The over-confidence D-053 recorded is gone, and D-053's attribution of it was wrong: see D-057.
 The full-state case is now *under*-confident — the safe direction — and the whole of the remainder
@@ -417,8 +440,8 @@ driving (D-115), three entries above are the wrong quantity for a filter that st
 | Entry | Was | Is | Measured as |
 |---|---|---|---|
 | Gyro bias, `P₀` | 42 °/hr (instability) | **0.2 °/s** (`gyro_bias_turn_on`) | Mean gyro over 638 s of TRAIN standstill: 0.14 °/s RMS, 0.20 °/s worst axis. The instability is how far an *estimated* bias wanders; the block starts from an unestimated one. At 42 °/hr a real 0.1 °/s bias was a 9σ event and every ZARU on every held-out stem was rejected. |
-| `gyro_arw`, `Q` | 1.41 °/√hr | **per stem, floored at 1.41** (`in_motion_config`) | Tilt of the integrated gyro against a quiet-end levelling, S3a: 1.1 / 2.3 / 3.7 / 7.0 ° at 10 / 30 / 60 / 120 s ≈ 0.5 °/√s, 20× the Allan figure; the stream's own 0.5 s-residual white level reproduces it to 1.4× (S3a) – 2× (Vta1a), the conservative side. Vta/Vw stems run 4–20 °/s per sample. |
-| `accel_vrw`, `Q` | 0.45 m/s/√hr | **per stem, floored** | Same residual: 0.46 m/s² per sample on S3a, 1.4–3.5 on the Vta/Vw stems. |
+| `gyro_arw`, `Q` | 0.75 °/√hr (1.41 when D-115 measured) | **per stem, floored at the Allan value** (`in_motion_config`) | Tilt of the integrated gyro against a quiet-end levelling, S3a: 1.1 / 2.3 / 3.7 / 7.0 ° at 10 / 30 / 60 / 120 s ≈ 0.5 °/√s, 20× D-045's Allan figure and 40× D-120's; the stream's own 0.5 s-residual white level reproduces it to 1.4× (S3a) – 2× (Vta1a), the conservative side. Vta/Vw stems run 4–20 °/s per sample. |
+| `accel_vrw`, `Q` | 0.24 m/s/√hr (0.45 when D-115 measured) | **per stem, floored** | Same residual: 0.46 m/s² per sample on S3a, 1.4–3.5 on the Vta/Vw stems. |
 | Roll, pitch, `P₀` | 1.31° | **0.83°** at a stop; the harness's own figure on a moving window | The detector now admits `zupt_accel_var_thresh = 0.02`, and `_level_sigma` adds the window's uncorrected mean acceleration over g. |
 
 **`P₀` is no longer used diagonal.** The table's sigmas are plain errors about the vehicle; the

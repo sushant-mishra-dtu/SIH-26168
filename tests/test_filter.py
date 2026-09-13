@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from core.reference.inekf import (
+    ACCEL_BIAS_INSTABILITY_MEASURED,
     ERROR_STATE_DIM,
     IDX_ACCEL_BIAS,
     IDX_ATTITUDE,
@@ -208,13 +209,13 @@ def test_p0_roll_and_pitch_are_bounded_by_what_the_stop_detector_admits():
 
     Levelling from gravity is only as good as the residual specific force at the epoch it is done,
     and `zupt_accel_var_thresh` is exactly how much of that the stop detector still admits. The
-    *sensor* floor is 40x tighter -- 0.34 mg of accel bias instability is 0.019 deg -- and using
+    *sensor* floor is 57x tighter -- 0.25 mg of accel bias instability is 0.015 deg -- and using
     the floor would assert an alignment accuracy the detector does not guarantee.
     """
     expected = np.sqrt(CFG.zupt_accel_var_thresh) / 9.80665
     assert _sd(slice(0, 2)) == pytest.approx(expected)
     assert np.rad2deg(expected) == pytest.approx(0.826, abs=1e-3)
-    assert np.rad2deg(0.34e-3 * 9.80665 / 9.80665) == pytest.approx(0.0195, abs=1e-3)
+    assert np.rad2deg(ACCEL_BIAS_INSTABILITY_MEASURED / 9.80665) == pytest.approx(0.0145, abs=1e-3)
 
 
 def test_p0_yaw_is_gnss_course_over_ground_at_the_reference_speed():
@@ -233,22 +234,23 @@ def test_p0_yaw_is_gnss_course_over_ground_at_the_reference_speed():
 def test_p0_gyro_bias_block_is_the_measured_turn_on_bias_not_the_instability():
     """D-115 supersedes the D-045 entry here. `P0` carries the uncertainty of a bias nothing has
     estimated yet, which is the *turn-on* bias -- measured at 0.14 deg/s RMS, 0.20 deg/s worst
-    axis, over 638 s of standstill on the TRAIN stems -- and not the bias *instability* (42
-    deg/hr = 0.012 deg/s), which is how far an already-estimated bias wanders. With 42 deg/hr in
-    the block a real 0.1 deg/s bias was a nine-sigma event and every ZARU on every held-out stem
-    was rejected at its gate: 0 of 103 on Vta1a."""
+    axis, over 638 s of standstill on the TRAIN stems -- and not the bias *instability* (22
+    deg/hr = 0.006 deg/s since D-120; D-045 read 42), which is how far an already-estimated bias
+    wanders. With 42 deg/hr in the block a real 0.1 deg/s bias was a nine-sigma event and every
+    ZARU on every held-out stem was rejected at its gate: 0 of 103 on Vta1a."""
     assert _sd(IDX_GYRO_BIAS) == pytest.approx(CFG.gyro_bias_turn_on)
     assert np.rad2deg(_sd(IDX_GYRO_BIAS)[0]) == pytest.approx(0.2)
-    assert CFG.gyro_bias_turn_on > 42.0 * (np.pi / 180.0) / 3600.0
+    assert CFG.gyro_bias_turn_on > 22.0 * (np.pi / 180.0) / 3600.0
 
 
 def test_p0_accel_bias_block_is_the_allan_runs_measured_bias_instability():
-    """docs/ERROR_BUDGET.md section 9.1 (D-045): 0.34 mg, measured on IO-VNBD's own stationary
-    segments. Still the instability rather than a turn-on figure, and D-115 records why: at a
-    standstill an accelerometer offset is confounded with the levelling derived from the same
-    sensor, so there is no clean measurement of one to put here."""
-    assert _sd(IDX_ACCEL_BIAS) == pytest.approx(0.34e-3 * 9.80665)
-    assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(3.3343e-3, abs=1e-7)
+    """docs/ERROR_BUDGET.md section 9.1 (D-045, D-120): 0.25 mg, measured on IO-VNBD's own
+    stationary segments. Still the instability rather than a turn-on figure, and D-115 records
+    why: at a standstill an accelerometer offset is confounded with the levelling derived from
+    the same sensor, so there is no clean measurement of one to put here."""
+    assert _sd(IDX_ACCEL_BIAS) == pytest.approx(ACCEL_BIAS_INSTABILITY_MEASURED)
+    assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(2.48e-3, abs=1e-7)
+    assert _sd(IDX_ACCEL_BIAS)[0] * 1000.0 / 9.80665 == pytest.approx(0.25, abs=5e-3)  # mg
 
 
 def test_p0_mount_block_is_the_knock_not_the_requirement():
@@ -317,7 +319,7 @@ def test_zaru_sigma_is_derived_from_the_allan_run_not_typed():
     """`zaru_sigma` is the gyro white noise per sample, so it is `gyro_arw * sqrt(rate)` and not a
     free parameter. Derived in `FilterConfig` so the two cannot drift apart (D-056)."""
     assert CFG.zaru_sigma == pytest.approx(CFG.gyro_arw * np.sqrt(CFG.imu_rate_hz), rel=1e-12)
-    assert CFG.zaru_sigma == pytest.approx(1.2997e-3, abs=1e-6)
+    assert CFG.zaru_sigma == pytest.approx(6.894e-4, abs=1e-6)
 
 
 def test_zupt_is_deliberately_not_gated():

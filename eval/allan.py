@@ -64,6 +64,11 @@ GYRO_AXES: tuple[str, str, str] = ("gyro_yaw", "gyro_pitch", "gyro_roll")
 #: usual working limit and is what we report to.
 MAX_TAU_FRACTION = 0.1
 
+#: Length of the stationarity window, in seconds of the sequence's own rate. Longer than the
+#: filter's 2 s (`FilterConfig.zupt_window_s`) because a segment is kept for minutes, not
+#: detected for a step; the thresholds are the filter's own.
+WINDOW_S = 10.0
+
 #: A stationary segment is quiet enough to characterise *sensor* noise on only if it sits this
 #: far inside the ZUPT detector's thresholds. The detector answers "is the vehicle stopped", and a
 #: car idling with someone shifting in the seat passes it comfortably -- IO-VNBD's S-A6 segments
@@ -75,9 +80,17 @@ QUIET_MARGIN = 10.0
 
 #: How far the fitted log-log slope may sit from -1/2 before the white-noise band is declared
 #: contaminated and the random-walk coefficient read from it is refused. Not cosmetic: on segment
-#: S-T2 the accel_x curve carries a low-frequency bump that flattens tau = 0.6-1.4 s to a plateau,
-#: and reading an "ARW" off it returns a number 4x the other two axes that is not an ARW at all.
+#: S-T2 the accel_x curve carried a low-frequency bump that flattened tau = 0.6-1.4 s to a plateau,
+#: and reading an "ARW" off it returned a number 4x the other two axes that was not an ARW at all.
+#: (The bump was the car settling in the segment's first second, which the D-120 segment rule now
+#: excludes; with it gone that axis is white at a fifth of the value. The gate stays, because the
+#: 10 Hz gyro is flatter than -1/2 on three axes even then, and those are refused for the same
+#: reason.)
 SLOPE_TOLERANCE = 0.15
+
+#: Relative slack on the white-band edges in `random_walk_coefficient`. 1e-6 is six orders above
+#: the float residue it exists to absorb and three below the coarsest tau spacing in the band.
+BAND_EDGE_RTOL = 1e-6
 
 #: IEEE Std 952 flicker-floor coefficient: sigma_min = BIAS_INSTABILITY_COEFF * B.
 BIAS_INSTABILITY_COEFF = math.sqrt(2.0 * math.log(2.0) / math.pi)  # 0.6643
@@ -178,7 +191,7 @@ def find_stationary_segments(
     *,
     cfg: FilterConfig | None = None,
     min_duration_s: float = 120.0,
-    window_s: float = 10.0,
+    window_s: float = WINDOW_S,
     max_gap_s: float = 0.5,
     max_duplicate_dt_fraction: float = 0.02,
 ) -> list[StationarySegment]:
@@ -203,6 +216,21 @@ def find_stationary_segments(
     part only if the extra bandwidth carries energy, and if it does, that energy is real and the
     segment is not quiet. A gate that passed a desk at 125 Hz by loosening itself would be
     measuring its own tolerance.
+
+    **A sample is in the segment only if every window that contains it passes** (D-120). The
+    earlier rule kept the *union* of the passing windows, and a 10 s mean lets up to a second of
+    vehicle motion through at each end of a stop: on IO-VNBD's two usable segments the first and
+    last second carried 10-74x the interior gyro RMS -- the car settling on its suspension and
+    pulling away -- and because ARW and VRW are read at tau = 0.2-2 s, those seconds set the
+    seeds. Excluding them halves every seed (ARW 1.41 -> 0.75 deg/sqrt(hr), B 42 -> 22 deg/hr);
+    trimming a further 5 s moves none by more than 1%. The union rule also made the seeds a
+    function of the detector thresholds, since the thresholds decide how much transient a
+    window may hold, which is how D-115's retune moved D-045's numbers by 15-35% without
+    touching this file. Under this rule the bias instabilities agree between the two threshold
+    sets to 0.3%; the ARW still differs (1.00 against 0.75) because the looser set keeps 1-2 s
+    more of the settle, and that residue is exactly what made three gyro fits *look* white
+    (S-T2 gyro_pitch: slope -0.51 with it, -0.32 without). A run at the record's own edge is
+    not eroded there: no window before the first sample failed, so nothing bounds it.
     """
     cfg = cfg or FilterConfig()
     t, accel, gyro = imu_arrays(seq, bias_compensated=True)
@@ -218,8 +246,13 @@ def find_stationary_segments(
     )
 
     segments: list[StationarySegment] = []
+    n_windows = stationary.size
     for run_start, run_stop in _true_runs(stationary):
-        start, stop = int(run_start), int(run_stop + window - 1)
+        # Sample j lies in windows [j - window + 1, j]. Every one of them passes iff the run
+        # reaches from j - window + 1 to j, so the kept samples are [run_start + window - 1,
+        # run_stop) -- except at the record's edges, where no failing window bounds the run.
+        start = int(run_start + window - 1) if run_start > 0 else 0
+        stop = int(run_stop) if run_stop < n_windows else len(t)
         dt_all = np.diff(t[start:stop])
         if dt_all.size < 2:
             continue
@@ -388,8 +421,17 @@ def random_walk_coefficient(
 
     The returned slope is the check: if it is not close to -0.5 the band is not white noise and the
     coefficient is not an ARW, whatever the units say.
+
+    The band edges carry a relative tolerance because every tau is `m * dt_s` and `dt_s` is a
+    median of float differences: IO-VNBD's S-T2 gives 0.09999999999990905 and S-T7
+    0.1000000000003638, so an exact `>= 0.2` kept tau = 2 dt on one file and dropped it on the
+    other. With ten points in the band that one point moved S-T2's gyro_pitch slope from -0.32
+    to -0.36 -- across the whiteness gate -- and the seed ARW by 22% (D-120). A rounding residue
+    in a timestamp median is not a property of the sensor.
     """
-    band = (curve.tau_s >= fit_lo_s) & (curve.tau_s <= fit_hi_s)
+    band = (curve.tau_s >= fit_lo_s * (1.0 - BAND_EDGE_RTOL)) & (
+        curve.tau_s <= fit_hi_s * (1.0 + BAND_EDGE_RTOL)
+    )
     if band.sum() < 2:
         band = curve.tau_s <= max(fit_hi_s, curve.tau_s[min(3, curve.tau_s.size - 1)])
     tau, adev = curve.tau_s[band], curve.adev[band]
@@ -634,6 +676,28 @@ def _summarise(report: AllanReport) -> dict[str, float]:
     }
 
 
+def detector_settings(
+    cfg: FilterConfig, *, min_duration_s: float = 120.0, window_s: float = WINDOW_S
+) -> dict[str, object]:
+    """The stationarity rule the segments were found under, for the summary's provenance block.
+
+    The seeds depend on it: the thresholds decide where a stop's edges fall, and the edges are
+    where the settle and the pull-away live. D-115 tightened `FilterConfig`'s thresholds for a
+    reason of its own and the committed artefacts went stale without any test noticing, because
+    the test compared `FilterConfig` with the summary and both were old together. Writing the
+    rule into the summary lets `tests/test_allan.py` compare it with the *current* `FilterConfig`
+    instead, so the next retune fails loudly and names the regeneration it needs (D-120).
+    """
+    return {
+        "zupt_accel_var_thresh": cfg.zupt_accel_var_thresh,
+        "zupt_gyro_norm_thresh": cfg.zupt_gyro_norm_thresh,
+        "window_s": window_s,
+        "quiet_margin": QUIET_MARGIN,
+        "min_duration_s": min_duration_s,
+        "segment_rule": "every window containing the sample passes (D-120)",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -662,6 +726,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     stamp = seed_everything(args.seed)
+    cfg = FilterConfig()
     report = AllanReport()
     loaded: dict[str, Sequence] = {}
 
@@ -698,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             seq = load_sequence(path)
         loaded[seq.name] = seq
-        found = find_stationary_segments(seq, min_duration_s=args.min_duration_s)
+        found = find_stationary_segments(seq, cfg=cfg, min_duration_s=args.min_duration_s)
         for s in found:
             report.segments.append(
                 StationarySegment(**{**asdict(s), "path": str(path).replace("\\", "/")})
@@ -750,6 +815,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "stamp": asdict(stamp),
+                "detector": detector_settings(cfg, min_duration_s=args.min_duration_s),
                 "segments": [asdict(s) for s in report.segments],
                 "summary": summary,
             },

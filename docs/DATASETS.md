@@ -71,9 +71,10 @@ not in a notebook**, and no sequence appears on both sides.
 - **Stationary segments exist, but the longest is 8.4 min, not >20 min.** ⚠️ This bullet previously
   claimed ">20 min"; that did not survive being checked against the files (D-045). Sweeping all 168
   distinct `S-` files with the filter's own ZUPT criteria, the longest continuous,
-  uniformly-sampled, still stretch is **507 s in `S-T2`**, followed by 448 s in `S-T7` and two in
-  `S-A6`. Nothing else clears 120 s. They remain free ZUPT/ZARU ground truth and they are what the
-  Allan run in [ERROR_BUDGET.md](ERROR_BUDGET.md) §9.1 is computed on — but they cap τ at ~51 s,
+  uniformly-sampled, still stretch is **484 s in `S-T2`**, followed by 426 s in `S-T7` and two in
+  `S-A6` (507 / 448 s before D-120 excluded the second of settle and pull-away at each end).
+  Nothing else clears 120 s. They remain free ZUPT/ZARU ground truth and they are what the
+  Allan run in [ERROR_BUDGET.md](ERROR_BUDGET.md) §9.1 is computed on — but they cap τ at ~48 s,
   which is why bias instability is reported there as an upper bound and rate random walk is
   derived rather than measured. Regenerate the inventory with
   `python -m eval.allan --inventory-only --paths-from data/manifest/allan_segments_input.txt`.
