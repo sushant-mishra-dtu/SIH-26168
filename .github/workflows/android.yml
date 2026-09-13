@@ -102,6 +102,13 @@ jobs:
           ORG_GRADLE_PROJECT_MAPBOX_DOWNLOADS_TOKEN: ${{ env.MAPBOX_DOWNLOADS_TOKEN }}
         run: ./gradlew --no-daemon :app:assembleMapboxDebug
 
+      - name: Upload osm APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-osm-debug
+          path: android-ui/app/build/outputs/apk/osm/debug/*.apk
+          if-no-files-found: error
+
       - name: Upload test report
         if: failure()
         uses: actions/upload-artifact@v4
