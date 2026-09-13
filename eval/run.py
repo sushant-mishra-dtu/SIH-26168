@@ -364,10 +364,11 @@ def in_motion_config(
     """`cfg` with `gyro_arw` and `accel_vrw` raised to the white level the stream actually
     carries over its first `upto` samples, never lowered below the Allan-run defaults.
 
-    The D-045 process noise is a stationary phone's floor: 1.41 deg/sqrt(hr), 0.074 deg/s per
-    10 Hz sample. Measured in motion against the paired `V-` truth (D-115), the same phone's
-    tilt random-walks at about 0.5 deg/sqrt(s) on S3a -- 3.7 deg over 60 s, 20x the Allan
-    figure in sigma -- and its 10 Hz gyro carries a per-sample white level of 1.7-1.9 deg/s.
+    The Allan-run process noise is a stationary phone's floor: 0.75 deg/sqrt(hr), 0.040 deg/s
+    per 10 Hz sample (D-120; D-045 read 1.41 with the stop's settle still in the segment).
+    Measured in motion against the paired `V-` truth (D-115), the same phone's tilt random-walks
+    at about 0.5 deg/sqrt(s) on S3a -- 3.7 deg over 60 s, 40x the Allan figure in sigma (20x
+    D-045's) -- and its 10 Hz gyro carries a per-sample white level of 1.7-1.9 deg/s.
     On the Vta/Vw stems the level is 4-20 deg/s and the heading random-walks 20-45 deg per
     60 s. A `Q` twenty to two hundred times too small in variance is why the filter believed its
     tilt to 0.3 deg after a minute of driving and could not re-level from either the

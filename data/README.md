@@ -51,8 +51,10 @@ hope, and it is checked at Gate 0.
 - The stationary segments are free ZUPT/ZARU ground truth and are what `Q_c` is measured from — but
   **there is no >20 min segment.** An earlier version of this line promised one; it did not survive
   being checked against the files (D-045). Sweeping all 168 distinct `S-` files, the longest
-  continuous, uniformly-sampled, genuinely-still stretch is **507 s in `S-T2`**, then 448 s in
-  `S-T7`. Nothing else clears 120 s. Consequence: τ_max ≈ 51 s, so bias instability is an upper
+  continuous, uniformly-sampled, genuinely-still stretch is **484 s in `S-T2`**, then 426 s in
+  `S-T7` (507 / 448 s before D-120 excluded the settle at each end). Nothing else quiet clears
+  120 s.
+  Consequence: τ_max ≈ 48 s, so bias instability is an upper
   bound and rate random walk is *derived* rather than measured
   ([../docs/ERROR_BUDGET.md](../docs/ERROR_BUDGET.md) §9.2).
 - **`S-A4.csv` is malformed and must not be loaded** — an extra empty field at column 6 shifts every

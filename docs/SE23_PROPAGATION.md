@@ -599,6 +599,9 @@ gain-equals-speed result predicts, and the plot §7.2 asks for at Gate 1.
       than measured — the record is too short for the +½ slope. Numbers, method and the four things
       they do not cover are in [ERROR_BUDGET.md](ERROR_BUDGET.md) §9.1–9.2. Note the premise that
       changed: the >20 min stationary segments this plan assumed do not exist; the longest is 507 s.
+      **Re-seeded by D-120** — the same two stops without their settle and pull-away read
+      `gyro_arw = 2.18e-4` (0.75 °/√hr) and `accel_vrw = 4.03e-3`; the longest still stretch is
+      484 s.
 - [x] **CLOSED (D-045).** The `gyro_arw = 3e-3` rad/s/√Hz placeholder — ~10.3 °/√hr, 7× pessimistic
       and outside the 0.5–5 °/√hr phone range our own budget states — is replaced by the measured
       value, which lands inside that range. A test pins it.

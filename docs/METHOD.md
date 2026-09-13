@@ -378,22 +378,28 @@ columns are selected from the header before the body is read, and whose return t
 not a `Sequence`, so it has no `features()` and cannot reach a model.
 
 Measured sensor characterisation, from IO-VNBD's own stationary segments **[measured,
-`eval/figures/allan_*.csv`, commit `ef10dcc`, seed 26168]**:
+`eval/figures/allan_*.csv`, commit `4e0c9ac`, seed 26168]**:
 
 | Parameter | Measured | Worst axis |
 |---|---|---|
-| Angular random walk | **1.41 °/√hr** (`gyro_arw = 4.11e-4` rad/s/√Hz) | `gyro_pitch`, S-T2 |
-| Velocity random walk | **0.45 m/s/√hr** | `accel_z`, S-T7 |
-| Gyro bias instability | **42 °/hr** at τ ≈ 45 s | `gyro_yaw`, S-T7 |
-| Accel bias instability | **0.34 mg** at τ ≈ 20 s | `accel_x`, S-T7 |
+| Angular random walk | **0.75 °/√hr** (`gyro_arw = 2.18e-4` rad/s/√Hz) | `gyro_roll`, S-T2 |
+| Velocity random walk | **0.24 m/s/√hr** | `accel_x`, S-T2 |
+| Gyro bias instability | **22 °/hr** at τ ≈ 32 s | `gyro_roll`, S-T2 |
+| Accel bias instability | **0.25 mg** at τ ≈ 48 s | `accel_x`, S-T2 |
+
+D-045 read 1.41 °/√hr, 0.45 m/s/√hr, 42 °/hr and 0.34 mg from the same two stops; every figure
+was about 2× pessimistic because the segment finder kept the second of settle and pull-away at
+each end of a stop, and ARW is read at τ = 0.2–2 s (D-120).
 
 Four limits, stated because they change how far these can be pushed. There is **no >20 min
 stationary segment** in the `S-` stream — [DATASETS.md](DATASETS.md) claimed one and the claim did
-not survive being checked; the longest is 507 s, so τ_max is ~51 s and bias instability is an
+not survive being checked; the longest is 484 s, so τ_max is ~48 s and bias instability is an
 **upper bound** with the curve still descending. The two bias driving noises are **derived** from a
-Gauss–Markov model, not measured, and are labelled as derived everywhere. **VRW rests on a single
-axis**: five of six accelerometer fits failed a −½ slope check, because a parked car genuinely
-accelerates at low frequency. And these are **bench-quiet** numbers — a car idling with an occupant
+Gauss–Markov model, not measured, and are labelled as derived everywhere. **The white-band gate
+decides which axes count**: three of six gyro fits are flatter than −½ over τ = 0.2–2 s and are
+refused — at this floor the 10 Hz gyro's short-τ behaviour on those axes is not a random walk —
+and one accelerometer fit is, because a parked car genuinely accelerates at low frequency. And
+these are **bench-quiet** numbers — a car idling with an occupant
 returns an apparent ARW ~6× larger, which measures the cabin, not the gyroscope.
 
 ### 11.2 The protocol

@@ -1,6 +1,7 @@
-# commit ef10dcc | seed 26168 | 2026-08-28T11:54:43Z
+# commit 4e0c9ac | seed 26168 | 2026-09-13T10:00:20Z
 sequence,path,start,stop,n_samples,dt_s,duration_s,max_gap_s,duplicate_dt_fraction,accel_var_mean,gyro_norm_mean,is_quiet
-S-T2,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T2.csv,31422,36490,5068,0.1,506.7,0.104,0,0.0005978,0.000868129,True
-S-T7,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T7.csv,47809,52285,4476,0.1,447.501,0.106,0,0.000470815,0.000847644,True
-S-A6,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv,51633,55941,4308,0.1,364.802,0.373,0.000928721,0.00259004,0.00348129,False
-S-A6,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv,83825,85086,1261,0.1,126,0.108,0,0.0171264,0.0163761,False
+S-T2,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T2.csv,31532,36371,4839,0.1,483.8,0.104,0,0.000386419,0.000834442,True
+S-T7,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-T7.csv,47918,52176,4258,0.1,425.701,0.106,0,0.000360045,0.00080287,True
+S-A6,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv,54001,55684,1683,0.1,168.2,0.108,0,0.00088356,0.00241486,False
+S-I,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-I.csv,4386,5800,1414,0.1,141.3,0.105,0,0.00143447,0.00639291,False
+S-A6,data/IO-VNBD-unsync/Unsynchronised V and S Dataset/Uncategorised IOVNB (V and S) Dataset/S-Dataset/S-A6.csv,51804,53865,2061,0.0985,140.254,0.373,0.00194175,0.00163821,0.00306843,False
