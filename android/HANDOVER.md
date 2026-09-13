@@ -21,7 +21,8 @@ Verifiable, not remembered:
 | Claim | How to check |
 |---|---|
 | The logger module exists — 17 main sources, 3,128 lines | `find android/app/src/main -name "*.kt" \| xargs wc -l` |
-| A second app exists at `android-ui/` — 8 sources, 1,184 lines | `find android-ui/app/src/main -name "*.kt" \| xargs wc -l`, and §8 below |
+| A second app exists at `android-ui/` — 28 shared sources, 6,696 lines, plus 2 `osm` and 4 `mapbox` flavour sources (14 Sep) | `find android-ui/app/src/main -name "*.kt" \| xargs wc -l`, and §8 below |
+| **Its `osm` flavour is published as an APK** | `releases/app-osm-debug.apk`, built from `main` @ `1f71984`; link and install steps in `releases/README.md` |
 | Stationary session recorded & committed | `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` (D-116) |
 | **24 min stationary session for the Allan run, recorded & committed** | `android/measured/S-IDR-20260913-141119-samsung-sm-a556e_session.json`, curves in `eval/figures/device/S-IDR-20260913-141119-samsung-sm-a556e/` (D-119) |
 | **Replay view seen rendering a real record on the phone** | 13 Sep 2026, `trajectory_S3a.json` from a full `eval/run.py` sweep; wrong `schema` refused with a dialog (§3a, §9 item 4) |

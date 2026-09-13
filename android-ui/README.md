@@ -136,6 +136,15 @@ by D-117 and D-122, and `tests/test_android_demo_surface.py` fails if any of the
 - Measure sustained rate, thermal behaviour and battery over a real drive, per device — and CPU at
   the 10 Hz provider cadence on the A55.
 
+## Installing without building
+
+The `osm` flavour is committed as a pre-built APK at
+[`releases/app-osm-debug.apk`](../releases/app-osm-debug.apk), with the phone-side download link
+and the commit it was built from in [`releases/README.md`](../releases/README.md). CI also uploads
+an `app-osm-debug` artifact on every push to `main` and every pull request. Install that when you
+want to check a change on the A55 without a local Gradle; build locally when you are changing this
+module.
+
 ## Building
 
 Open this folder — not `android/` — as a project, or from here:
