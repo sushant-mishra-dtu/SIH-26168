@@ -85,8 +85,8 @@ NETWORK_MARKERS = (
 
 @pytest.mark.parametrize("path", sorted(LOGGER_SOURCES))
 def test_no_logger_source_reaches_for_the_network(path):
-    """D-041 claims 100% offline for the evaluation logger (android/). The harness and data collection
-    stream must never make network calls or depend on network availability."""
+    """D-041 claims 100% offline for the evaluation logger (android/). The harness and data
+    collection stream must never make network calls or depend on network availability."""
     text = LOGGER_SOURCES[path]
     code = _strip_comments(text)
     for marker in NETWORK_MARKERS:
@@ -120,7 +120,8 @@ def test_logger_manifest_asks_for_no_internet():
 
 def test_the_ui_module_declares_no_proprietary_map_sdk_or_downloaded_font_dependency():
     """Checked at the dependency rather than the call site: ensure android-ui does not depend
-    on proprietary Google Play Services maps or downloadable fonts. Online maps use open OSMDroid (D-116)."""
+    on proprietary Google Play Services maps or downloadable fonts. Online maps use open
+    OSMDroid (D-116)."""
     build = (REPO / "android-ui" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
     code = _strip_comments(build)
     for coordinate in ("ui-text-google-fonts", "play-services-maps", "maps-compose"):
