@@ -117,11 +117,22 @@ The whole sprint builds the thing that measures us. Nothing trains this week, de
 
 ### A — Android
 
-- [ ] Foreground-service logger skeleton: `*_UNCALIBRATED` accel + gyro, real timestamps,
-      `HIGH_SAMPLING_RATE_SENSORS` declared.
-- [ ] Measure actual achieved sample rate and timestamp jitter on each team device. Write the
-      numbers down; the nominal rate is not the real rate.
-- [ ] This feeds seat S's Allan-variance log — it is the highest-priority Android task.
+- [x] Foreground-service logger skeleton: `*_UNCALIBRATED` accel + gyro, real timestamps,
+      `HIGH_SAMPLING_RATE_SENSORS` declared. — `android/`, D-106; installed on the A55 13 Sep.
+- [x] Measure actual achieved sample rate and timestamp jitter on each team device. Write the
+      numbers down; the nominal rate is not the real rate. — one row per stationary session; a
+      drive adds a row per phone when item 2 of `android/HANDOVER.md` §9 happens:
+
+  | Device | IMU part | Session | Length | Req Hz | Got Hz | Δt median / p95 / p99 ms | Timebase | Non-monotonic | Warnings | Row |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | Samsung Galaxy A55 5G `SM-A556E`, Android 16 | STM LSM6DSVTR | `S-IDR-20260913-031148` | 246.6 s desk | 100 | 125.0 | 8.1 / 8.1 / 8.1 | `ELAPSED_REALTIME` | 0 | none | D-116 |
+  | same | same | `S-IDR-20260913-141119` | 1466.7 s desk | 100 | 125.02 (calibrated accel 220.8 — another client held it at 500 Hz early on) | 8.0 / 8.1 / 8.1 | `ELAPSED_REALTIME` | 0 | none | D-119 |
+  | same | same | drive | — | — | — | — | — | — | — | pending |
+
+- [x] This feeds seat S's Allan-variance log — it is the highest-priority Android task. — done on
+      the 24 min session (D-119): gyro ARW 0.56–1.19 °/√hr, VRW 0.07–0.15 m/s/√hr, gyro bias
+      instability 18.6 °/hr, recorded in `eval/figures/device/` next to IO-VNBD's and **not**
+      substituted for them: no segment passed the quiet gate, so they describe a phone on a desk.
 
 ### C — Field data & submission
 

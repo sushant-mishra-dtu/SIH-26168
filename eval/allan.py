@@ -4,6 +4,11 @@ Seeds the InEKF process noise `Q_c` from the sensors that produced the graded da
 from a teammate's phone on a desk (D-038). Everything here reads through the guarded `S-` loader;
 there is no path in this file to the `V-` stream.
 
+The teammate's phone can still be *measured* -- the logger's raw sidecar (`<id>_raw_imu.csv`,
+`eval.loaders.android_raw`) goes through the same segment finder and estimator at the rate it was
+recorded, and its artefacts go to a directory of their own, never into `eval/figures/` beside the
+IO-VNBD ones (android/HANDOVER.md section 9 item 7).
+
 **What the numbers mean.** For a rate signal `x` sampled at `dt`, the overlapping Allan deviation
 `sigma(tau)` decomposes the noise by averaging time:
 
@@ -35,6 +40,11 @@ import numpy as np
 import pandas as pd
 
 from core.reference.inekf import FilterConfig
+from eval.loaders.android_raw import (
+    GYRO_BIAS_AXES,
+    is_raw_imu_sidecar,
+    load_raw_imu_sidecar,
+)
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence, load_sequence
 from idr.stamp import seed_everything
 
@@ -110,12 +120,21 @@ class StationarySegment:
         return self.duration_s * MAX_TAU_FRACTION
 
 
-def imu_arrays(seq: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def imu_arrays(
+    seq: Sequence, *, bias_compensated: bool = False
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pull `(t_s, accel, gyro)` out of a loaded sequence as float arrays.
 
     Rows with a non-finite timestamp or sample are dropped rather than interpolated: a synthesised
     IMU sample inside an Allan run is indistinguishable from a real one and biases sigma(tau)
     downward at exactly the taus we care about.
+
+    `bias_compensated` subtracts the OS gyro-bias estimate when the sequence carries one (a raw
+    sidecar from `android/`, `eval.loaders.android_raw`). IO-VNBD's `GYROSCOPE` is already the
+    calibrated type, so for it the flag is a no-op. The stationarity gate asks for the compensated
+    stream -- a static bias is not motion -- and the curve asks for the raw one, because the
+    second difference does not see a constant offset but does see the vendor estimate stepping.
+    The rows kept are the same either way, so indices found on one address the other.
     """
     imu = seq.imu
     missing = [c for c in (*ACCEL_AXES, *GYRO_AXES, "time_since_start_ms") if c not in imu.columns]
@@ -127,7 +146,19 @@ def imu_arrays(seq: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     gyro = imu[list(GYRO_AXES)].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
 
     keep = np.isfinite(t) & np.isfinite(accel).all(axis=1) & np.isfinite(gyro).all(axis=1)
+    if all(c in imu.columns for c in GYRO_BIAS_AXES):
+        bias = imu[list(GYRO_BIAS_AXES)].apply(pd.to_numeric, errors="coerce")
+        bias = bias.to_numpy(dtype=float)
+        keep &= np.isfinite(bias).all(axis=1)
+        if bias_compensated:
+            gyro = gyro - bias
     return t[keep], accel[keep], gyro[keep]
+
+
+def sample_rate_hz(seq: Sequence) -> float:
+    """The rate the stationarity window is sized in. IO-VNBD is 10 Hz by protocol; a device
+    sidecar carries the rate it was measured at."""
+    return float(getattr(seq, "sample_rate_hz", SAMPLE_RATE_HZ))
 
 
 def _rolling_mean(x: np.ndarray, window: int) -> np.ndarray:
@@ -165,10 +196,17 @@ def find_stationary_segments(
     burst-mode section whose timestamps repeat at ~1 ms. Allan variance assumes a uniform grid, so
     a run is rejected if it holds a gap over `max_gap_s` or more than `max_duplicate_dt_fraction`
     non-advancing timestamps.
+
+    The window is `window_s` of *samples at the sequence's own rate* (`sample_rate_hz`), so a
+    125 Hz sidecar is judged over the same ten seconds as a 10 Hz file. The thresholds are not
+    rescaled with the rate: per-sample noise at 125 Hz exceeds a 10 Hz sample-and-hold of the same
+    part only if the extra bandwidth carries energy, and if it does, that energy is real and the
+    segment is not quiet. A gate that passed a desk at 125 Hz by loosening itself would be
+    measuring its own tolerance.
     """
     cfg = cfg or FilterConfig()
-    t, accel, gyro = imu_arrays(seq)
-    window = max(2, int(round(window_s * SAMPLE_RATE_HZ)))
+    t, accel, gyro = imu_arrays(seq, bias_compensated=True)
+    window = max(2, int(round(window_s * sample_rate_hz(seq))))
     if len(t) < 2 * window:
         return []
 
@@ -637,9 +675,28 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         parser.error("give at least one path, or --paths-from")
 
+    # A device sidecar is recorded *next to* the IO-VNBD artefacts, never over them (D-038,
+    # D-045): the seeds in FilterConfig come from the sensors that produced the graded data.
+    if Path(args.out_dir) == Path(parser.get_default("out_dir")) and any(
+        Path(p).is_file() and is_raw_imu_sidecar(p) for p in paths
+    ):
+        parser.error(
+            "a raw sidecar from android/ must not write into eval/figures/ -- pass --out-dir "
+            "(for example eval/figures/device/<session-id>)"
+        )
+
     for raw in paths:
         path = Path(raw)
-        seq = load_sequence(path)
+        if is_raw_imu_sidecar(path):
+            seq = load_raw_imu_sidecar(path)
+            print(
+                f"{seq.name}: raw sidecar, {seq.n_samples} paired samples at "
+                f"{seq.sample_rate_hz:.2f} Hz over {seq.duration_s:.1f} s, "
+                f"{seq.n_unpaired} unpaired rows dropped, "
+                f"{seq.n_gyro_bias_updates} OS gyro-bias updates"
+            )
+        else:
+            seq = load_sequence(path)
         loaded[seq.name] = seq
         found = find_stationary_segments(seq, min_duration_s=args.min_duration_s)
         for s in found:

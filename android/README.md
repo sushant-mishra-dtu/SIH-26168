@@ -229,7 +229,7 @@ files off and where the numbers go — is [HANDOVER.md](HANDOVER.md) §9.
 
 ## Status
 
-Updated 13 Sep 2026 (D-116): **Installed and verified on physical hardware (Samsung Galaxy A55 5G, `SM-A556E`).**
+Updated 13 Sep 2026 (D-116, D-119): **Installed and verified on physical hardware (Samsung Galaxy A55 5G, `SM-A556E`); replay view seen on it; Allan run done.**
 
 | Claim | As of | How to check |
 |---|---|---|
@@ -238,9 +238,17 @@ Updated 13 Sep 2026 (D-116): **Installed and verified on physical hardware (Sams
 | CSV schema matches the harness loader | `tests/test_android_logger_schema.py` | `pytest tests/test_android_logger_schema.py` |
 | Installed on a device | **13 Sep 2026** | `Samsung SM-A556E` over wireless debugging |
 | Achieved rate and jitter per team device | **125.0 Hz, 8.1 ms Δt p95** | `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` (D-116) |
+| 24 min stationary session, zero warnings, zero dropped rows | **13 Sep 2026, 1466.7 s, 125.02 Hz** | `android/measured/S-IDR-20260913-141119-samsung-sm-a556e_session.json` (D-119) |
+| Allan figures for this phone, next to IO-VNBD's | **gyro ARW 0.56–1.19 °/√hr, VRW 0.07–0.15 m/s/√hr, gyro B 18.6 °/hr — desk, not quiet** | `python -m eval.allan sessions/<id>/<id>_raw_imu.csv --out-dir eval/figures/device/<id>`; artefacts in `eval/figures/device/` (D-119) |
+| Replay view renders a real `eval/run.py` record on the phone | **13 Sep 2026** | [HANDOVER.md](HANDOVER.md) §3a; a wrong `schema` is refused with a dialog |
 
 The stationary recording deliverable ([HANDOVER.md](HANDOVER.md) §9 item 1) is closed for the team
 Galaxy A55 5G: STM LSM6DSVTR IMU delivers 125.0 Hz continuously with zero non-monotonic events,
-zero rate-limit warnings, and 8.1 ms median/p95 Δt jitter under `ELAPSED_REALTIME`. Real drive logging
-(item 2) remains to measure thermal throttling under sustained motion.
+zero rate-limit warnings, and 8.1 ms median/p95 Δt jitter under `ELAPSED_REALTIME`. The 24-minute
+session behind D-119 held 125.02 Hz on every uncalibrated stream for its whole length; the
+calibrated `accelerometer` stream alone ran at 500 Hz for its first minutes (220.8 Hz over the
+session) because another client on the phone held it there — the sidecar the Allan run reads is
+the uncalibrated stream and was unaffected. Real drive logging (item 2) remains to measure thermal
+throttling under sustained motion, and a car seat with the engine off is the recording that would
+give the Allan gate a *quiet* segment; a desk with a PC on it does not.
 

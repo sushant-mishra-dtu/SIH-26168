@@ -23,6 +23,8 @@ Verifiable, not remembered:
 | The logger module exists — 17 main sources, 3,128 lines | `find android/app/src/main -name "*.kt" \| xargs wc -l` |
 | A second app exists at `android-ui/` — 8 sources, 1,184 lines | `find android-ui/app/src/main -name "*.kt" \| xargs wc -l`, and §8 below |
 | Stationary session recorded & committed | `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` (D-116) |
+| **24 min stationary session for the Allan run, recorded & committed** | `android/measured/S-IDR-20260913-141119-samsung-sm-a556e_session.json`, curves in `eval/figures/device/S-IDR-20260913-141119-samsung-sm-a556e/` (D-119) |
+| **Replay view seen rendering a real record on the phone** | 13 Sep 2026, `trajectory_S3a.json` from a full `eval/run.py` sweep; wrong `schema` refused with a dialog (§3a, §9 item 4) |
 | **Drive logging pending** | stationary run done; car drive observation remaining (§9 item 2) |
 | **Installed on a phone** | installed on Samsung Galaxy A55 5G (`SM-A556E`) on 13 Sep 2026 |
 | The CSV schema is pinned to the harness loader | `pytest tests/test_android_logger_schema.py` |
@@ -103,8 +105,15 @@ runs, reads both modules as text, and has been checked against ten reintroduced 
 than merely observed to pass. Neither has ever seen the view render a real file on a phone: the
 record loads through SAF, and no one has opened one.
 
-**Still open here:** load a `trajectory_*.json` from an actual `eval/run.py` run on a device and
-look at it. It has been unit-tested, not seen.
+**Closed 13 Sep 2026.** A full `python -m eval.run` sweep (6.5 min on the dev box) wrote
+`trajectory_S3a.json`; pushed to `/sdcard/Download/` and opened through *Load JSON...* on the A55,
+the view drew the four tracks, the dashed 1σ ellipse shrinking as the scrubber moved from 60 s
+(σ 65.2 / 53.5 m) back to 30 s (33.7 / 52.0 m), the drift / yaw readouts from the record, the
+sensor traces and the D-081 caption verbatim. The stamp line printed `NOT REPRODUCIBLE`, correctly:
+the sweep ran on a dirty tree. A copy with `schema` set to `idr-trajectory/2` produced the
+*Invalid Trajectory Record* dialog and left the loaded record untouched behind it. The only fix
+needed was one the emulator could not have shown: on Android 15+ the activity draws edge-to-edge,
+so `fitsSystemWindows` went on both root layouts to keep the title out from under the status bar.
 
 <details>
 <summary>The original brief, kept because it is the argument for what was built</summary>
@@ -329,12 +338,12 @@ it says so.
 |---|---|---|---|
 | 1 | **Run the logger on a phone: stationary recording on every team device** (§9.1–9.4) | nothing — one phone, one afternoon | **DONE (Samsung SM-A556E, 13 Sep 2026, D-116)** — `android/measured/S-IDR-20260913-031148-samsung-sm-a556e_session.json` committed (125.0 Hz, 8.1 ms Δt p95) |
 | 2 | **Record one real drive** (§9.5), including the battery/thermal observation | item 1, a car, a mount | a drive-length sidecar per device, achieved rate over time noted |
-| 3 | **Get the files off, validate, and write the numbers down** (§9.6–9.7) | items 1–2 | **Partially done (stationary run)**: D-116 row logged, sidecar committed; drive numbers pending |
-| 4 | **See the replay view render a real trajectory record on a device** (§9.8) | a full `eval/run.py` run, which writes `trajectory_<seq>.json` | four tracks + ellipse + the D-081 caption on screen; a wrong `schema` string refused visibly |
+| 3 | **Get the files off, validate, and write the numbers down** (§9.6–9.7) | items 1–2 | **Done for the stationary runs**: D-116 and D-119 rows, both sidecars in `android/measured/`, `docs/SPRINT_BOARD.md` §A ticked with the per-device table; drive numbers pending on item 2 |
+| 4 | **See the replay view render a real trajectory record on a device** (§9.8) | a full `eval/run.py` run, which writes `trajectory_<seq>.json` | **DONE (13 Sep 2026, §3a)** — four tracks, ellipse, D-081 caption on the A55; `idr-trajectory/2` refused with a dialog |
 | 5 | **CI uploads the debug APK** | nothing | **DONE** — `actions/upload-artifact` in `.github/workflows/android.yml` for logger and operator UI APKs |
 | 6 | **Decide `android-ui/`, then act on it** (§7, §8 q1) | a decision, not code | either its Compose screens live under the one Gradle root at `android/` with one application id, or the directory is deleted — and `tests/test_android_demo_surface.py` is updated to match, since it currently reads both roots |
 
-| 7 | **Allan run on our own hardware** from the `_raw_imu.csv` sidecar | items 1–2 (a long stationary segment, ≥ 20 min if the phone can be left on a desk that long) | `eval/allan.py` over the raw sidecar produces ARW / bias-instability figures for the team phone; recorded next to IO-VNBD's (D-038, D-045) and never substituted for them |
+| 7 | **Allan run on our own hardware** from the `_raw_imu.csv` sidecar | items 1–2 (a long stationary segment, ≥ 20 min if the phone can be left on a desk that long) | **DONE (13 Sep 2026, D-119)** — 24.4 min desk session, `eval/allan.py` reads the sidecar at 125 Hz via `eval/loaders/android_raw.py`; gyro ARW 0.56–1.19 °/√hr, accel VRW 0.07–0.15 m/s/√hr, gyro B 18.6 °/hr, in `eval/figures/device/`; **no segment passed the quiet gate**, so the figures describe the desk-mounted phone and `FilterConfig` is untouched. Redo on a car seat with the engine off for a quiet one |
 | 8 | **Road geometry under the replay track, offline** (§3b) | `maps/` — designed and sized, no code, no extract format defined | a static geometry file drawn under `TrajectoryMapView`, captioned as fixed geometry and not as a match; no network, no tiles (D-041, D-080) |
 | 9 | **Instrumented test for the `startRecording` partial-failure path** (§4 item 4) | a decision to add Robolectric or an `androidTest` source set | a failed start leaves no foreground notification and no half-written session; test runs in CI |
 | 10 | **Play Store readiness — only if the app is ever listed** (§4 item 7, §8 q5) | the listing decision | `HIGH_SAMPLING_RATE_SENSORS` justification, `foregroundServiceType` use case, privacy policy for location; **or** a line in `android/README.md` saying side-load only, and this item closed |
@@ -360,7 +369,11 @@ phone; the first person to follow it should correct it in place.
   useless here: it has no real sensor clock and no GNSS.
 - **USB debugging** on the phone: *Settings → About phone → tap Build number seven times →
   Developer options → USB debugging.* Then `adb devices` shows it. On this machine `adb` is at
-  `C:\Android\platform-tools\adb`.
+  `C:\Android\platform-tools\adb`. **Wireless debugging works too and is how the team A55 is
+  attached** (13 Sep): pair once from *Developer options → Wireless debugging*, and on later days
+  `adb mdns services` lists it as `_adb-tls-connect._tcp` and `adb devices` connects on its own
+  — no cable, no re-pairing, the port changes every time and does not matter. Give it a few
+  seconds after the daemon starts; the first `adb devices` after `adb start-server` is empty.
 - **A build**, from one of two places:
   - locally, after the §6 environment fix on Windows: `cd android && ./gradlew :app:installDebug`
     builds and installs in one step over USB;
@@ -435,7 +448,18 @@ should name alongside `device.model`.
 
 Do this on every team phone before anyone drives. It takes five minutes per device and it is the
 deliverable; the drive is the second recording, not the first. If a phone can be left on a desk
-for 20 minutes or more, do that once too — it is the stationary segment item 7 needs.
+for 20 minutes or more, do that once too — it is the stationary segment item 7 needs. Then run
+it through the same tool that produced the IO-VNBD seeds, into a directory of its own:
+
+```bash
+python -m eval.allan sessions/<id>/<id>_raw_imu.csv --out-dir eval/figures/device/<id>
+```
+
+It reads the sidecar at the rate it was recorded, gates stationarity on the bias-compensated gyro
+and computes the curve on the raw one (`eval/loaders/android_raw.py` says why), and refuses to
+write into `eval/figures/` itself. Expect `quiet NO` on a desk with a PC on it: D-045's gate is
+answering whether the record measures the sensor or the surface, and a desk is not a parked car
+either. `--include-noisy` then draws the curves anyway, labelled as describing the desk.
 
 ### 9.5 The drive
 
@@ -469,7 +493,10 @@ or a USB stick. That is the path that always works.
 
 `adb pull /sdcard/Android/data/org.idr26168.logger.debug/files/sessions/ ./sessions/` is the fast
 path over a cable; on Android 13+ some vendors deny the shell user access to `Android/data` and it
-fails with *Permission denied*, in which case use Export Zip.
+fails with *Permission denied*, in which case use Export Zip. The A55 on Android 16 allows it, over
+wireless debugging too. **From Git Bash, prefix adb with `MSYS_NO_PATHCONV=1`**: it otherwise
+rewrites `/sdcard/...` into `C:/Program Files/Git/sdcard/...` before adb sees it, and `adb shell
+ls` answers *No such file or directory* for a path that exists.
 
 Then, on a laptop, the two checks that turn a folder into a result:
 
