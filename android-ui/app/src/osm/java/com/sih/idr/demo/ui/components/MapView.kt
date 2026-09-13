@@ -15,7 +15,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Remove
@@ -32,8 +35,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.errorEllipse
+import com.sih.idr.demo.backend.routing.NavigationRoute
 import com.sih.idr.demo.backend.tunnel.TunnelState
+import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.glassmorphic
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -74,6 +80,19 @@ fun MapView(
             var smoothedCamLat = 0.0
             var smoothedCamLon = 0.0
             var smoothedHeadingDeg = 0f
+        }
+    }
+
+    // Render cache to eliminate 30 Hz heap churn, tile flashing, and micro-stutter tearing
+    val renderCache = remember {
+        object {
+            var lastDarkFilter: Boolean? = null
+            var lastActiveRoute: NavigationRoute? = null
+            var lastPathSize: Int = -1
+            var cachedPathPoints: ArrayList<GeoPoint> = ArrayList()
+            var lastRenderedLat = 0.0
+            var lastRenderedLon = 0.0
+            var lastRenderedHeading = -999f
         }
     }
 
@@ -157,6 +176,7 @@ fun MapView(
                 OsmMapView(ctx).apply {
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
+                    zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                     isTilesScaledToDpi = true
                     controller.setZoom(18.0)
                     controller.setCenter(GeoPoint(telemetry.latitude, telemetry.longitude))
@@ -196,15 +216,22 @@ fun MapView(
                 }
                 val effectiveHeading = smoother.smoothedHeadingDeg
 
-                // 2. Dark/Night mode tile filter
-                osmView.overlayManager.tilesOverlay.setColorFilter(if (isDark) nightFilter else null)
+                // 2. Dark/Night mode tile filter (cached to eliminate tile flickering)
+                if (renderCache.lastDarkFilter != isDark) {
+                    renderCache.lastDarkFilter = isDark
+                    osmView.overlayManager.tilesOverlay.setColorFilter(if (isDark) nightFilter else null)
+                }
 
                 // 3. Camera Orientation: Course-Up vs North-Up
                 if (courseUpMode) {
-                    osmView.mapOrientation = -effectiveHeading
+                    if (osmView.mapOrientation != -effectiveHeading) {
+                        osmView.mapOrientation = -effectiveHeading
+                    }
                     vehicleMarker.rotation = 0f // Straight ahead in course-up
                 } else {
-                    osmView.mapOrientation = 0f
+                    if (osmView.mapOrientation != 0f) {
+                        osmView.mapOrientation = 0f
+                    }
                     vehicleMarker.rotation = effectiveHeading // Rotates relative to north
                 }
 
@@ -215,62 +242,79 @@ fun MapView(
                 //    demo estimator it is a circle, because that estimator carries one scalar.
                 if (telemetry.running && telemetry.uncertaintyM > 0f) {
                     uncertaintyPolygon.points = ellipseGeoPoints(telemetry)
-                    if (telemetry.tunnelModeActive || telemetry.uncertaintyM > 25f) {
-                        uncertaintyPolygon.fillPaint.color = 0x25D97706.toInt() // Amber fill
-                        uncertaintyPolygon.outlinePaint.color = 0x88D97706.toInt() // Amber stroke
-                    } else {
-                        uncertaintyPolygon.fillPaint.color = if (isDark) 0x2510B981.toInt() else 0x1A16A34A.toInt()
-                        uncertaintyPolygon.outlinePaint.color = if (isDark) 0x8810B981.toInt() else 0x8816A34A.toInt()
-                    }
-                } else {
+                    val inTunnelOrHighUncertainty = telemetry.tunnelModeActive || telemetry.uncertaintyM > 25f
+                    val targetFill = if (inTunnelOrHighUncertainty) 0x25D97706.toInt() else if (isDark) 0x2510B981.toInt() else 0x1A16A34A.toInt()
+                    val targetOutline = if (inTunnelOrHighUncertainty) 0x88D97706.toInt() else if (isDark) 0x8810B981.toInt() else 0x8816A34A.toInt()
+                    if (uncertaintyPolygon.fillPaint.color != targetFill) uncertaintyPolygon.fillPaint.color = targetFill
+                    if (uncertaintyPolygon.outlinePaint.color != targetOutline) uncertaintyPolygon.outlinePaint.color = targetOutline
+                } else if (uncertaintyPolygon.points.isNotEmpty()) {
                     uncertaintyPolygon.points = ArrayList()
                 }
 
-                // 6. Update trajectory path
+                // 6. Update trajectory path (buffered to avoid 30 Hz heap churn)
                 val latPerMetre = 1.0 / 111_320.0
                 val lonPerMetre = 1.0 / (111_320.0 * cos(Math.toRadians(telemetry.originLat)))
                 val oLat = telemetry.originLat
                 val oLon = telemetry.originLon
 
                 if (telemetry.running && (telemetry.path.isNotEmpty() || telemetry.totalDistanceM > 0f)) {
-                    val pathPoints = ArrayList<GeoPoint>(telemetry.path.size + 1)
-                    for (p in telemetry.path) {
-                        pathPoints.add(GeoPoint(oLat + p.northM * latPerMetre, oLon + p.eastM * lonPerMetre))
+                    if (telemetry.path.size != renderCache.lastPathSize) {
+                        renderCache.lastPathSize = telemetry.path.size
+                        val pathPoints = ArrayList<GeoPoint>(telemetry.path.size + 1)
+                        for (p in telemetry.path) {
+                            pathPoints.add(GeoPoint(oLat + p.northM * latPerMetre, oLon + p.eastM * lonPerMetre))
+                        }
+                        pathPoints.add(currentPoint)
+                        renderCache.cachedPathPoints = pathPoints
+                        polyline.setPoints(pathPoints)
+                    } else if (renderCache.cachedPathPoints.isNotEmpty()) {
+                        renderCache.cachedPathPoints[renderCache.cachedPathPoints.size - 1] = currentPoint
+                        polyline.setPoints(renderCache.cachedPathPoints)
                     }
-                    pathPoints.add(currentPoint)
-                    polyline.setPoints(pathPoints)
-                } else {
+                } else if (renderCache.lastPathSize != 0) {
+                    renderCache.lastPathSize = 0
+                    renderCache.cachedPathPoints.clear()
                     polyline.setPoints(ArrayList())
                 }
-                polyline.outlinePaint.color = if (isDark) {
+                val targetTrackColor = if (isDark) {
                     android.graphics.Color.parseColor("#38BDF8")
                 } else {
                     android.graphics.Color.parseColor("#2563EB")
                 }
+                if (polyline.outlinePaint.color != targetTrackColor) {
+                    polyline.outlinePaint.color = targetTrackColor
+                }
 
-                // 6b. Update active route polyline and destination marker
+                // 6b. Update active route polyline and destination marker (cached on route change)
                 val activeRoute = telemetry.activeRoute
-                if (activeRoute != null && activeRoute.points.isNotEmpty()) {
-                    val rPoints = ArrayList<GeoPoint>(activeRoute.points.size)
-                    for (p in activeRoute.points) {
-                        rPoints.add(GeoPoint(p.latitude, p.longitude))
+                if (activeRoute !== renderCache.lastActiveRoute) {
+                    renderCache.lastActiveRoute = activeRoute
+                    if (activeRoute != null && activeRoute.points.isNotEmpty()) {
+                        val rPoints = ArrayList<GeoPoint>(activeRoute.points.size)
+                        for (p in activeRoute.points) {
+                            rPoints.add(GeoPoint(p.latitude, p.longitude))
+                        }
+                        routePolyline.setPoints(rPoints)
+                        destMarker.position = GeoPoint(activeRoute.destinationCoord.latitude, activeRoute.destinationCoord.longitude)
+                        destMarker.isEnabled = true
+                    } else {
+                        routePolyline.setPoints(ArrayList())
+                        destMarker.isEnabled = false
                     }
-                    routePolyline.setPoints(rPoints)
+                }
 
+                if (activeRoute != null) {
                     val inTunnel = telemetry.tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
-                    routePolyline.outlinePaint.color = if (inTunnel) {
+                    val targetRouteColor = if (inTunnel) {
                         android.graphics.Color.parseColor("#00E5FF")
                     } else if (isDark) {
                         android.graphics.Color.parseColor("#38BDF8")
                     } else {
                         android.graphics.Color.parseColor("#008CFF")
                     }
-
-                    destMarker.position = GeoPoint(activeRoute.destinationCoord.latitude, activeRoute.destinationCoord.longitude)
-                    destMarker.isEnabled = true
-                } else {
-                    routePolyline.setPoints(ArrayList())
-                    destMarker.isEnabled = false
+                    if (routePolyline.outlinePaint.color != targetRouteColor) {
+                        routePolyline.outlinePaint.color = targetRouteColor
+                    }
                 }
 
                 // 7. Navigation Lookahead Lead & Continuous Camera Gliding (Google Maps style)
@@ -309,28 +353,27 @@ fun MapView(
                     }
                 }
 
-                osmView.invalidate()
+                // 8. Differential invalidation: only redraw canvas when delta is visually meaningful
+                val dRenderLat = abs(telemetry.latitude - renderCache.lastRenderedLat)
+                val dRenderLon = abs(telemetry.longitude - renderCache.lastRenderedLon)
+                val dRenderHeading = abs(effectiveHeading - renderCache.lastRenderedHeading)
+                if (dRenderLat > 0.0000005 || dRenderLon > 0.0000005 || dRenderHeading > 0.2f) {
+                    osmView.invalidate()
+                    renderCache.lastRenderedLat = telemetry.latitude
+                    renderCache.lastRenderedLon = telemetry.longitude
+                    renderCache.lastRenderedHeading = effectiveHeading
+                }
             }
         )
 
-        // ── Floating Zoom Controls (Comfortably centered on right edge) ──
-        Column(
+        // ── Floating Zoom Capsule (Apple Maps / Tesla style) ──
+        ZoomCapsule(
+            onZoomIn = { mapViewInstance?.controller?.zoomIn() },
+            onZoomOut = { mapViewInstance?.controller?.zoomOut() },
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Zoom In Button (+)
-            MapControlButton(icon = Icons.Rounded.Add, contentDescription = "Zoom In") {
-                mapViewInstance?.controller?.zoomIn()
-            }
-
-            // Zoom Out Button (−)
-            MapControlButton(icon = Icons.Rounded.Remove, contentDescription = "Zoom Out") {
-                mapViewInstance?.controller?.zoomOut()
-            }
-        }
+                .padding(end = 16.dp)
+        )
 
         // ── Google Maps Floating "Re-center" Button (Cleanly floating above bottom sheet) ──
         AnimatedVisibility(
@@ -339,7 +382,7 @@ fun MapView(
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 360.dp)
+                .padding(bottom = 124.dp)
         ) {
             RecenterPill(onClick = {
                 followVehicle = true

@@ -5,7 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,7 +19,6 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sih.idr.demo.backend.TunnelExitSummary
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -68,13 +68,17 @@ fun ReconvergenceToast(
         val s = shown ?: return@AnimatedVisibility
         val forced = s.reacquiredByForce
         val accent = if (forced) palette.statusWarn else palette.statusOk
-        Surface(
-            color = palette.bgSheet,
-            shape = RoundedCornerShape(16.dp),
-            shadowElevation = 8.dp,
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                .glassmorphic(
+                    shape = RoundedCornerShape(16.dp),
+                    backgroundColor = palette.glassSurface,
+                    borderColor = accent.copy(alpha = 0.6f),
+                    borderWidth = 1.dp,
+                    glowColor = accent.copy(alpha = 0.25f),
+                    glowRadius = 8.dp
+                )
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

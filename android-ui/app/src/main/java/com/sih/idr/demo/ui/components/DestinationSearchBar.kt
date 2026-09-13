@@ -1,6 +1,7 @@
 package com.sih.idr.demo.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -30,7 +32,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
@@ -42,6 +43,7 @@ import com.sih.idr.demo.backend.routing.RouteService
 import com.sih.idr.demo.backend.routing.SearchItem
 import com.sih.idr.demo.backend.routing.SearchPreset
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -58,7 +60,8 @@ fun DestinationSearchBar(
     userLat: Double,
     userLon: Double,
     onSelectDestination: (SearchItem) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onExpandedChange: (Boolean) -> Unit = {}
 ) {
     val palette = LocalIDRPalette.current
     val focusManager = LocalFocusManager.current
@@ -69,6 +72,11 @@ fun DestinationSearchBar(
     var suggestions by remember { mutableStateOf<List<SearchItem>>(emptyList()) }
     var isExpanded by remember { mutableStateOf(false) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
+
+    // Notify parent of dropdown expansion state
+    LaunchedEffect(isExpanded, suggestions.size) {
+        onExpandedChange(isExpanded && suggestions.isNotEmpty())
+    }
 
     // Initialise suggestions from presets
     LaunchedEffect(selectedCategory, userLat, userLon) {
@@ -92,10 +100,15 @@ fun DestinationSearchBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(12.dp, RoundedCornerShape(20.dp), spotColor = palette.textDim)
-            .clip(RoundedCornerShape(20.dp))
-            .background(palette.bgCard)
-            .border(1.dp, palette.border, RoundedCornerShape(20.dp))
+            .animateContentSize()
+            .glassmorphic(
+                shape = RoundedCornerShape(22.dp),
+                backgroundColor = palette.glassSurface,
+                borderWidth = 1.dp,
+                borderColor = palette.glassBorder,
+                glowColor = Color.Transparent,
+                glowRadius = 4.dp
+            )
     ) {
         // ── Main Search Input Bar ──────────────────────────────────
         Row(
@@ -171,15 +184,15 @@ fun DestinationSearchBar(
             items(SearchPreset.CATEGORIES) { category ->
                 val isSelected = selectedCategory == category
                 Surface(
-                    color = if (isSelected) palette.primary.copy(alpha = 0.20f) else palette.bgPrimary,
-                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSelected) palette.primary.copy(alpha = 0.20f) else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .border(
                             width = 1.dp,
-                            color = if (isSelected) palette.primary else palette.border,
-                            shape = RoundedCornerShape(14.dp)
+                            color = if (isSelected) palette.primary.copy(alpha = 0.8f) else palette.glassBorder,
+                            shape = RoundedCornerShape(12.dp)
                         )
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable {
                             selectedCategory = category
                             suggestions = SearchPreset.findPresets(query, category, userLat, userLon)
@@ -216,7 +229,16 @@ fun DestinationSearchBar(
                     .heightIn(max = 240.dp)
                     .padding(top = 4.dp, bottom = 6.dp)
             ) {
-                items(suggestions, key = { it.id }) { item ->
+                itemsIndexed(suggestions, key = { _, it -> it.id }) { index, item ->
+                    if (index > 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp)
+                                .height(0.8.dp)
+                                .background(palette.border.copy(alpha = 0.35f))
+                        )
+                    }
                     val distM = SearchPreset.distanceBetweenM(
                         userLat,
                         userLon,

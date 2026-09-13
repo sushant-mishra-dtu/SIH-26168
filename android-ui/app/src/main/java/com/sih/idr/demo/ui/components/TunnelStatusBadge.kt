@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 import kotlin.math.roundToInt
 
 /**
@@ -48,12 +49,16 @@ fun TunnelStatusBadge(
         exit = fadeOut() + slideOutVertically { -it / 2 },
         modifier = modifier
     ) {
-        Surface(
-            color = palette.bgCard,
-            shape = RoundedCornerShape(24.dp),
+        Box(
             modifier = Modifier
-                .shadow(8.dp, RoundedCornerShape(24.dp), spotColor = Color(0xFFD97706))
-                .border(1.5.dp, Color(0xFFD97706).copy(alpha = 0.85f), RoundedCornerShape(24.dp))
+                .glassmorphic(
+                    shape = RoundedCornerShape(24.dp),
+                    backgroundColor = palette.glassSurface,
+                    borderWidth = 1.2.dp,
+                    borderColor = Color(0xFFD97706).copy(alpha = 0.85f),
+                    glowColor = Color(0x33D97706),
+                    glowRadius = 8.dp
+                )
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),

@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 
 /**
  * Ambient light threshold in lux below which the "Low light" hazard chip is raised (R-F).
@@ -132,14 +134,16 @@ private fun HazardChipItem(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalIDRPalette.current
-    Surface(
-        color = palette.statusWarn.copy(alpha = 0.18f),
-        shape = RoundedCornerShape(14.dp),
-        modifier = modifier.border(
-            1.dp,
-            palette.statusWarn.copy(alpha = 0.8f),
-            RoundedCornerShape(14.dp)
-        )
+    Box(
+        modifier = modifier
+            .glassmorphic(
+                shape = RoundedCornerShape(14.dp),
+                backgroundColor = palette.statusWarn.copy(alpha = 0.18f),
+                borderWidth = 1.dp,
+                borderColor = palette.statusWarn.copy(alpha = 0.8f),
+                glowColor = palette.statusWarn.copy(alpha = 0.25f),
+                glowRadius = 4.dp
+            )
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),

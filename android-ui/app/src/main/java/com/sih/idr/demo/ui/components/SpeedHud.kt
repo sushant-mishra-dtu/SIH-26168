@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -88,115 +89,114 @@ fun SpeedHud(
     val sweepAngle = fraction * SpeedGaugeConstants.SWEEP_ANGLE_DEG
     val arcColor = if (isOverLimit) palette.statusWarn else palette.primary
 
-    Surface(
-        modifier = modifier.size(96.dp),
-        shape = CircleShape,
-        color = palette.bgCard.copy(alpha = 0.92f),
-        shadowElevation = 6.dp,
-        border = BorderStroke(1.dp, palette.border)
+    Box(
+        modifier = modifier
+            .size(88.dp)
+            .glassmorphic(
+                shape = CircleShape,
+                backgroundColor = palette.glassSurface,
+                borderWidth = 1.dp,
+                borderColor = if (isOverLimit) palette.statusWarn else palette.glassBorder
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(6.dp)
         ) {
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(8.dp)
-            ) {
-                val strokeWidth = 6.dp.toPx()
-                val diameter = size.minDimension - strokeWidth
-                val topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
-                val arcSize = Size(diameter, diameter)
+            val strokeWidth = 4.5.dp.toPx()
+            val diameter = size.minDimension - strokeWidth
+            val topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
+            val arcSize = Size(diameter, diameter)
 
-                // Background track arc (sweeps 240° from 150°)
+            // Background track arc (sweeps 240° from 150°)
+            drawArc(
+                color = palette.border.copy(alpha = 0.4f),
+                startAngle = SpeedGaugeConstants.START_ANGLE_DEG,
+                sweepAngle = SpeedGaugeConstants.SWEEP_ANGLE_DEG,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+            )
+
+            // Active speed filled arc
+            if (sweepAngle > 0.5f) {
                 drawArc(
-                    color = palette.border.copy(alpha = 0.55f),
+                    color = arcColor,
                     startAngle = SpeedGaugeConstants.START_ANGLE_DEG,
-                    sweepAngle = SpeedGaugeConstants.SWEEP_ANGLE_DEG,
+                    sweepAngle = sweepAngle,
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
                     style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
                 )
-
-                // Active speed filled arc
-                if (sweepAngle > 0.5f) {
-                    drawArc(
-                        color = arcColor,
-                        startAngle = SpeedGaugeConstants.START_ANGLE_DEG,
-                        sweepAngle = sweepAngle,
-                        useCenter = false,
-                        topLeft = topLeft,
-                        size = arcSize,
-                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                    )
-                }
-
-                // Posted speed limit tick on the arc
-                if (postedLimitKmh != null) {
-                    val tickDeg = limitTickAngleDeg(postedLimitKmh)
-                    val tickRad = Math.toRadians(tickDeg.toDouble())
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val radius = diameter / 2f
-                    val tickHalfLen = (strokeWidth / 2f) + 2.5.dp.toPx()
-
-                    val cosA = cos(tickRad).toFloat()
-                    val sinA = sin(tickRad).toFloat()
-
-                    val p1 = Offset(
-                        center.x + (radius - tickHalfLen) * cosA,
-                        center.y + (radius - tickHalfLen) * sinA
-                    )
-                    val p2 = Offset(
-                        center.x + (radius + tickHalfLen) * cosA,
-                        center.y + (radius + tickHalfLen) * sinA
-                    )
-
-                    drawLine(
-                        color = if (isOverLimit) palette.statusWarn else Color.White,
-                        start = p1,
-                        end = p2,
-                        strokeWidth = 2.5.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-                }
             }
 
-            // Center speed reading & caption
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            ) {
-                Text(
-                    text = "${animatedSpeedKmh.roundToInt()}",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = 24.sp
-                    ),
-                    color = if (isOverLimit) palette.statusWarn else palette.textPrimary
+            // Posted speed limit tick on the arc
+            if (postedLimitKmh != null) {
+                val tickDeg = limitTickAngleDeg(postedLimitKmh)
+                val tickRad = Math.toRadians(tickDeg.toDouble())
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val radius = diameter / 2f
+                val tickHalfLen = (strokeWidth / 2f) + 2.dp.toPx()
+
+                val cosA = cos(tickRad).toFloat()
+                val sinA = sin(tickRad).toFloat()
+
+                val p1 = Offset(
+                    center.x + (radius - tickHalfLen) * cosA,
+                    center.y + (radius - tickHalfLen) * sinA
                 )
-                Text(
-                    text = "km/h",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = 12.sp
-                    ),
-                    color = palette.textSecondary
+                val p2 = Offset(
+                    center.x + (radius + tickHalfLen) * cosA,
+                    center.y + (radius + tickHalfLen) * sinA
                 )
-                Text(
-                    text = "filter speed",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Normal,
-                        lineHeight = 11.sp
-                    ),
-                    color = palette.textDim
+
+                drawLine(
+                    color = if (isOverLimit) palette.statusWarn else Color.White,
+                    start = p1,
+                    end = p2,
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
                 )
             }
+        }
+
+        // Center speed reading & caption
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(top = 2.dp)
+        ) {
+            Text(
+                text = "${animatedSpeedKmh.roundToInt()}",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 24.sp
+                ),
+                color = if (isOverLimit) palette.statusWarn else palette.textPrimary
+            )
+            Text(
+                text = "km/h",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    lineHeight = 10.sp
+                ),
+                color = palette.textSecondary
+            )
+            Text(
+                text = "filter speed",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Normal,
+                    lineHeight = 10.sp
+                ),
+                color = palette.textDim
+            )
         }
     }
 }

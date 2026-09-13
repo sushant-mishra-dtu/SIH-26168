@@ -3,6 +3,7 @@ package com.sih.idr.demo.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,8 +28,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,6 +39,7 @@ import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.glassmorphic
 import kotlin.math.roundToInt
 
 /**
@@ -136,13 +138,25 @@ fun GuidanceBanner(
         label = "guidance_banner_bg"
     )
 
-    Surface(
-        color = animatedBgColor,
-        shape = RoundedCornerShape(20.dp),
+    val bannerGlowColor = when {
+        !telemetry.running -> Color.Transparent
+        tunnelState == TunnelState.TUNNEL_ACTIVE_IDR -> Color(0x3300E5FF)
+        tunnelState == TunnelState.EXIT_VERIFICATION -> Color(0x33F59E0B)
+        tunnelState == TunnelState.SEAMLESS_RECONVERGENCE -> Color(0x3310B981)
+        else -> Color(0x1A000000)
+    }
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(10.dp, RoundedCornerShape(20.dp), spotColor = Color.Black.copy(alpha = 0.35f))
-            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(20.dp))
+            .glassmorphic(
+                shape = RoundedCornerShape(20.dp),
+                backgroundColor = animatedBgColor.copy(alpha = if (isDark) 0.88f else 0.94f),
+                borderWidth = 1.dp,
+                borderColor = if (isDark) Color(0x4D38BDF8) else Color(0x33FFFFFF),
+                glowColor = bannerGlowColor,
+                glowRadius = 8.dp
+            )
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -162,21 +176,22 @@ fun GuidanceBanner(
                     animationSpec = spring(stiffness = 300f),
                     label = "heading_rot"
                 )
-                Surface(
-                    color = Color.White.copy(alpha = 0.25f),
-                    shape = CircleShape,
-                    modifier = Modifier.size(44.dp)
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.22f))
+                        .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.NearMe,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier
-                                .size(26.dp)
-                                .rotate(animatedHeading)
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Rounded.NearMe,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .size(26.dp)
+                            .rotate(animatedHeading)
+                    )
                 }
 
                 // Guidance text

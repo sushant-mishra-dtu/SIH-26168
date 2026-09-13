@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.routing.ManeuverType
 import com.sih.idr.demo.backend.routing.NavigationRoute
+import com.sih.idr.demo.ui.glassmorphic
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -50,32 +51,36 @@ fun NavigationHeader(
 ) {
     val currentStep = route.steps.getOrNull(stepIndex) ?: route.steps.firstOrNull()
 
-    // Rich emerald gradient for navigation banner
-    val emeraldTop = Color(0xFF0F766E)
-    val emeraldBottom = Color(0xFF047857)
+    // Frosted emerald glass brushes with specular sheen
+    val emeraldGlassBrush = Brush.verticalGradient(
+        colors = listOf(Color(0xE60F766E), Color(0xD9047857))
+    )
+    val emeraldBorderBrush = Brush.linearGradient(
+        colors = listOf(
+            Color(0xB334D399),
+            Color(0x6610B981),
+            Color(0x33064E3B)
+        )
+    )
     val animatedProgress by animateFloatAsState(
         targetValue = routeProgressFraction.coerceIn(0f, 1f),
         animationSpec = spring(stiffness = 300f),
         label = "route_progress"
     )
 
-    Surface(
-        shape = RoundedCornerShape(22.dp),
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(16.dp, RoundedCornerShape(22.dp), spotColor = Color(0xFF064E3B))
-            .border(1.2.dp, Color(0xFF34D399).copy(alpha = 0.55f), RoundedCornerShape(22.dp))
+            .glassmorphic(
+                shape = RoundedCornerShape(22.dp),
+                backgroundBrush = emeraldGlassBrush,
+                borderWidth = 1.2.dp,
+                borderBrush = emeraldBorderBrush,
+                glowColor = Color(0x33047857),
+                glowRadius = 10.dp
+            )
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(emeraldTop, emeraldBottom)
-                    )
-                )
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -204,4 +209,3 @@ fun NavigationHeader(
             }
         }
     }
-}

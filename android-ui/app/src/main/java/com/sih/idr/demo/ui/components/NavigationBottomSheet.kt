@@ -33,8 +33,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.routing.NavigationRoute
+import com.sih.idr.demo.backend.tunnel.TunnelOverride
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
+import com.sih.idr.demo.ui.glassmorphic
+import com.sih.idr.demo.ui.glassBorderBrush
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,19 +57,25 @@ fun NavigationBottomSheet(
     onStartStop: () -> Unit,
     onResetOrigin: () -> Unit,
     provenanceContent: @Composable () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    tunnelOverride: TunnelOverride = TunnelOverride.AUTO,
+    onSetTunnelOverride: (TunnelOverride) -> Unit = {}
 ) {
     val palette = LocalIDRPalette.current
     val isDark = LocalIsDarkTheme.current
     var isExpanded by remember { mutableStateOf(false) }
 
-    Surface(
-        color = palette.bgSheet,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-            .border(1.dp, palette.border, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+            .glassmorphic(
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                backgroundColor = palette.glassSurface,
+                borderBrush = glassBorderBrush(isDark = isDark, primaryColor = palette.primary),
+                borderWidth = 1.dp,
+                glowColor = palette.glassGlow,
+                glowRadius = 8.dp
+            )
     ) {
         Column(
             modifier = Modifier
@@ -218,8 +227,14 @@ fun NavigationBottomSheet(
                         onClick = { isExpanded = !isExpanded },
                         modifier = Modifier
                             .size(44.dp)
-                            .background(palette.bgCard, CircleShape)
-                            .border(1.dp, palette.border, CircleShape)
+                            .glassmorphic(
+                                shape = CircleShape,
+                                backgroundColor = palette.glassSurface,
+                                borderBrush = glassBorderBrush(isDark = isDark, primaryColor = palette.primary),
+                                borderWidth = 1.dp,
+                                glowColor = if (isExpanded) palette.glassGlow else Color.Transparent,
+                                glowRadius = 4.dp
+                            )
                     ) {
                         Icon(
                             imageVector = if (isExpanded) Icons.Rounded.KeyboardArrowDown else Icons.Rounded.Tune,
@@ -257,7 +272,7 @@ fun NavigationBottomSheet(
                             containerColor = buttonBg,
                             disabledContainerColor = palette.textDim.copy(alpha = 0.5f)
                         ),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                     ) {
                         Text(
                             text = if (isStopState) "Stop" else "Start",
@@ -335,6 +350,39 @@ fun NavigationBottomSheet(
                         }
                     }
 
+                    Spacer(Modifier.height(8.dp))
+
+                    // Tunnel Simulation Override Control (D-126)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "TUNNEL OVERRIDE",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.8.sp
+                                ),
+                                color = palette.textSecondary
+                            )
+                            Text(
+                                text = "Simulate GNSS-denied mode",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                color = palette.textDim
+                            )
+                        }
+
+                        TunnelOptionsSelector(
+                            currentOverride = tunnelOverride,
+                            enabled = isRecording,
+                            onSelect = onSetTunnelOverride
+                        )
+                    }
+
                     // Reset / Origin recenter button row
                     Row(
                         modifier = Modifier
@@ -361,5 +409,115 @@ fun NavigationBottomSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TunnelOptionsSelector(
+    currentOverride: TunnelOverride,
+    enabled: Boolean,
+    onSelect: (TunnelOverride) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalIDRPalette.current
+
+    Box(
+        modifier = modifier
+            .glassmorphic(
+                shape = RoundedCornerShape(18.dp),
+                backgroundColor = palette.glassSurface,
+                borderWidth = 1.dp,
+                borderColor = palette.glassBorder,
+                glowColor = Color.Transparent,
+                glowRadius = 4.dp
+            )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            TunnelOptionSegment(
+                label = "Auto",
+                selected = currentOverride == TunnelOverride.AUTO,
+                activeColor = palette.primary,
+                enabled = enabled,
+                onClick = { onSelect(TunnelOverride.AUTO) }
+            )
+
+            TunnelOptionSegment(
+                label = "Force On",
+                selected = currentOverride == TunnelOverride.FORCE_ON,
+                activeColor = palette.statusWarn,
+                enabled = enabled,
+                onClick = { onSelect(TunnelOverride.FORCE_ON) }
+            )
+
+            TunnelOptionSegment(
+                label = "Force Off",
+                selected = currentOverride == TunnelOverride.FORCE_OFF,
+                activeColor = Color(0xFFEF5350),
+                enabled = enabled,
+                onClick = { onSelect(TunnelOverride.FORCE_OFF) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun TunnelOptionSegment(
+    label: String,
+    selected: Boolean,
+    activeColor: Color,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val palette = LocalIDRPalette.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.90f else 1f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
+        label = "segment_scale_$label"
+    )
+
+    val bgColor by animateColorAsState(
+        targetValue = if (selected) activeColor.copy(alpha = 0.20f) else Color.Transparent,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
+        label = "segment_bg_$label"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) activeColor.copy(alpha = 0.80f) else Color.Transparent,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
+        label = "segment_border_$label"
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (selected) activeColor else palette.textSecondary,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
+        label = "segment_text_$label"
+    )
+
+    Box(
+        modifier = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            )
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            ),
+            color = textColor
+        )
     }
 }

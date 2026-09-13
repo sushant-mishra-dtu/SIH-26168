@@ -21,13 +21,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.tunnel.TunnelFix
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -67,13 +68,17 @@ fun ExitProgressBar(
         "stopped"
     }
 
-    Surface(
-        color = palette.bgCard.copy(alpha = 0.95f),
-        shape = RoundedCornerShape(16.dp),
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(6.dp, RoundedCornerShape(16.dp), spotColor = Color.Black.copy(alpha = 0.25f))
-            .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+            .glassmorphic(
+                shape = RoundedCornerShape(16.dp),
+                backgroundColor = palette.glassSurface,
+                borderWidth = 1.dp,
+                borderColor = palette.glassBorder,
+                glowColor = palette.glassGlow,
+                glowRadius = 6.dp
+            )
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -100,14 +105,18 @@ fun ExitProgressBar(
                     .fillMaxWidth()
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp))
-                    .background(palette.border.copy(alpha = 0.6f))
+                    .background(palette.border.copy(alpha = 0.5f))
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(animatedFraction)
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(3.dp))
-                        .background(palette.primary)
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(palette.primary, Color(0xFF00E5FF))
+                            )
+                        )
                 )
             }
         }

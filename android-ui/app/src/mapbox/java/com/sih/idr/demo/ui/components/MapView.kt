@@ -188,22 +188,19 @@ fun MapView(
         }
 
         // ── Floating zoom controls (shared chrome) ──
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            MapControlButton(icon = Icons.Rounded.Add, contentDescription = "Zoom In") {
+        ZoomCapsule(
+            onZoomIn = {
                 val zoom = viewportState.cameraState?.zoom ?: FOLLOW_ZOOM
                 viewportState.easeTo(CameraOptions.Builder().zoom(zoom + 1.0).build())
-            }
-            MapControlButton(icon = Icons.Rounded.Remove, contentDescription = "Zoom Out") {
+            },
+            onZoomOut = {
                 val zoom = viewportState.cameraState?.zoom ?: FOLLOW_ZOOM
                 viewportState.easeTo(CameraOptions.Builder().zoom(zoom - 1.0).build())
-            }
-        }
+            },
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 16.dp)
+        )
 
         AnimatedVisibility(
             visible = !followVehicle,
@@ -211,7 +208,7 @@ fun MapView(
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 360.dp)
+                .padding(bottom = 124.dp)
         ) {
             RecenterPill(onClick = {
                 followVehicle = true
