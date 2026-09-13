@@ -378,7 +378,7 @@ columns are selected from the header before the body is read, and whose return t
 not a `Sequence`, so it has no `features()` and cannot reach a model.
 
 Measured sensor characterisation, from IO-VNBD's own stationary segments **[measured,
-`eval/figures/allan_*.csv`, commit `D120CODECOMMIT`, seed 26168]**:
+`eval/figures/allan_*.csv`, commit `4e0c9ac`, seed 26168]**:
 
 | Parameter | Measured | Worst axis |
 |---|---|---|
