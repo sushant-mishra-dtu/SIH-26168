@@ -382,7 +382,8 @@ fun MapView(
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 124.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 128.dp)
         ) {
             RecenterPill(onClick = {
                 followVehicle = true

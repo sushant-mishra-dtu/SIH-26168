@@ -193,42 +193,45 @@ fun NavigationScreen(
 
             // Stage 5: Measured exit summary toast after GNSS returns (D-124)
             ReconvergenceToast(summary = telemetry.lastExit)
-        }
 
-        // ── 3. Floating Quick Action Controls (Right-side column) ──────
-        // Placed cleanly on the upper-right below the search bar / header
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .statusBarsPadding()
-                .padding(top = if (activeRoute != null) 96.dp else 126.dp, end = 16.dp)
-                .graphicsLayer {
-                    alpha = quickActionsAlpha
-                },
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            horizontalAlignment = Alignment.End
-        ) {
-            // Course-Up / North-Up Toggle Button
-            FloatingActionPill(
-                icon = Icons.Rounded.Navigation,
-                active = courseUpMode,
-                contentDescription = if (courseUpMode) "Switch to North-Up" else "Switch to Course-Up",
-                onClick = onToggleCourseUp
-            )
+            // ── 3. Floating Quick Action Controls (Right-side column) ──────
+            // Flow naturally below whichever top cards / banners are visible so they never overlap
+            AnimatedVisibility(
+                visible = !isSearchExpanded,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Column(
+                    modifier = Modifier.graphicsLayer {
+                        alpha = quickActionsAlpha
+                    },
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    // Course-Up / North-Up Toggle Button
+                    FloatingActionPill(
+                        icon = Icons.Rounded.Navigation,
+                        active = courseUpMode,
+                        contentDescription = if (courseUpMode) "Switch to North-Up" else "Switch to Course-Up",
+                        onClick = onToggleCourseUp
+                    )
 
-            // Dark Mode / Light Mode Toggle Button
-            FloatingActionPill(
-                icon = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
-                contentDescription = "Toggle Dark Mode",
-                onClick = onToggleTheme
-            )
+                    // Dark Mode / Light Mode Toggle Button
+                    FloatingActionPill(
+                        icon = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                        contentDescription = "Toggle Dark Mode",
+                        onClick = onToggleTheme
+                    )
 
-            // Reset Origin Button
-            FloatingActionPill(
-                icon = Icons.Rounded.GpsFixed,
-                contentDescription = "Reset Origin",
-                onClick = onResetOrigin
-            )
+                    // Reset Origin Button
+                    FloatingActionPill(
+                        icon = Icons.Rounded.GpsFixed,
+                        contentDescription = "Reset Origin",
+                        onClick = onResetOrigin
+                    )
+                }
+            }
         }
 
         // ── 4. Destination Arrival Celebration Modal ───────────────────
@@ -239,7 +242,8 @@ fun NavigationScreen(
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 120.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 128.dp)
         )
 
         // ── 5. Bottom Sheet Area & Speed HUD ───────────────────────────
