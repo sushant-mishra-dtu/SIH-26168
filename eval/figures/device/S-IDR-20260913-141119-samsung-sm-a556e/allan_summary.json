@@ -1,0 +1,72 @@
+{
+  "stamp": {
+    "commit": "d621cc0",
+    "seed": 26168,
+    "timestamp_utc": "2026-09-13T09:13:40Z",
+    "python": "3.13.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "numpy": "2.5.2"
+  },
+  "segments": [
+    {
+      "sequence": "S-IDR-20260913-141119-samsung-sm-a556e",
+      "path": "sessions/S-IDR-20260913-141119-samsung-sm-a556e/S-IDR-20260913-141119-samsung-sm-a556e_raw_imu.csv",
+      "start": 64145,
+      "stop": 133493,
+      "n_samples": 69348,
+      "dt_s": 0.007997812999974485,
+      "duration_s": 554.6262148050001,
+      "max_gap_s": 0.008012031000134812,
+      "duplicate_dt_fraction": 0.0,
+      "accel_var_mean": 0.000878493572829826,
+      "gyro_norm_mean": 0.002649133288569685,
+      "is_quiet": false
+    },
+    {
+      "sequence": "S-IDR-20260913-141119-samsung-sm-a556e",
+      "path": "sessions/S-IDR-20260913-141119-samsung-sm-a556e/S-IDR-20260913-141119-samsung-sm-a556e_raw_imu.csv",
+      "start": 133503,
+      "stop": 179430,
+      "n_samples": 45927,
+      "dt_s": 0.007995194999921296,
+      "duration_s": 367.1835549609998,
+      "max_gap_s": 0.008007500000076107,
+      "duplicate_dt_fraction": 0.0,
+      "accel_var_mean": 0.0010978768027024874,
+      "gyro_norm_mean": 0.003075591306208007,
+      "is_quiet": false
+    },
+    {
+      "sequence": "S-IDR-20260913-141119-samsung-sm-a556e",
+      "path": "sessions/S-IDR-20260913-141119-samsung-sm-a556e/S-IDR-20260913-141119-samsung-sm-a556e_raw_imu.csv",
+      "start": 0,
+      "stop": 24394,
+      "n_samples": 24394,
+      "dt_s": 0.008002461000003791,
+      "duration_s": 195.209098086,
+      "max_gap_s": 0.009992186999994601,
+      "duplicate_dt_fraction": 0.0,
+      "accel_var_mean": 0.0004716775338245234,
+      "gyro_norm_mean": 0.0030923351563056692,
+      "is_quiet": false
+    }
+  ],
+  "summary": {
+    "gyro_arw_rad_s_sqrt_hz": 0.00034705559289385655,
+    "gyro_arw_deg_sqrt_hr": 1.1930892437537077,
+    "gyro_arw_deg_sqrt_hr_min": 0.5608957555745447,
+    "gyro_arw_deg_sqrt_hr_max": 1.1930892437537077,
+    "accel_vrw_mps2_sqrt_hz": 0.0025321777010563983,
+    "accel_vrw_mps_sqrt_hr": 0.1519306620633839,
+    "accel_vrw_mps_sqrt_hr_min": 0.0739539619634487,
+    "accel_vrw_mps_sqrt_hr_max": 0.1519306620633839,
+    "gyro_bias_instability_rad_s": 9.026822367484927e-05,
+    "gyro_bias_instability_deg_hr": 18.61915766656234,
+    "accel_bias_instability_mps2": 0.003229135289135171,
+    "accel_bias_instability_mg": 0.3292801608230304,
+    "gyro_bias_rw_rad_s2_sqrt_hz": 3.512081411075244e-05,
+    "accel_bias_rw_mps3_sqrt_hz": 0.00715040313624872,
+    "gyro_bias_tau_s": 13.212063111006259,
+    "accel_bias_tau_s": 0.40788846299869874
+  }
+}
