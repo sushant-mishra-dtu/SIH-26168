@@ -76,7 +76,7 @@ hazard chips on a physical Android test device without access to a physical tunn
 
 #### Observable UI State
 - **Autonomous Transition**: FSM shifts `GNSS_HEALTHY` $\to$ `TUNNEL_ACTIVE_IDR` via `TunnelTrigger.GNSS_TIMEOUT` (D-126).
-- **Status Pill**: Turns amber with text `IDR · GNSS denied`.
+- **Status Pill**: Turns amber and reads `IDR`; the banner line beside it reads `In tunnel · inertial`.
 - **Map Crossfade**: The 2D map smoothly crossfades (900 ms tween) into `TunnelCorridor` rendering the 3D obsidian tube, cyan wall boundary lines, structural ribs, ceiling lamps, and the vehicle puck with its 1-sigma uncertainty ellipse.
 - **Motion Behavior (R-B)**: As you walk indoors, ceiling lamps and dashed lane lines scroll backwards based strictly on `poseElapsedMs` advance. At a dead stop, all scrolling freezes immediately.
 - **Guidance Banner**:
@@ -113,7 +113,7 @@ state machine (D-126), supporting autonomous operation (`Auto`), manual forced d
 and explicit tunnel suppression (`Off`), raising the `[ 🔒 Forced ]` chip only when forced on.
 
 #### Execution Procedure
-1. Locate the `Tunnel [ Auto | On | Off ]` selector in the secondary action row beneath the guidance banner.
+1. Locate the `Tunnel override [ Auto | On | Off ]` selector in the diagnostics drawer of the bottom sheet.
 2. Tap the `On` option:
    - Observe the option highlight in amber (`palette.statusWarn`).
    - Observe the FSM transition to `TUNNEL_ACTIVE_IDR` via trigger `MANUAL_ON`.
@@ -132,7 +132,7 @@ and explicit tunnel suppression (`Off`), raising the `[ 🔒 Forced ]` chip only
   - `On`: amber highlight, forced dead reckoning active.
   - `Off`: soft red highlight, forced GNSS healthy active.
 - **Status Pill**:
-  - When `On`: `IDR · GNSS denied (forced)`
+  - When `On`: `IDR`, with the banner reading `In tunnel · inertial (forced)`
   - When `Off`: `GNSS lock`
 - **Guidance Banner**: Updates to `In tunnel · inertial (forced)` when `On`.
 - **Hazard Chips**: `[ 🔒 Forced ]` chip is visible if and only if `On` is selected (`telemetry.tunnelOverride == TunnelOverride.FORCE_ON`).
@@ -163,7 +163,7 @@ reappear, culminating in the D-124 exit toast.
 
 #### Observable UI State
 - **State 4 (`EXIT_VERIFICATION`)**:
-  - Status pill turns amber: `Verifying GPS fix`.
+  - Status pill turns amber: `Verifying`.
   - Guidance banner:
     - Primary text: `Checking GNSS`
     - Secondary text: `N/M fixes passed` (e.g. `1/1 fixes passed`)
@@ -248,7 +248,7 @@ activates upon entry, and the progress bar fills as distance is covered.
     - Secondary: `Local Test Street · <dist> m` (distance rounded to 10 m)
 - **Pre-Arming Zone ($D_{\text{entry}} \le 40\text{ m}$)**:
   - FSM transitions to `PRE_ARMED_ENTRY` via `TunnelTrigger.PORTAL_NEAR`.
-  - Status pill turns amber: `Pre-arming IDR`.
+  - Status pill turns amber: `Pre-armed`.
   - Hazard chips show `[ 💡 Headlights ]`.
 - **Entry & Corridor Navigation ($0 \le \text{alongM} \le \text{lengthM}$)**:
   - FSM transitions to `TUNNEL_ACTIVE_IDR` via `TunnelTrigger.PORTAL_PASSED`.

@@ -46,7 +46,7 @@ fun TelemetryPanel(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 12.dp),
+            .padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Card 1: Speed, as reported.
@@ -95,7 +95,7 @@ private fun MetricCard(
 
     Box(
         modifier = modifier
-            .aspectRatio(1f) // Makes it a square
+            .height(84.dp)
             .glassmorphic(
                 shape = RoundedCornerShape(20.dp),
                 backgroundColor = palette.glassSurface,

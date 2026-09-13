@@ -374,8 +374,8 @@ fun MapView(
             onZoomIn = { mapViewInstance?.controller?.zoomIn() },
             onZoomOut = { mapViewInstance?.controller?.zoomOut() },
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 16.dp)
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = bottomInset + 16.dp)
         )
 
         // ── Google Maps Floating "Re-center" Button (Cleanly floating above bottom sheet) ──

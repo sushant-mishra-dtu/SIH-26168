@@ -201,8 +201,8 @@ fun MapView(
                 viewportState.easeTo(CameraOptions.Builder().zoom(zoom - 1.0).build())
             },
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 16.dp)
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = bottomInset + 16.dp)
         )
 
         AnimatedVisibility(

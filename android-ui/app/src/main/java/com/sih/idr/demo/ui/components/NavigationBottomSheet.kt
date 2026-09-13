@@ -16,6 +16,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -29,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,12 +62,16 @@ fun NavigationBottomSheet(
     onResetOrigin: () -> Unit,
     provenanceContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    isExpanded: Boolean = false,
+    onExpandedChange: (Boolean) -> Unit = {},
     tunnelOverride: TunnelOverride = TunnelOverride.AUTO,
     onSetTunnelOverride: (TunnelOverride) -> Unit = {}
 ) {
     val palette = LocalIDRPalette.current
     val isDark = LocalIsDarkTheme.current
-    var isExpanded by remember { mutableStateOf(false) }
+    // The sheet may not swallow the map: the drawer scrolls inside a cap instead of pushing
+    // the banner off the top of a phone-sized screen.
+    val maxSheetHeight = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
 
     Box(
         modifier = modifier
@@ -81,6 +88,7 @@ fun NavigationBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = maxSheetHeight)
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
@@ -88,7 +96,7 @@ fun NavigationBottomSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
+                    .clickable { onExpandedChange(!isExpanded) }
                     .padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
@@ -186,30 +194,24 @@ fun NavigationBottomSheet(
                         }
                     } else {
                         // Free Map Browsing / Active Recording State
-                        Row(
-                            verticalAlignment = Alignment.Bottom,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = if (telemetry.running) "Navigating" else "Ready",
-                                style = MaterialTheme.typography.headlineSmall.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = if (telemetry.running) palette.primary else palette.textPrimary
-                            )
+                        Text(
+                            text = if (telemetry.running) "Navigating" else "Ready",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = if (telemetry.running) palette.primary else palette.textPrimary,
+                            maxLines = 1
+                        )
 
-                            if (telemetry.totalDistanceM > 0.5f) {
-                                Text(
-                                    text = "${telemetry.totalDistanceM.roundToInt()} m logged",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.textSecondary,
-                                    modifier = Modifier.padding(bottom = 2.dp)
-                                )
-                            }
+                        val logged = telemetry.totalDistanceM
+                        val loggedStr = when {
+                            logged < 0.5f -> null
+                            logged < 1000f -> "${logged.roundToInt()} m logged"
+                            else -> "%.1f km logged".format(Locale.US, logged / 1000f)
                         }
-
                         Text(
                             text = when {
+                                telemetry.running && loggedStr != null -> "Dead reckoning · $loggedStr"
                                 telemetry.running -> "IDR dead-reckoning engine active"
                                 !permissionsGranted -> "Location access is needed before recording can start"
                                 else -> "Pick a destination or tap Start"
@@ -229,7 +231,7 @@ fun NavigationBottomSheet(
                 ) {
                     // Diagnostics Drawer Toggle Button
                     IconButton(
-                        onClick = { isExpanded = !isExpanded },
+                        onClick = { onExpandedChange(!isExpanded) },
                         modifier = Modifier
                             .size(44.dp)
                             .glassmorphic(
@@ -304,6 +306,7 @@ fun NavigationBottomSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                         .padding(top = 10.dp)
                 ) {
                     HorizontalDivider(color = palette.border.copy(alpha = 0.6f), thickness = 1.dp)
@@ -464,7 +467,7 @@ private fun TunnelOptionsSelector(
             )
 
             TunnelOptionSegment(
-                label = "Force On",
+                label = "On",
                 selected = currentOverride == TunnelOverride.FORCE_ON,
                 activeColor = palette.statusWarn,
                 enabled = enabled,
@@ -472,7 +475,7 @@ private fun TunnelOptionsSelector(
             )
 
             TunnelOptionSegment(
-                label = "Force Off",
+                label = "Off",
                 selected = currentOverride == TunnelOverride.FORCE_OFF,
                 activeColor = Color(0xFFEF5350),
                 enabled = enabled,

@@ -198,7 +198,7 @@ fun GuidanceBanner(
                 }
 
                 // Guidance text
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = primaryText,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
@@ -237,10 +237,14 @@ fun GuidanceBanner(
                             tint = Color(0xFFFBBF24)
                         )
                         Text(
-                            text = when {
-                                tunnelState == TunnelState.GNSS_HEALTHY -> "INS Coast"
-                                telemetry.tunnelForced -> "${tunnelState.label} (forced)"
-                                else -> tunnelState.label
+                            // Short on purpose: the primary line beside it already says
+                            // what the machine is doing, and a long pill wrapped that line.
+                            text = when (tunnelState) {
+                                TunnelState.GNSS_HEALTHY -> "INS Coast"
+                                TunnelState.PRE_ARMED_ENTRY -> "Pre-armed"
+                                TunnelState.TUNNEL_ACTIVE_IDR -> "IDR"
+                                TunnelState.EXIT_VERIFICATION -> "Verifying"
+                                TunnelState.SEAMLESS_RECONVERGENCE -> "Blending"
                             },
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color(0xFFFDE68A)

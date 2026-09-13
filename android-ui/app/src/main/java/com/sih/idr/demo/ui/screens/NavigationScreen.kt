@@ -52,7 +52,6 @@ import com.sih.idr.demo.ui.components.NavigationBottomSheet
 import com.sih.idr.demo.ui.components.NavigationHeader
 import com.sih.idr.demo.ui.components.ReconvergenceToast
 import com.sih.idr.demo.ui.components.SpeedHud
-import com.sih.idr.demo.ui.components.TunnelStatusBadge
 
 /**
  * Main screen — Google Maps-style navigation UI with full-bleed map, turn guidance banner,
@@ -80,6 +79,7 @@ fun NavigationScreen(
     val inTunnel = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
     val activeRoute = telemetry.activeRoute
     var isSearchExpanded by remember { mutableStateOf(false) }
+    var isSheetExpanded by remember { mutableStateOf(false) }
 
     // The bottom chrome (speed HUD + sheet) is measured, not assumed: the sheet roughly triples
     // in height when the diagnostics drawer opens, and anything anchored to the bottom of the map
@@ -142,9 +142,6 @@ fun NavigationScreen(
                     }
                 )
 
-                // Floating tunnel status badge only when GPS-denied
-                TunnelStatusBadge(telemetry = telemetry)
-
                 // Tunnel guidance banner only when tunnel FSM is active and without active route
                 if (tunnelState != TunnelState.GNSS_HEALTHY) {
                     GuidanceBanner(
@@ -179,9 +176,11 @@ fun NavigationScreen(
             ReconvergenceToast(summary = telemetry.lastExit)
 
             // ── 3. Floating Quick Action Controls (Right-side column) ──────
-            // Flow naturally below whichever top cards / banners are visible so they never overlap
+            // Flow naturally below whichever top cards / banners are visible so they never
+            // overlap. They step aside with the open drawer: the map is a sliver then, and its
+            // own zoom capsule rises into this column.
             AnimatedVisibility(
-                visible = !isSearchExpanded,
+                visible = !isSearchExpanded && !isSheetExpanded,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.End)
@@ -238,8 +237,9 @@ fun NavigationScreen(
         ) {
             // Speed HUD placed bottom-left directly above the bottom sheet (D-081). It exists only
             // while the estimator is producing a speed: before Start there is no reading, and a
-            // gauge at zero is a reading (D-080).
-            if (telemetry.running) {
+            // gauge at zero is a reading (D-080). The open drawer carries the same speed on its
+            // first card, so the HUD steps aside rather than ride the sheet up into the banner.
+            if (telemetry.running && !isSheetExpanded) {
                 val postedLimit = if (telemetry.tunnelFix?.inside == true) {
                     telemetry.tunnelFix.tunnel.postedLimitKmh
                 } else {
@@ -258,6 +258,8 @@ fun NavigationScreen(
                 telemetry = telemetry,
                 isRecording = isRecording,
                 permissionsGranted = permissionsGranted,
+                isExpanded = isSheetExpanded,
+                onExpandedChange = { isSheetExpanded = it },
                 tunnelOverride = telemetry.tunnelOverride,
                 onSetTunnelOverride = onSetTunnelOverride,
                 onStartStop = {
