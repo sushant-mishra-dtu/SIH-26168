@@ -40,6 +40,7 @@ import com.mapbox.maps.extension.compose.annotation.generated.PolygonAnnotation
 import com.mapbox.maps.extension.compose.annotation.generated.PolylineAnnotation
 import com.mapbox.maps.extension.compose.style.MapStyle
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
+import com.mapbox.maps.plugin.gestures.OnMapLongClickListener
 import com.mapbox.maps.plugin.gestures.OnMoveListener
 import com.mapbox.maps.plugin.gestures.gestures
 import com.mapbox.navigation.ui.maps.NavigationStyles
@@ -75,7 +76,9 @@ fun MapView(
     courseUpMode: Boolean = false,
     onToggleCourseUp: () -> Unit = {},
     /** Height of whatever the screen stacks over the bottom of the map; the Re-center pill clears it. */
-    bottomInset: Dp = 0.dp
+    bottomInset: Dp = 0.dp,
+    /** A long press on the map, as WGS84 latitude and longitude. */
+    onMapLongPress: ((Double, Double) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val isDark = LocalIsDarkTheme.current
@@ -117,6 +120,12 @@ fun MapView(
         MapboxMap(
             modifier = Modifier.fillMaxSize(),
             mapViewportState = viewportState,
+            onMapLongClickListener = onMapLongPress?.let { handler ->
+                OnMapLongClickListener { point ->
+                    handler(point.latitude(), point.longitude())
+                    true
+                }
+            },
             style = {
                 // Classic navigation styles for v1 (D-121); the Standard light preset is the
                 // nicer theme flip but has the slot and buildings caveats of section 7.6.

@@ -33,6 +33,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
@@ -62,6 +63,8 @@ fun DestinationSearchBar(
     userLon: Double,
     onSelectDestination: (SearchItem) -> Unit,
     modifier: Modifier = Modifier,
+    /** Whether the suggestion list is open. Owned by the screen so a tap on the map can close it. */
+    expanded: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {}
 ) {
     val palette = LocalIDRPalette.current
@@ -71,12 +74,12 @@ fun DestinationSearchBar(
     var query by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("All") }
     var suggestions by remember { mutableStateOf<List<SearchItem>>(emptyList()) }
-    var isExpanded by remember { mutableStateOf(false) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
+    val isExpanded = expanded
 
-    // Notify parent of dropdown expansion state
-    LaunchedEffect(isExpanded, suggestions.size) {
-        onExpandedChange(isExpanded && suggestions.isNotEmpty())
+    // Closed from outside (map tap, Back): drop the keyboard with the list
+    LaunchedEffect(expanded) {
+        if (!expanded) focusManager.clearFocus()
     }
 
     // Trigger debounced search when query or category changes. Not keyed on the user's position:
@@ -106,7 +109,7 @@ fun DestinationSearchBar(
     }
 
     fun dismiss() {
-        isExpanded = false
+        onExpandedChange(false)
         focusManager.clearFocus()
     }
 
@@ -155,7 +158,7 @@ fun DestinationSearchBar(
                     value = query,
                     onValueChange = {
                         updateQuery(it)
-                        isExpanded = true
+                        onExpandedChange(true)
                     },
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         color = palette.textPrimary,
@@ -169,7 +172,10 @@ fun DestinationSearchBar(
                             focusManager.clearFocus()
                         }
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Tapping into the field opens the list; typing is not required to browse
+                        .onFocusChanged { if (it.isFocused) onExpandedChange(true) }
                 )
             }
 
@@ -210,7 +216,7 @@ fun DestinationSearchBar(
                         .clickable {
                             selectedCategory = category
                             refreshSuggestions(query, category)
-                            isExpanded = true
+                            onExpandedChange(true)
                         }
                 ) {
                     val label = when (category) {

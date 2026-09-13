@@ -45,6 +45,8 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView as OsmMapView
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
@@ -67,7 +69,9 @@ fun MapView(
     courseUpMode: Boolean = false,
     onToggleCourseUp: () -> Unit = {},
     /** Height of whatever the screen stacks over the bottom of the map; the Re-center pill clears it. */
-    bottomInset: Dp = 0.dp
+    bottomInset: Dp = 0.dp,
+    /** A long press on the map, as WGS84 latitude and longitude. */
+    onMapLongPress: ((Double, Double) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -144,6 +148,18 @@ fun MapView(
         }
     }
 
+    val longPressOverlay = remember {
+        MapEventsOverlay(object : MapEventsReceiver {
+            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean = false
+            override fun longPressHelper(p: GeoPoint?): Boolean {
+                val handler = onMapLongPress ?: return false
+                p ?: return false
+                handler(p.latitude, p.longitude)
+                return true
+            }
+        })
+    }
+
     val vehicleMarker = remember {
         Marker(OsmMapView(context)).apply {
             icon = getVehicleIcon(context)
@@ -192,7 +208,9 @@ fun MapView(
                         false
                     }
 
-                    // Add overlays in back-to-front order
+                    // Add overlays in back-to-front order; the events overlay goes first so
+                    // every marker gets its tap before a long press is judged.
+                    overlays.add(longPressOverlay)
                     overlays.add(routePolyline)
                     overlays.add(destMarker)
                     overlays.add(uncertaintyPolygon)

@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
@@ -41,6 +42,7 @@ import com.sih.idr.demo.backend.tunnel.TunnelOverride
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
 import com.sih.idr.demo.ui.glassmorphic
+import com.sih.idr.demo.ui.verticalSwipe
 import com.sih.idr.demo.ui.glassBorderBrush
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -92,6 +94,17 @@ fun NavigationBottomSheet(
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
+            // The handle and the summary row are one swipe surface: up opens the drawer,
+            // down closes it, a tap on the handle toggles. The drawer itself is left out so
+            // its own scroll does not fight the gesture.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalSwipe(
+                        onSwipeUp = { onExpandedChange(true) },
+                        onSwipeDown = { onExpandedChange(false) }
+                    )
+            ) {
             // ── Drag Handle / Expand Toggle ────────────────────────────
             Row(
                 modifier = Modifier
@@ -140,38 +153,28 @@ fun NavigationBottomSheet(
                         val sdf = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
                         val liveArrivalClock = sdf.format(Date(arrivalEpochMs))
 
-                        Row(
-                            verticalAlignment = Alignment.Bottom,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // Bold Emerald ETA
-                            Text(
-                                text = liveEtaStr,
-                                style = MaterialTheme.typography.headlineMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 26.sp
-                                ),
-                                color = palette.navGreen
-                            )
-
-                            // Distance and Arrival Time
-                            Text(
-                                text = "($liveDistStr · $liveArrivalClock)",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                color = palette.textSecondary,
-                                modifier = Modifier.padding(bottom = 3.dp)
-                            )
-                        }
+                        // ETA on its own line; distance, arrival clock and destination share
+                        // the next so nothing wraps beside the headline on a 360 dp screen.
+                        Text(
+                            text = liveEtaStr,
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 26.sp
+                            ),
+                            color = palette.navGreen,
+                            maxLines = 1
+                        )
 
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                text = "to ${activeRoute.destinationName}",
+                                text = "$liveDistStr · $liveArrivalClock · ${activeRoute.destinationName}",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                                color = palette.textPrimary,
+                                color = palette.textSecondary,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
 
@@ -296,6 +299,8 @@ fun NavigationBottomSheet(
                     }
                 }
             }
+
+            } // swipe surface
 
             // ── Tier 2: Expandable Technical Diagnostics Drawer ─────────
             AnimatedVisibility(

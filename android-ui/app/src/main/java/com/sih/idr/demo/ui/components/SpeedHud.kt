@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,7 +74,9 @@ internal fun limitTickAngleDeg(
 fun SpeedHud(
     speedMps: Float,
     postedLimitKmh: Int?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Tapping the gauge; the screen opens the drawer whose first card is this same speed. */
+    onClick: (() -> Unit)? = null
 ) {
     val palette = LocalIDRPalette.current
     val speedKmh = speedMpsToKmh(speedMps)
@@ -96,6 +99,10 @@ fun SpeedHud(
                 backgroundColor = palette.glassSurface,
                 borderWidth = 1.dp,
                 borderColor = if (isOverLimit) palette.statusWarn else palette.glassBorder
+            )
+            .then(
+                if (onClick != null) Modifier.clickable(onClickLabel = "Open diagnostics", onClick = onClick)
+                else Modifier
             ),
         contentAlignment = Alignment.Center
     ) {

@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -29,14 +30,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 import kotlinx.coroutines.launch
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.TelemetryStore
 import com.sih.idr.demo.backend.routing.GeoCoordinate
 import com.sih.idr.demo.backend.routing.RouteService
+import com.sih.idr.demo.backend.routing.SearchItem
 import com.sih.idr.demo.backend.tunnel.TunnelOverride
 import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.LocalIDRPalette
@@ -104,8 +108,113 @@ fun NavigationScreen(
             courseUpMode = courseUpMode,
             onToggleCourseUp = onToggleCourseUp,
             bottomInset = bottomChromeHeight,
+            onMapLongPress = { lat, lon ->
+                // A long press is a destination, the way it is in every maps app. The pin is
+                // named by its coordinates: there is no reverse geocoder here to name it better.
+                val pin = SearchItem(
+                    id = "pin_%.5f_%.5f".format(Locale.US, lat, lon),
+                    title = "Dropped pin",
+                    subtitle = "%.5f, %.5f".format(Locale.US, lat, lon),
+                    category = "Landmarks",
+                    coordinate = GeoCoordinate(lat, lon)
+                )
+                isSearchExpanded = false
+                scope.launch {
+                    val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)
+                    TelemetryStore.setActiveRoute(RouteService.fetchRoute(start, pin))
+                }
+            },
             modifier = Modifier.fillMaxSize()
         )
+
+        // ── 4. Destination Arrival Celebration Modal ───────────────────
+        ArrivalCard(
+            telemetry = telemetry,
+            onDismiss = {
+                TelemetryStore.clearActiveRoute()
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = bottomChromeHeight)
+        )
+
+        // ── 5. Bottom Sheet Area & Speed HUD ───────────────────────────
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .onSizeChanged { bottomChromeHeightPx = it.height }
+        ) {
+            // Speed HUD placed bottom-left directly above the bottom sheet (D-081). It exists only
+            // while the estimator is producing a speed: before Start there is no reading, and a
+            // gauge at zero is a reading (D-080). The open drawer carries the same speed on its
+            // first card, so the HUD steps aside rather than ride the sheet up into the banner.
+            if (telemetry.running && !isSheetExpanded) {
+                val postedLimit = if (telemetry.tunnelFix?.inside == true) {
+                    telemetry.tunnelFix.tunnel.postedLimitKmh
+                } else {
+                    null
+                }
+                SpeedHud(
+                    speedMps = telemetry.speedMps,
+                    postedLimitKmh = postedLimit,
+                    onClick = { isSheetExpanded = true },
+                    modifier = Modifier
+                        .padding(start = 16.dp, bottom = 8.dp)
+                        .align(Alignment.Start)
+                )
+            }
+
+            NavigationBottomSheet(
+                telemetry = telemetry,
+                isRecording = isRecording,
+                permissionsGranted = permissionsGranted,
+                isExpanded = isSheetExpanded,
+                onExpandedChange = { isSheetExpanded = it },
+                tunnelOverride = telemetry.tunnelOverride,
+                onSetTunnelOverride = onSetTunnelOverride,
+                onStartStop = {
+                    // Stopping the recording ends the trip with it; a route with no estimator
+                    // behind it would sit on screen with a countdown that never moves.
+                    if (telemetry.activeRoute != null && isRecording) {
+                        TelemetryStore.clearActiveRoute()
+                    }
+                    onStartStop()
+                },
+                onResetOrigin = onResetOrigin,
+                provenanceContent = {
+                    // Caption discipline, D-081. It says what produced the numbers above, and it
+                    // is here because a screenshot of this sheet travels further than any README.
+                    // Do not drop it because it is ugly on a slide.
+                    Text(
+                        text = if (telemetry.running) {
+                            "On-device demo estimator over the phone's own sensors — not the " +
+                                "evaluated InEKF, and not a drift figure. The graded numbers come " +
+                                "from the offline harness; the 200 Hz FOG configuration is not " +
+                                "demonstrated here. Map: ${MapStack.engineCaption}."
+                        } else {
+                            "Not recording. No sensor data has been read, so there is nothing to " +
+                                "show — this screen displays no stand-in trajectory."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            )
+        }
+        // ── 6. Search scrim and top chrome, above everything else ─────
+        // A tap anywhere outside the search card closes its list: the map's touch handling lives
+        // in a View and the sheet has its own, so this scrim sits over both only while the list
+        // is open. The top column is composed last so the open list draws over the sheet.
+        if (isSearchExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { isSearchExpanded = false }
+                    }
+            )
+        }
 
         // ── 2. Top Navigation Guidance / Search Area ───────────────────
         Column(
@@ -132,6 +241,7 @@ fun NavigationScreen(
                 DestinationSearchBar(
                     userLat = telemetry.latitude,
                     userLon = telemetry.longitude,
+                    expanded = isSearchExpanded,
                     onExpandedChange = { isSearchExpanded = it },
                     onSelectDestination = { item ->
                         scope.launch {
@@ -218,80 +328,6 @@ fun NavigationScreen(
             }
         }
 
-        // ── 4. Destination Arrival Celebration Modal ───────────────────
-        ArrivalCard(
-            telemetry = telemetry,
-            onDismiss = {
-                TelemetryStore.clearActiveRoute()
-            },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = bottomChromeHeight)
-        )
-
-        // ── 5. Bottom Sheet Area & Speed HUD ───────────────────────────
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .onSizeChanged { bottomChromeHeightPx = it.height }
-        ) {
-            // Speed HUD placed bottom-left directly above the bottom sheet (D-081). It exists only
-            // while the estimator is producing a speed: before Start there is no reading, and a
-            // gauge at zero is a reading (D-080). The open drawer carries the same speed on its
-            // first card, so the HUD steps aside rather than ride the sheet up into the banner.
-            if (telemetry.running && !isSheetExpanded) {
-                val postedLimit = if (telemetry.tunnelFix?.inside == true) {
-                    telemetry.tunnelFix.tunnel.postedLimitKmh
-                } else {
-                    null
-                }
-                SpeedHud(
-                    speedMps = telemetry.speedMps,
-                    postedLimitKmh = postedLimit,
-                    modifier = Modifier
-                        .padding(start = 16.dp, bottom = 8.dp)
-                        .align(Alignment.Start)
-                )
-            }
-
-            NavigationBottomSheet(
-                telemetry = telemetry,
-                isRecording = isRecording,
-                permissionsGranted = permissionsGranted,
-                isExpanded = isSheetExpanded,
-                onExpandedChange = { isSheetExpanded = it },
-                tunnelOverride = telemetry.tunnelOverride,
-                onSetTunnelOverride = onSetTunnelOverride,
-                onStartStop = {
-                    // Stopping the recording ends the trip with it; a route with no estimator
-                    // behind it would sit on screen with a countdown that never moves.
-                    if (telemetry.activeRoute != null && isRecording) {
-                        TelemetryStore.clearActiveRoute()
-                    }
-                    onStartStop()
-                },
-                onResetOrigin = onResetOrigin,
-                provenanceContent = {
-                    // Caption discipline, D-081. It says what produced the numbers above, and it
-                    // is here because a screenshot of this sheet travels further than any README.
-                    // Do not drop it because it is ugly on a slide.
-                    Text(
-                        text = if (telemetry.running) {
-                            "On-device demo estimator over the phone's own sensors — not the " +
-                                "evaluated InEKF, and not a drift figure. The graded numbers come " +
-                                "from the offline harness; the 200 Hz FOG configuration is not " +
-                                "demonstrated here. Map: ${MapStack.engineCaption}."
-                        } else {
-                            "Not recording. No sensor data has been read, so there is nothing to " +
-                                "show — this screen displays no stand-in trajectory."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textSecondary,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            )
-        }
     }
 }
 

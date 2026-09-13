@@ -25,7 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.SwipeDirection
 import com.sih.idr.demo.ui.glassmorphic
+import com.sih.idr.demo.ui.swipeToDismiss
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -51,6 +53,7 @@ fun ArrivalCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
+                .swipeToDismiss(SwipeDirection.DOWN, onDismissed = onDismiss)
                 .glassmorphic(
                     shape = RoundedCornerShape(24.dp),
                     backgroundColor = palette.glassSurface,

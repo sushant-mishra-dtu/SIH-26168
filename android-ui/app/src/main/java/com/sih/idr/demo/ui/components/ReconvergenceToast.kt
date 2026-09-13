@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,7 +33,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sih.idr.demo.backend.TunnelExitSummary
 import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.SwipeDirection
 import com.sih.idr.demo.ui.glassmorphic
+import com.sih.idr.demo.ui.swipeToDismiss
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -72,6 +75,9 @@ fun ReconvergenceToast(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                // It leaves on its own after visibleForMs; a swipe up or a tap sends it
+                // sooner. Dismissing loses nothing: the same summary stays in lastExit.
+                .swipeToDismiss(SwipeDirection.UP) { shown = null }
                 .glassmorphic(
                     shape = RoundedCornerShape(16.dp),
                     backgroundColor = palette.glassSurface,
@@ -80,6 +86,7 @@ fun ReconvergenceToast(
                     glowColor = accent.copy(alpha = 0.25f),
                     glowRadius = 8.dp
                 )
+                .clickable(onClickLabel = "Dismiss") { shown = null }
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

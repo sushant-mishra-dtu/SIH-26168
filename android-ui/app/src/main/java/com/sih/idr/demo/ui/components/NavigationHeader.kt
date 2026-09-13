@@ -19,6 +19,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +53,9 @@ fun NavigationHeader(
     modifier: Modifier = Modifier
 ) {
     val currentStep = route.steps.getOrNull(stepIndex) ?: route.steps.firstOrNull()
+    // The second line shows the street by default, the way a maps app does; a tap on the
+    // banner swaps in the full instruction for that step, and a tap swaps back.
+    var showInstruction by remember { mutableStateOf(false) }
 
     // Frosted emerald glass brushes with specular sheen
     val emeraldGlassBrush = Brush.verticalGradient(
@@ -71,6 +77,8 @@ fun NavigationHeader(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .clickable(onClickLabel = "Show full instruction") { showInstruction = !showInstruction }
             .glassmorphic(
                 shape = RoundedCornerShape(22.dp),
                 backgroundBrush = emeraldGlassBrush,
@@ -165,9 +173,13 @@ fun NavigationHeader(
                             }
                         }
 
-                        val streetInstruction = currentStep?.streetName
-                            ?: currentStep?.instruction
-                            ?: route.destinationName
+                        val streetInstruction = if (showInstruction) {
+                            currentStep?.instruction ?: route.destinationName
+                        } else {
+                            currentStep?.streetName
+                                ?: currentStep?.instruction
+                                ?: route.destinationName
+                        }
                         Text(
                             text = streetInstruction,
                             style = MaterialTheme.typography.bodyMedium.copy(
