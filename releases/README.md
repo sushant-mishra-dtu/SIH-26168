@@ -11,7 +11,7 @@ What changed between builds is [CHANGELOG.md](../CHANGELOG.md); why it changed i
 
 | Flavour | File | Version | Built from | Description |
 |---|---|---|---|---|
-| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | v0.1.3 (`versionCode` 3) | `af76134` (merged to `main` in `3173eaa`), 14 Sep 2026 | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, the error covariance ellipse (D-125), the course-over-ground heading and duration-based ZUPT fixes from the 14 Sep road test (D-127), and gyro null-offset estimation, a working anti-lockout rule and a slewed tunnel exit (D-128). |
+| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | v0.1.4 (`versionCode` 4) | `eaad181` on `main`, 14 Sep 2026, built on the dev box | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, the error covariance ellipse (D-125), the course-over-ground heading and duration-based ZUPT fixes from the 14 Sep road test (D-127), gyro null-offset estimation, a working anti-lockout rule and a slewed tunnel exit (D-128), and — new in this build — destination search anywhere in India (Photon, Nominatim fallback), recent destinations, category pills, reverse-geocoded dropped pins, and the HAL-seeded gyro bias with the reviewed bearing fallback (D-129). |
 
 The `mapbox` flavour is **not** published: it needs a Mapbox downloads token to build and a public
 token to run (D-122), and neither is checked in. Build it locally per
@@ -41,13 +41,17 @@ the file *in this folder* at the tagged commit, not a fresh build, so copy the A
 the table above before tagging:
 
 ```bash
-git tag v0.1.3 && git push origin v0.1.3
+git tag v0.1.4 && git push origin v0.1.4
 ```
 
 Copy the APK in **before** tagging, or the release will carry the previous build under the new
 version's name.
 
 ### Installation
+Debug builds are signed with whichever debug keystore assembled them — v0.1.3 came from a CI runner,
+v0.1.4 from the dev box — and Android refuses an upgrade across signing keys. If the install fails
+with "App not installed" or a signature error, uninstall the previous build first.
+
 1. Tap the download link on your phone.
 2. If prompted, enable "Install unknown apps" for your browser.
 3. Open the downloaded file to install or update the app.
