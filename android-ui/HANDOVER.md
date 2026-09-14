@@ -20,7 +20,7 @@ Verifiable, not remembered:
 | 137 JUnit scenarios in the module | `grep -rc '@Test' --include=*.kt android-ui/app/src/test \| awk -F: '{s+=$2} END {print s}'` |
 | **CI is green on `af76134`** — assemble + unit tests, both Gradle roots | run [34814081039](https://github.com/sushant-mishra-dtu/SIH-26168/actions/runs/34814081039) |
 | A v0.1.3 APK exists as a CI artifact, **not** in the repo | same run, artifact `app-osm-debug`, 15.9 MiB, expires 13 Dec 2026 |
-| `releases/app-osm-debug.apk` is still **v0.1.0** | `releases/README.md` table; it predates D-127 *and* D-128 |
+| `releases/app-osm-debug.apk` is still **v0.1.0** | `releases/README.md` table; it predates D-127 *and* D-128. **Superseded later on 14 Sep:** the v0.1.3 CI artifact was copied in from a browser session after the merge to `main` (§5 item 3 done) |
 | The text-surface guards were **not run** this session — no `pytest` in the sandbox; D-128's additions were checked against them by reading | `pytest tests/test_android_demo_surface.py` — run it before merging |
 | Nothing here has been on a phone since 13 Sep | no `android/measured/` sidecar, no screenshot, after D-127 or D-128 |
 
@@ -130,7 +130,7 @@ tag. That is §5 item 3.
 |---|---|---|---|
 | 1 | **Drive it.** D-127 and D-128 are both unverified on hardware | a car, a mount, the v0.1.3 APK | a tunnel or underpass run where the traced curve follows the road; the diagnostics chip read at the portal and written down |
 | 2 | **Constrain the dead-reckoned pose to the tunnel corridor** | item 1 — do not add a second correction before seeing what the first one leaves | lateral error inside a declared bore bounded by the corridor half-width instead of by the gyro; `TunnelGeometry.lateralM` consumed, not just computed |
-| 3 | **Refresh `releases/app-osm-debug.apk` and fix the broken raw-download line** | a browser session (§4) | the table says v0.1.3, the APK in the folder is the v0.1.3 build, and the "Direct Mobile Download" line says what it actually requires |
+| 3 | ~~**Refresh `releases/app-osm-debug.apk` and fix the broken raw-download line**~~ — done after the merge, from a signed-in browser session | a browser session (§4) | the table says v0.1.3, the APK in the folder is the v0.1.3 build, and the "Direct Mobile Download" line says what it actually requires |
 | 4 | **Close the `!hasCourse` fallback to the handset azimuth** (§3, last bullet) | a decision on what a trip starting inside a tunnel should do | either the heading is held rather than taken from the phone, or the case is documented as out of scope with a test naming it |
 | 5 | **The backward smoother** that `android/HANDOVER.md` §9 item 13 asks for | items 1–2 | the drawn path *corrects* the coasted segment retrospectively rather than only bending onto the fix at the exit — D-128 does the forward half of this and not the backward half |
 | 6 | **Decide whether this module exists at all** | a decision, not code — `android/HANDOVER.md` §7, §9 item 6 | unchanged by this session and still the largest open question about everything above |

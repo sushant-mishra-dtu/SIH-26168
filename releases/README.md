@@ -11,20 +11,20 @@ What changed between builds is [CHANGELOG.md](../CHANGELOG.md); why it changed i
 
 | Flavour | File | Version | Built from | Description |
 |---|---|---|---|---|
-| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | v0.1.2 (`versionCode` 2) | `main` @ `8047647`, 14 Sep 2026 | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, the error covariance ellipse (D-125), and the course-over-ground heading and duration-based ZUPT fixes from the 14 Sep road test (D-127). |
-
-> **The file above is the v0.1.2 build.** The source is at **v0.1.3**, which adds gyro null-offset
-> estimation, a working anti-lockout rule and a slewed tunnel exit (D-128,
-> [CHANGELOG.md](../CHANGELOG.md)). Install the v0.1.3 APK from the **Actions** artifact described
-> below until this file is refreshed, per *Updating this file*.
+| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | v0.1.3 (`versionCode` 3) | `af76134` (merged to `main` in `3173eaa`), 14 Sep 2026 | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, the error covariance ellipse (D-125), the course-over-ground heading and duration-based ZUPT fixes from the 14 Sep road test (D-127), and gyro null-offset estimation, a working anti-lockout rule and a slewed tunnel exit (D-128). |
 
 The `mapbox` flavour is **not** published: it needs a Mapbox downloads token to build and a public
 token to run (D-122), and neither is checked in. Build it locally per
 [`android-ui/README.md`](../android-ui/README.md) if you have the tokens.
 
 ### Direct Mobile Download
-On your Android phone, you can download the APK directly from `main`:
+On your Android phone, **signed in to a GitHub account with access to this repository**, the APK
+downloads straight from `main`:
 - [Direct Raw Download: app-osm-debug.apk](https://github.com/sushant-mishra-dtu/SIH-26168/raw/main/releases/app-osm-debug.apk)
+
+The repository is private, so an anonymous request to that link gets a **404**, not a 403 — a
+"link is broken" report from someone outside the team is an access problem, not a missing file.
+Add them as a collaborator, or send the APK itself.
 
 ### Latest CI build
 Every push to `main` and every pull request also uploads a fresh `app-osm-debug` artifact from the
