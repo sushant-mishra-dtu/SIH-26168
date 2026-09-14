@@ -48,6 +48,7 @@ import com.sih.idr.demo.ui.glassBorderBrush
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -74,6 +75,21 @@ internal fun mountOffsetLabel(mountOffsetRad: Float?): String? {
     if (mountOffsetRad == null) return null
     val deg = Math.toDegrees(mountOffsetRad.toDouble()).roundToInt()
     return "mount ${if (deg > 0) "+" else ""}$deg°"
+}
+
+/**
+ * The compensated gyro bias in tenths of a degree per second, or null before one is measured.
+ *
+ * This is the number that decides whether a bore is traced straight: AGENTS.md's lateral term is
+ * `b_g v t^2 / 2`, so at 14 m/s a bias of 1 deg/s left in the rate puts ~50 m of sideways error
+ * into a 20 s tunnel. It is on the chip for the same reason the heading source is -- neither
+ * failure looks like a failure on a map.
+ */
+internal fun gyroBiasLabel(gyroBiasRadPerSec: Float?): String? {
+    if (gyroBiasRadPerSec == null) return null
+    val degPerSec = Math.toDegrees(gyroBiasRadPerSec.toDouble())
+    val sign = if (degPerSec < 0) "-" else "+"
+    return "bias $sign%.1f°/s".format(Locale.US, abs(degPerSec))
 }
 
 /** Which motion model is running, or null while the estimator has not committed to one. */
@@ -421,6 +437,7 @@ fun NavigationBottomSheet(
                             val parts = listOfNotNull(
                                 headingSourceLabel(telemetry.headingIsCourse, telemetry.attitudeDisturbed),
                                 mountOffsetLabel(telemetry.mountOffsetRad),
+                                gyroBiasLabel(telemetry.gyroBiasRadPerSec),
                                 motionModeLabel(telemetry.motionMode)
                             )
                             Text(

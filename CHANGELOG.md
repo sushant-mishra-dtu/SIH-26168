@@ -14,6 +14,62 @@ can be traced back to a commit.
 
 ---
 
+## v0.1.3 — 14 Sep 2026 (`versionCode` 3)
+
+**The traced curve in tunnel mode, from the same 14 Sep road test.** The speedometer and heading
+faults of v0.1.2 were fixed and the curve was still wrong: the track left the bore, ran out to a
+vertex in open ground and came straight back, over a banner reading *235 m on IDR · 20 s ·
+χ² gate: 16 accepted · 20 rejected · applied by the anti-lockout rule*. Three separate defects.
+
+### Fixed
+
+- **The gyro's null offset is measured and removed.** Nothing estimated it, and the only thing
+  that had ever hidden it — the GNSS course anchor — is exactly what a tunnel takes away, so it
+  integrated straight into the heading. Simulated over that outage's own numbers (20 s, 14 m/s,
+  280 m), an uncompensated 1 °/s leaves 20° of heading and **48 m** of lateral error in the bore;
+  after one traffic-light stop, **0.33 m**. The bias is now measured at every detected standstill
+  (ZARU) and across windows of GNSS-tracked driving, and no window may span an outage — so what
+  runs inside a tunnel is what the last clean stretch of driving measured. (D-128)
+- **The anti-lockout rule now applies the fix it forces.** A fix rejected five times running was
+  computed, counted, reported to the state machine and printed on screen as *applied by the
+  anti-lockout rule* — and then the pose was never touched. The rule exists precisely because a
+  pose that has drifted past the χ² gate rejects every fix it is offered, so nothing re-acquired
+  and the drift ran to the end of the outage. It is applied now. (D-128)
+- **A tunnel exit bends onto the road instead of jumping to it.** The first fix after an outage
+  carries the whole accumulated drift and went in at up to 85% in one step, straight into the
+  drawn polyline — the spike. The estimate still takes the correction at once; what is *drawn* is
+  offset by exactly the step and walks that offset off over ~0.7 s, inside the machine's 2 s
+  reconvergence window, so `SEAMLESS_RECONVERGENCE` is now a state in which something
+  reconverges. Corrections over 75 m are not hidden, the offset is added to `est. σ` while it
+  lasts so the ellipse still covers the estimate, and none of it counts as distance travelled.
+  (D-128)
+
+### Added
+
+- A **gyro bias** field on the heading-provenance chip (`bias +1.0°/s`), and
+  `gyroBiasRadPerSec` on `TelemetryState`. An uncompensated bias is silent: it draws a perfectly
+  smooth curve that is simply in the wrong place. (D-128)
+- `backend/ReacquisitionSlew.kt` — the exit slew as its own pure-Kotlin unit, for the reason
+  `TunnelFsm` and `CourseTracker` are: a rule a laptop cannot drive is a rule nobody can argue
+  about. (D-126, D-127, D-128)
+
+### Tests
+
+20 new JUnit scenarios — 10 over the bias (a standstill measures it; a handled phone does not; a
+real turn is not mistaken for one; the bearing at a tunnel mouth is not a calibration; an absurd
+value is clamped), 8 over the slew (the drawn point does not move when the correction lands, the
+offset is gone inside the reconvergence window, no frame moves it more than a puck's width, and a
+correction too large to hide is not hidden), 2 over the new chip label.
+
+### Not verified on a device
+
+No phone was reachable, and this container has no Android SDK, so the Gradle unit-test task could
+not run here — CI runs it. The pure-Kotlin units were compiled and run standalone; the
+Android-coupled estimator was type-checked against `Location` and `SystemClock` stubs. The `bias`
+field on the chip is what the next road test should read at the portal.
+
+---
+
 ## v0.1.2 — 14 Sep 2026 (`versionCode` 2)
 
 **Heading and speed, both found in a road test on 14 Sep.** The traced curve was wrong, and its

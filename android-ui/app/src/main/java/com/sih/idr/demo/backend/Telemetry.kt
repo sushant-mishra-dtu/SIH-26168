@@ -38,6 +38,12 @@ data class TelemetryState(
     val mountOffsetRad: Float? = null,
     /** True while the phone is being handled and the course is held rather than propagated. */
     val attitudeDisturbed: Boolean = false,
+    /**
+     * Estimated gyro null offset about the world vertical, rad/s, or null before a standstill or a
+     * GNSS-tracked window has measured one (D-128). On screen because an uncompensated bias is
+     * silent: it renders as a perfectly smooth curve that is simply in the wrong place.
+     */
+    val gyroBiasRadPerSec: Float? = null,
     /** What the estimator believes it is riding in; the step model runs only outside a vehicle. */
     val motionMode: MotionMode = MotionMode.UNKNOWN,
     val positionNorthM: Float = 0f,

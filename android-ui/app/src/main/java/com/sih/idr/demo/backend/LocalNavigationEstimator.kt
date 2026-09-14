@@ -24,6 +24,22 @@ import kotlin.math.sqrt
  * ZUPT and step detection, over durations rather than sample counts and with the pedestrian step
  * model gated off in a vehicle.
  *
+ * **A tunnel exit is slewed, not teleported** (D-128). The pose the dead reckoning carried out of
+ * the bore is wrong by whatever it accumulated inside; the first fix that applies is therefore a
+ * step, and drawing that step put a spike in the traced track with a vertex out in a field. The
+ * *state* takes the correction at once -- it is the better estimate and everything downstream
+ * should have it -- while what is reported and drawn is offset by the step and walks that offset
+ * off over [ReacquisitionSlew.TAU_SEC], so the track bends onto the road rather than jumping to
+ * it. The offset is added to the reported sigma while it lasts, so the ellipse still covers the
+ * filter's own answer. This is the "no position jump on tunnel entry" of AGENTS.md's thesis,
+ * honoured at the exit as well, and it is a display rule: it never feeds back into the estimate.
+ *
+ * **The anti-lockout rule applies the fix it forces** (D-128). D-115's rule exists so that a pose
+ * that has drifted past the gate's width can still re-acquire; the gate branch counted the forced
+ * verdict, told the machine about it, put "applied by the anti-lockout rule" on screen -- and then
+ * returned without touching the pose, so nothing re-acquired and the drift ran until the machine
+ * left the suppressing states on its own.
+ *
  * **Uncertainty Growth Model**:
  * - When stationary (ZUPT active): velocity is zero and position is locked, so uncertainty DOES NOT grow.
  * - When moving during GNSS outage: uncertainty expands proportionally to actual physical distance traveled
@@ -62,6 +78,25 @@ class LocalNavigationEstimator {
     private var outageResidualM: Float? = null
     private var outageForced = false
     private var lastFixVerdict: FixVerdict? = null
+
+    /**
+     * What the reported pose is offset by while a re-acquisition is being walked off (D-128).
+     * Not part of the estimate: `northM`/`eastM` stay the filter's answer and this only moves
+     * what is drawn.
+     */
+    private val slew = ReacquisitionSlew()
+
+    /**
+     * Armed when an outage ends, spent by the first fix that applies after it. That fix is the
+     * re-acquisition -- it carries the whole accumulated drift -- and is the only one taken whole
+     * and hidden behind the slew; the ones after it are ordinary tracking and are blended, or the
+     * real motion between two fixes would be absorbed into the slew and the puck would lag.
+     */
+    private var reacquirePending = false
+
+    /** True once a fix has re-acquired the pose during this outage, forced or otherwise. */
+    private var reacquiredInOutage = false
+
     private var lastFixChi2: Float? = null
     private var lastExit: TunnelExitSummary? = null
 
@@ -89,12 +124,23 @@ class LocalNavigationEstimator {
         if (lastTimestampNs != 0L) {
             if (sessionStartMs == 0L) sessionStartMs = SystemClock.elapsedRealtime()
             val dt = ((timestampNs - lastTimestampNs).coerceIn(0L, 250_000_000L)) / 1_000_000_000f
-            course.onGyro(gxRadPerSecond, gyRadPerSecond, gzRadPerSecond, dt, timestampNs, speedMps)
+            val deadReckoning = tunnelState.suppressesGnss || !hasFreshGnss()
+            course.onGyro(
+                gxRadPerSecond, gyRadPerSecond, gzRadPerSecond, dt, timestampNs, speedMps,
+                stationary = motion.isStationary
+            )
+            if (deadReckoning) {
+                // No fix is correcting the course, so no bias window is open over these seconds.
+                course.onGnssDenied()
+            }
+            // The slew runs off on the sensor clock whatever the pose is doing, so a correction
+            // taken at a standstill still fades instead of sitting on the map.
+            slew.decay(dt)
             val yawRad = course.headingRad()
 
             val timeSinceLastStepNs = if (lastStepTimeNs != 0L) timestampNs - lastStepTimeNs else Long.MAX_VALUE
 
-            if (tunnelState.suppressesGnss || !hasFreshGnss()) {
+            if (deadReckoning) {
                 // Dead Reckoning during GNSS denial (Vehicular coasting + pedestrian step integration):
                 if (motion.isStationary) {
                     pendingStepDistM = 0f
@@ -235,9 +281,17 @@ class LocalNavigationEstimator {
                     if (outageResidualM == null) outageResidualM = deltaFixM
                 }
             }
-            // Evaluated, counted, not applied: the machine decides when fixes move the pose again.
-            lastGnssElapsedMs = SystemClock.elapsedRealtime()
-            return snapshot()
+            if (verdict != FixVerdict.FORCED) {
+                // Evaluated, counted, not applied: the machine decides when fixes move the pose.
+                lastGnssElapsedMs = SystemClock.elapsedRealtime()
+                return snapshot()
+            }
+            // D-115's rule is an application, not a label (D-128). A pose that has drifted past
+            // the gate's width rejects every fix it is offered, so the rule exists precisely to
+            // move it; counting the forced verdict and returning left the drift running and put
+            // "applied by the anti-lockout rule" on screen over a pose nothing had touched. It
+            // falls through to the re-acquisition path below -- state first, display slewed --
+            // and the machine still records it as CHI2_FORCED and never as a pass.
         }
 
         // Speed. The receiver's own Doppler speed is the best measurement of it this demo has, so
@@ -257,7 +311,20 @@ class LocalNavigationEstimator {
         }
         motion.observeSpeed(speedMps)
 
-        if (!motion.isStationary) {
+        if (verdict == FixVerdict.FORCED || reacquirePending) {
+            // The re-acquisition after an outage. The state takes the step whole: this fix is a
+            // better statement of where the vehicle is than a pose that has been coasting, and
+            // half-applying it would leave the next fix outside the gate again. What is *drawn*
+            // does not move at all -- the slew absorbs exactly the step and then runs it off,
+            // which is the difference between the track bending onto the road and the spike with
+            // a vertex out in a field. None of it is distance travelled, so the trip
+            // odometer and the metres-on-IDR of the exit summary do not count the correction.
+            reacquirePending = false
+            reacquiredInOutage = true
+            northM = measuredNorth
+            eastM = measuredEast
+            slew.absorb(dNorth, dEast)
+        } else if (!motion.isStationary) {
             // Smoothly move position towards fix according to accuracy
             val alpha = (1.0f / (1.0f + acc / 8.0f)).coerceIn(0.40f, 0.85f)
             northM += alpha * dNorth
@@ -293,8 +360,17 @@ class LocalNavigationEstimator {
             outageResidualM = null
             outageForced = false
             consecutiveRejections = 0
+            reacquiredInOutage = false
             if (speedMps < 0.15f) speedMps = 0f
+            // The bias that runs through the bore is the one clean driving measured, and no
+            // window may span the outage (D-128).
+            course.onGnssDenied()
         } else if (wasSuppressed && !state.suppressesGnss) {
+            // The next fix to apply is the re-acquisition, whatever it costs in metres -- unless
+            // the anti-lockout rule already did it inside the bore, in which case the fixes now
+            // arriving are ordinary tracking and taking them whole would only lag the puck.
+            reacquirePending = !reacquiredInOutage
+            course.onGnssDenied()
             // The outage ends: fixes apply again from the next one. The GNSS branch of onGyro
             // caps the uncertainty as fixes arrive; nothing is reset to a nominal value here.
             lastExit = TunnelExitSummary(
@@ -324,6 +400,9 @@ class LocalNavigationEstimator {
         }
         northM = 0f
         eastM = 0f
+        slew.reset()
+        reacquirePending = false
+        reacquiredInOutage = false
         speedMps = 0f
         pendingStepDistM = 0f
         activeStepSpeed = 0f
@@ -352,15 +431,23 @@ class LocalNavigationEstimator {
         val gnssFresh = hasFreshGnss() && !tunnelState.suppressesGnss
         val latPerMetre = 1.0 / 111_320.0
         val lonPerMetre = 1.0 / (111_320.0 * cos(Math.toRadians(originLat)))
-        val currentLat = originLat + northM * latPerMetre
-        val currentLon = originLon + eastM * lonPerMetre
+        // Everything reported is the slewed pose (D-128), so the puck, the track, the map matcher
+        // and the tunnel geometry all read one continuous position rather than the state's step.
+        val reportedNorth = reportedNorthM()
+        val reportedEast = reportedEastM()
+        val currentLat = originLat + reportedNorth * latPerMetre
+        val currentLon = originLon + reportedEast * lonPerMetre
         val durationSec = if (sessionStartMs != 0L) (SystemClock.elapsedRealtime() - sessionStartMs) / 1000L else 0L
 
         // This estimator carries one scalar sigma, so its covariance is isotropic by construction
         // -- sigma squared on the diagonal, no cross term. That is a faithful statement of what it
         // knows, not a measurement of an ellipse: the InEKF behind DeadReckoningBackend will fill
         // all three elements from its P block and the map will draw a real ellipse (D-125).
-        val sigmaSq = uncertaintyM * uncertaintyM
+        // While the slew is running, the drawn point is knowingly offset from the best estimate by
+        // the part of the correction not yet walked off. Adding it to sigma is what keeps the
+        // ellipse honest: it still covers where the filter thinks the vehicle is (D-124/D-125).
+        val reportedSigma = uncertaintyM + slew.magnitudeM
+        val sigmaSq = reportedSigma * reportedSigma
         return Estimate(
             mode = if (gnssFresh) NavigationMode.GNSS else NavigationMode.INS,
             speedMps = speedMps,
@@ -368,10 +455,11 @@ class LocalNavigationEstimator {
             headingIsCourse = course.hasCourse,
             mountOffsetRad = if (course.hasMountOffset) course.mountOffsetRad else null,
             attitudeDisturbed = course.isDisturbed,
+            gyroBiasRadPerSec = if (course.hasGyroBias) course.gyroBiasRadPerSec else null,
             motionMode = motion.mode,
-            positionNorthM = northM,
-            positionEastM = eastM,
-            uncertaintyM = uncertaintyM,
+            positionNorthM = reportedNorth,
+            positionEastM = reportedEast,
+            uncertaintyM = reportedSigma,
             covNorthM2 = sigmaSq,
             covNorthEastM2 = 0f,
             covEastM2 = sigmaSq,
@@ -398,10 +486,17 @@ class LocalNavigationEstimator {
     private fun hasFreshGnss(): Boolean = lastGnssElapsedMs != 0L &&
         SystemClock.elapsedRealtime() - lastGnssElapsedMs < GNSS_TIMEOUT_MS
 
+    /** The pose as reported and drawn: the estimate plus whatever of a correction is still slewing. */
+    private fun reportedNorthM(): Float = northM + slew.northM
+
+    private fun reportedEastM(): Float = eastM + slew.eastM
+
     private fun appendTrackPoint(force: Boolean = false) {
         if (motion.isStationary && !force) return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastTrackPointMs < TRACK_PERIOD_MS) return
+        val northM = reportedNorthM()
+        val eastM = reportedEastM()
         val last = track.lastOrNull()
         if (last != null) {
             val dNorth = northM - last.northM
@@ -428,6 +523,7 @@ class LocalNavigationEstimator {
         private const val COAST_TAU_SEC = 120f
         /** D-115's rule, mirrored: the fix after this many consecutive rejections is applied, as forced. */
         private const val MAX_CONSECUTIVE_REJECTIONS = 5
+
     }
 }
 
@@ -441,6 +537,8 @@ data class Estimate(
     val mountOffsetRad: Float?,
     /** True while the phone is being handled and the course is held rather than propagated. */
     val attitudeDisturbed: Boolean,
+    /** Estimated gyro null offset about the vertical, rad/s; null until one has been measured. */
+    val gyroBiasRadPerSec: Float?,
     val motionMode: MotionMode,
     val positionNorthM: Float,
     val positionEastM: Float,

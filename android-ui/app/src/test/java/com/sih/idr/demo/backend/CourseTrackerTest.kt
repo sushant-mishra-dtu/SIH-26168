@@ -17,6 +17,10 @@ import kotlin.math.sin
  * [a_mounting_angle_does_not_rotate_the_track] and
  * [re_seating_the_phone_mid_drive_leaves_the_course_where_it_was]; the rest are the reasons those
  * two work.
+ *
+ * The last section is D-128's gyro bias, and its scenarios are built the same way: a *known* null
+ * offset is added to the gyro the attitude would read, and the question each time is whether the
+ * course goes where the vehicle went rather than where the offset pushed it.
  */
 class CourseTrackerTest {
 
@@ -364,5 +368,189 @@ class CourseTrackerTest {
         assertFalse(tracker.hasMountOffset)
         assertFalse(tracker.hasDeviceAzimuth)
         assertEquals(0f, tracker.courseRad, 1e-6f)
+    }
+
+    // --------------------------------------------------------------------------------------
+    // D-128: the gyro null offset, which is what bent the traced curve inside a bore
+    // --------------------------------------------------------------------------------------
+
+    /**
+     * The gyro a device at attitude [r] reads while the vehicle turns at [bearingRateRadPerSec]
+     * and the sensor carries a null offset of [biasRadPerSec], both in the bearing convention.
+     *
+     * A null offset about the vertical is indistinguishable from a turn at that rate on a single
+     * sample -- that is the whole difficulty -- so it is added exactly as a turn would be.
+     */
+    private fun biasedGyro(r: FloatArray, bearingRateRadPerSec: Float, biasRadPerSec: Float) =
+        gyroForTurn(r, bearingRateRadPerSec + biasRadPerSec)
+
+    /** Drive with a biased gyro; [gnssBearingRad] anchors once a second when it is not null. */
+    private fun driveBiased(
+        tracker: CourseTracker,
+        attitude: FloatArray,
+        seconds: Float,
+        bearingRateRadPerSec: Float,
+        biasRadPerSec: Float,
+        speedMps: Float,
+        gnssBearingRad: Float? = null,
+        stationary: Boolean = false,
+        startNs: Long = 0L,
+        hz: Int = 100
+    ): Long {
+        val dt = 1f / hz
+        val stepNs = 1_000_000_000L / hz
+        var t = startNs
+        var trueBearing = 0f
+        repeat((seconds * hz).toInt()) { i ->
+            t += stepNs
+            val gyro = biasedGyro(attitude, bearingRateRadPerSec, biasRadPerSec)
+            tracker.onRotationMatrix(attitude, t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, speedMps, stationary)
+            trueBearing += bearingRateRadPerSec * dt
+            if (gnssBearingRad != null && (i + 1) % hz == 0) {
+                tracker.onGnssCourse(gnssBearingRad + trueBearing, speedMps)
+            }
+        }
+        return t
+    }
+
+    /** One degree per second: an ordinary, unremarkable phone gyro null offset. */
+    private val oneDegPerSec = (PI / 180.0).toFloat()
+
+    @Test
+    fun a_standstill_measures_the_gyro_null_offset() {
+        val tracker = CourseTracker()
+        assertFalse(tracker.hasGyroBias)
+        // Parked: the vehicle is turning at exactly zero, so whatever the gyro reads is the offset.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        assertTrue(tracker.hasGyroBias)
+        assertEquals(oneDegPerSec, tracker.gyroBiasRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun a_standstill_that_is_the_phone_being_handled_is_not_a_calibration() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(0f), 0L)
+        // A yaw rate no vehicle produces marks the sample as handling, and a hand's rotation is
+        // not a null offset however still the classifier thinks the car is.
+        tracker.onGyro(0f, 0f, -5f, 0.01f, 10_000_000L, 0f, stationary = true)
+        assertTrue(tracker.isDisturbed)
+        assertFalse(tracker.hasGyroBias)
+    }
+
+    @Test
+    fun the_offset_is_removed_from_the_rate_that_is_integrated() {
+        val tracker = CourseTracker()
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        assertEquals(0f, tracker.lastYawRateRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun an_uncompensated_offset_is_what_bends_a_dead_reckoned_bore() {
+        // The control for the test below: the same 20 s of straight driving, no calibration.
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 12f
+        )
+        // 1 deg/s for 20 s, integrated straight into the course.
+        assertEquals(20.0, Math.toDegrees(tracker.courseRad.toDouble()), 0.5)
+    }
+
+    @Test
+    fun a_calibrated_offset_leaves_a_dead_reckoned_bore_straight() {
+        val tracker = CourseTracker()
+        // Stopped at the lights before the portal: the ZARU measures the offset.
+        val parkedUntil = driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        tracker.onGnssCourse(0f, 12f)
+        // ...then 20 s of the bore, straight, with no fix to correct anything.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 12f, startNs = parkedUntil
+        )
+        assertEquals(0.0, Math.toDegrees(tracker.courseRad.toDouble()), 2.0)
+    }
+
+    @Test
+    fun gnss_tracked_driving_measures_the_offset_without_ever_stopping() {
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        // Two minutes of ordinary driving: the anchor keeps having to put back the same heading
+        // every second, and that one-sidedness is the offset.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 120f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 12f, gnssBearingRad = 0f
+        )
+        assertTrue(tracker.hasGyroBias)
+        assertEquals(oneDegPerSec, tracker.gyroBiasRadPerSec, 0.2f * oneDegPerSec)
+    }
+
+    @Test
+    fun a_real_turn_is_not_read_as_an_offset() {
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        // A long sweeping curve at 5 deg/s with a perfect gyro. The anchor has nothing to put
+        // back, so nothing here may be mistaken for a null offset.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 60f, bearingRateRadPerSec = 5f * oneDegPerSec,
+            biasRadPerSec = 0f, speedMps = 12f, gnssBearingRad = 0f
+        )
+        assertEquals(0f, tracker.gyroBiasRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun the_bearing_at_a_tunnel_mouth_is_not_a_calibration() {
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        // Through the bore with no fixes, the estimator declaring the denial every sample.
+        val dt = 0.01f
+        var t = 0L
+        repeat(2000) {
+            t += 10_000_000L
+            val gyro = biasedGyro(flatPhone(0f), 0f, oneDegPerSec)
+            tracker.onRotationMatrix(flatPhone(0f), t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, 12f)
+            tracker.onGnssDenied()
+        }
+        val before = tracker.gyroBiasRadPerSec
+        // The first bearing at the exit disagrees with the course by the whole accumulated drift.
+        // Divided by the outage that would look like a calibration; it is a multipath risk instead.
+        tracker.onGnssCourse(0f, 12f)
+        assertEquals(before, tracker.gyroBiasRadPerSec, 1e-6f)
+    }
+
+    @Test
+    fun an_absurd_offset_is_clamped_rather_than_believed() {
+        val tracker = CourseTracker()
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 30f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = 2f, speedMps = 0f, stationary = true
+        )
+        assertEquals(
+            CourseTracker.MAX_GYRO_BIAS_RAD_PER_SEC, tracker.gyroBiasRadPerSec, 1e-6f
+        )
+    }
+
+    @Test
+    fun a_reset_forgets_the_offset_too() {
+        val tracker = CourseTracker()
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        assertTrue(tracker.hasGyroBias)
+        tracker.reset()
+        assertFalse(tracker.hasGyroBias)
+        assertEquals(0f, tracker.gyroBiasRadPerSec, 1e-6f)
     }
 }

@@ -6,9 +6,10 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * The heading-provenance chip of D-127. The point of the chip is that the two field bugs were
- * invisible on screen: a heading that was really the handset's azimuth rendered identically to one
- * that was the vehicle's course.
+ * The heading-provenance chip of D-127, and the gyro bias D-128 adds to it. The point of the chip
+ * is that these failures were invisible on screen: a heading that was really the handset's azimuth
+ * rendered identically to one that was the vehicle's course, and an uncompensated null offset
+ * renders as a perfectly smooth curve that is simply in the wrong place.
  */
 class NavigationBottomSheetTest {
 
@@ -35,6 +36,18 @@ class NavigationBottomSheetTest {
     @Test
     fun mountOffsetLabel_shows_nothing_before_there_is_an_offset() {
         assertNull(mountOffsetLabel(null))
+    }
+
+    @Test
+    fun gyroBiasLabel_is_signed_tenths_of_a_degree_per_second() {
+        assertEquals("bias +1.0°/s", gyroBiasLabel((Math.PI / 180.0).toFloat()))
+        assertEquals("bias -0.5°/s", gyroBiasLabel((-Math.PI / 360.0).toFloat()))
+        assertEquals("bias +0.0°/s", gyroBiasLabel(0f))
+    }
+
+    @Test
+    fun gyroBiasLabel_shows_nothing_before_a_standstill_or_a_window_has_measured_one() {
+        assertNull(gyroBiasLabel(null))
     }
 
     @Test
