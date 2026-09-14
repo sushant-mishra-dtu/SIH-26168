@@ -4,7 +4,6 @@ import android.location.Location
 import android.os.SystemClock
 import com.sih.idr.demo.backend.tunnel.FixVerdict
 import com.sih.idr.demo.backend.tunnel.TunnelState
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -51,6 +50,11 @@ class LocalNavigationEstimator {
     private var lastTimestampNs = 0L
     private var lastGnssElapsedMs = 0L
     private var origin: Location? = null
+    // The last fix this estimator applied, for the bearing fallback (D-129). Fixes that the gate
+    // evaluated and did not apply are not recorded: a direction between two of those would be a
+    // direction between two multipath positions.
+    private var lastAppliedFix: Location? = null
+    private var lastAppliedFixElapsedMs = 0L
     private var originLat: Double = 28.6129
     private var originLon: Double = 77.2295
     private var northM = 0f
@@ -336,16 +340,30 @@ class LocalNavigationEstimator {
 
         // The GNSS course over ground is the only absolute heading here that is about the vehicle.
         // It anchors the course and, through it, re-learns where the phone is pointing relative to
-        // the direction of travel -- the mount offset. If the receiver omitted bearing, compute it
-        // from the position delta whenever motion is significant (D-127/D-128 follow-up).
+        // the direction of travel -- the mount offset. The tracker decides whether the speed makes
+        // the bearing worth believing.
+        //
+        // A fix without a bearing falls back to the direction from the previous applied fix to this
+        // one (D-129). Not to the innovation `(dNorth, dEast)`: that is fix minus *estimate*, and
+        // after any dead-reckoned stretch -- the forced fix at a portal, the first fix after a
+        // flyover -- it points along the pose error, which is whatever direction the drift took and
+        // not the direction of travel. Two consecutive fixes are a direction of travel, provided
+        // they are close in time and far enough apart that the receiver's jitter is not the answer.
+        val prev = lastAppliedFix
         val bearingRad = when {
             location.hasBearing() -> location.bearing.toRadians()
-            deltaFixM >= 1.0f && speedMps >= 1.0f -> atan2(dEast, dNorth)
+            prev != null &&
+                nowMs - lastAppliedFixElapsedMs <= FALLBACK_BEARING_MAX_GAP_MS &&
+                speedMps >= CourseTracker.COURSE_ANCHOR_MIN_SPEED &&
+                prev.distanceTo(location) >= FALLBACK_BEARING_MIN_STEP_M ->
+                prev.bearingTo(location).toRadians()
             else -> null
         }
         if (bearingRad != null) {
             course.onGnssCourse(bearingRad, speedMps)
         }
+        lastAppliedFix = Location(location)
+        lastAppliedFixElapsedMs = nowMs
 
         uncertaintyM = if (location.hasAccuracy()) location.accuracy.coerceIn(2.0f, 10.0f) else 3.5f
         lastGnssElapsedMs = nowMs
@@ -409,6 +427,8 @@ class LocalNavigationEstimator {
         } else {
             origin = null
         }
+        lastAppliedFix = null
+        lastAppliedFixElapsedMs = 0L
         northM = 0f
         eastM = 0f
         slew.reset()
@@ -522,6 +542,15 @@ class LocalNavigationEstimator {
 
     companion object {
         private const val GNSS_TIMEOUT_MS = 6_000L
+
+        /**
+         * The bearing fallback (D-129) needs two fixes that are consecutive and a step apart: no
+         * more than this between them, and at least [FALLBACK_BEARING_MIN_STEP_M] of ground covered.
+         * At the anchor's own 2 m/s floor that is a 1.5 s step; the relative jitter between two
+         * 1 Hz fixes is well under a metre, so 3 m is a direction and 1 m is not.
+         */
+        private const val FALLBACK_BEARING_MAX_GAP_MS = 2_500L
+        private const val FALLBACK_BEARING_MIN_STEP_M = 3.0f
         private const val TRACK_PERIOD_MS = 100L
         private const val MAX_TRACK_POINTS = 500
         private const val STEP_TIMEOUT_NS = 1_100_000_000L // Decelerate if no step within 1.1s

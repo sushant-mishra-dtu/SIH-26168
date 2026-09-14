@@ -308,11 +308,12 @@ class CourseTracker {
      * deg/s under 3-degree bearing noise and 1.01 +/- 0.14 deg/s under 8-degree (D-128).
      */
     private fun observeBias(correctionRad: Float) {
-        // Do not accumulate anchor corrections during active turns (> 4.5 deg/s): GNSS receiver
-        // filtering lag creates an apparent heading error that is not a sensor bias.
-        if (abs(lastYawRateRadPerSec) > MAX_BIAS_OBSERVE_YAW_RATE) {
-            return
-        }
+        // No yaw-rate gate here, on purpose (D-129). The receiver's bearing trails the true heading
+        // through a turn, so the anchor pulls the course back while the turn is on and pushes it
+        // forward again once the bearing catches up; both halves land in the same window and the
+        // sum cancels. Skipping the corrections while |rate| is high keeps only the catch-up and
+        // reads it as an offset: simulated over five city turns with the bearing 1 s late, the
+        // error in the learned bias goes from 0.05 deg/s without such a gate to 0.14 deg/s with it.
         if (biasWindowSec <= 0f) {
             // No window is open -- the course was frozen, or this is the fix at a tunnel mouth.
             // That correction is not a rate error over anything, so it is not evidence of a bias.
@@ -335,8 +336,11 @@ class CourseTracker {
     }
 
     /**
-     * Seeds initial null offset from the HAL uncalibrated gyro drift vector if no measurement
-     * has been taken yet (e.g. on launch before a standstill or GNSS window).
+     * Seeds the null offset from the drift estimate the HAL ships with `TYPE_GYROSCOPE_UNCALIBRATED`
+     * (`values[3..5]`), for the stretch between launch and the first standstill or GNSS-tracked
+     * window that measures it here. Taken once: after that the estimate is this class's own, and
+     * the HAL's is not consulted again. The projection and sign are those of [onGyro], so what is
+     * seeded is exactly what that raw rate carries.
      */
     fun seedHardwareDrift(dx: Float, dy: Float, dz: Float) {
         if (!hasGyroBias && hasUp) {
@@ -344,12 +348,6 @@ class CourseTracker {
             if (projected.isFinite() && abs(projected) > 1e-4f) {
                 setGyroBias(projected)
             }
-        }
-    }
-
-    fun seedHardwareBias(value: Float) {
-        if (!hasGyroBias && value.isFinite()) {
-            setGyroBias(value)
         }
     }
 
@@ -463,9 +461,6 @@ class CourseTracker {
 
         /** How much of each observed rate error is taken. ~35 s of driving closes 90% of a bias. */
         const val BIAS_LEARN_GAIN = 0.25f
-
-        /** ~4.6 deg/s. Beyond this, vehicle is turning and GNSS receiver lag pollutes bias observations. */
-        const val MAX_BIAS_OBSERVE_YAW_RATE = 0.08f
 
         private const val MAX_DT_NS = 250_000_000L
 

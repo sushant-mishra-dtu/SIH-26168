@@ -532,9 +532,12 @@ costs a fraction of what one a judge finds costs:
 
 1. **The mount-disturbance detector cannot see a 5° knock at 10 Hz** (§7, D-075). The reference InEKF
    threshold (`mount_disturbance_gyro_thresh = 3.0` rad/s) corresponds to a 17.2° knock under 10 Hz sampling.
-   In the on-device operator UI (`CourseTracker`), this is resolved via direct rotation-matrix gravity-vector
-   tilt tracking (`acos(dot)/dt > 0.45` rad/s), which reliably detects a 5° knock (0.87 rad/s). The offline
-   filter detector remains un-tuned around to avoid fitting without cradle hardware recordings.
+   In the on-device operator UI (`CourseTracker`), a knock that *tilts* the handset is seen by the
+   rotation-matrix gravity-vector tilt rate (`acos(dot)/dt > 0.44` rad/s, `TILT_DISTURBANCE_RAD_PER_SEC`):
+   a 5° tilt inside one 100 ms sample is 0.87 rad/s. A knock that only yaws the phone about the vertical
+   does not move that vector and is caught only by the 3.5 rad/s raw-rate rule, so the blind spot is
+   narrowed on the device, not closed. The offline filter detector remains un-tuned around to avoid
+   fitting without cradle hardware recordings.
 
 **Closed items previously listed as open:**
 - **The IO-VNBD accelerometer sign convention (R-8 / D-059) is CLOSED by D-085**: measured on real

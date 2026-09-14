@@ -509,6 +509,44 @@ class CourseTrackerTest {
     }
 
     @Test
+    fun a_lagging_bearing_through_turns_is_not_read_as_an_offset() {
+        // A receiver's course over ground trails the true heading by its own filter's lag, so
+        // through every turn the anchor first pulls the course back (the bearing has not caught
+        // up) and then pushes it forward again (it has). Both halves land in the window and the
+        // sum cancels; a gate that drops only the turning half leaves the catch-up behind and
+        // reads it as an offset the gyro does not have (D-129). Perfect gyro, five city turns,
+        // the bearing one second late: 0.05 deg/s here, 0.14 deg/s with the gate.
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        val hz = 100
+        val dt = 1f / hz
+        val stepNs = 1_000_000_000L / hz
+        val lagSamples = hz // 1 s
+        val turns = listOf( // start s, duration s, rate deg/s
+            Triple(20f, 6f, 10f), Triple(45f, 5f, -12f), Triple(70f, 8f, 8f),
+            Triple(100f, 6f, -10f), Triple(125f, 5f, 9f)
+        )
+        val bearings = ArrayList<Float>()
+        var trueBearing = 0f
+        var t = 0L
+        repeat(150 * hz) { i ->
+            t += stepNs
+            val tSec = i * dt
+            val rate = turns.firstOrNull { (s, d, _) -> tSec >= s && tSec < s + d }
+                ?.let { it.third * oneDegPerSec } ?: 0f
+            trueBearing = CourseTracker.wrapAngle(trueBearing + rate * dt)
+            bearings += trueBearing
+            val gyro = gyroForTurn(flatPhone(0f), rate)
+            tracker.onRotationMatrix(flatPhone(0f), t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, 12f)
+            if ((i + 1) % hz == 0) {
+                tracker.onGnssCourse(bearings[maxOf(0, bearings.size - 1 - lagSamples)], 12f)
+            }
+        }
+        assertEquals(0f, tracker.gyroBiasRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
     fun the_bearing_at_a_tunnel_mouth_is_not_a_calibration() {
         val tracker = CourseTracker()
         tracker.onGnssCourse(0f, 12f)
