@@ -81,8 +81,11 @@ class GeocodingService(
 
     /**
      * Nearby POI search for a selected category pill with an empty query.
-     * Photon`s `osm_tag=` parameter combined with lat/lon returns proximity-ranked POIs
-     * without requiring any query text.
+     *
+     * This is Photon's `/reverse` with a tag filter and a radius, which returns the POIs of that
+     * kind nearest to the point, nearest first. It is not `/api`: that endpoint refuses a request
+     * without `q` (HTTP 400, "q parameter is required"), so a nearby search routed through it
+     * would silently return nothing every time.
      */
     suspend fun nearby(
         userLat: Double,
@@ -90,9 +93,9 @@ class GeocodingService(
         osmTag: String
     ): List<SearchItem> = withContext(Dispatchers.IO) {
         runCatching {
-            val encodedTag = URLEncoder.encode(osmTag, "UTF-8")
-            val url = "https://photon.komoot.io/api/" +
-                "?lat=$userLat&lon=$userLon&osm_tag=$encodedTag&limit=10&lang=en"
+            val url = "https://photon.komoot.io/reverse" +
+                "?lat=$userLat&lon=$userLon&osm_tag=${photonTagParam(osmTag)}" +
+                "&radius=$NEARBY_RADIUS_KM&limit=10&lang=en"
             parsePhotonGeoJson(fetcher(url))
         }.getOrDefault(emptyList())
     }
@@ -148,13 +151,19 @@ class GeocodingService(
         osmTagFilter: String?
     ): List<SearchItem> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val tagParam = osmTagFilter
-            ?.let { "&osm_tag=${URLEncoder.encode(it, "UTF-8")}" }
-            ?: ""
+        val tagParam = osmTagFilter?.let { "&osm_tag=${photonTagParam(it)}" } ?: ""
         val url = "https://photon.komoot.io/api/" +
             "?q=$q&lat=$userLat&lon=$userLon&limit=10&lang=en$tagParam"
         return parsePhotonGeoJson(fetcher(url))
     }
+
+    /**
+     * Photon's tag filter is `key:value`, not the `key=value` this app uses for [SearchItem.osmKind]
+     * and the category pills. Sent with the `=`, Photon reads the whole string as a key, matches
+     * nothing, and every filtered search comes back empty -- checked against the public instance.
+     */
+    private fun photonTagParam(osmTag: String): String =
+        URLEncoder.encode(osmTag.replaceFirst('=', ':'), "UTF-8")
 
     private fun fetchNominatim(query: String, userLat: Double, userLon: Double): List<SearchItem> {
         val q = URLEncoder.encode(query, "UTF-8")
@@ -225,8 +234,12 @@ class GeocodingService(
                 props.optString("state", "").takeIf { it.isNotBlank() }
             ).joinToString(" · ")
 
+            // osm_id is only unique within its type: node 42 and way 42 are different objects, and
+            // both show up in real result sets. Without the type in the id, the UI's id-keyed
+            // dedupe would drop one of them.
+            val osmType = props.optString("osm_type", "")
             results += SearchItem(
-                id      = "photon_${props.optLong("osm_id", i.toLong())}",
+                id      = "photon_${osmType}${props.optLong("osm_id", i.toLong())}",
                 title   = name,
                 subtitle = subtitle,
                 category = osmCategoryLabel(osmKey, osmValue),
@@ -323,6 +336,9 @@ class GeocodingService(
     companion object {
         /** Singleton used by the production UI. Tests create their own instance with a fake fetcher. */
         val default: GeocodingService by lazy { GeocodingService() }
+
+        /** How far a category pill with no query text looks, in km (Photon's `radius` unit). */
+        const val NEARBY_RADIUS_KM = 5
     }
 }
 

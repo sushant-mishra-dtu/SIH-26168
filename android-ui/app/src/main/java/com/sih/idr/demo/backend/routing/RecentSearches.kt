@@ -1,4 +1,4 @@
-﻿package com.sih.idr.demo.backend.routing
+package com.sih.idr.demo.backend.routing
 
 import android.content.SharedPreferences
 import org.json.JSONArray

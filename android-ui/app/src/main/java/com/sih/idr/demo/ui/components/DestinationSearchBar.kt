@@ -1,4 +1,4 @@
-﻿package com.sih.idr.demo.ui.components
+package com.sih.idr.demo.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility

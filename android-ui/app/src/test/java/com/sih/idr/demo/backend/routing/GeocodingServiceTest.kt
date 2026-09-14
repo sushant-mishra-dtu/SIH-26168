@@ -1,4 +1,4 @@
-﻿package com.sih.idr.demo.backend.routing
+package com.sih.idr.demo.backend.routing
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -214,5 +214,70 @@ class GeocodingServiceTest {
         assertNotNull(result)
         assertEquals("Kartavya Path Central", result!!.title)
         assertEquals(SearchSource.PIN, result.source)
+    }
+
+    // ── The requests Photon actually gets ────────────────────────────────────
+    // Photon's tag filter is `key:value`; the app's pills and osmKind use `key=value`. Sent
+    // verbatim, the public instance returns zero features for every filtered search, and its
+    // /api endpoint is HTTP 400 without `q`, so a nearby search routed through it is always empty.
+
+    private val emptyCollection = """{"type":"FeatureCollection","features":[]}"""
+
+    @Test
+    fun photonTagFilterIsSentAsKeyColonValue() = runBlocking {
+        val urls = mutableListOf<String>()
+        val service = GeocodingService(
+            fetcher = { url -> urls += url; emptyCollection },
+            presets = emptyList()
+        )
+        service.search("petrol", userLat, userLon, osmTagFilter = "amenity=fuel")
+        val photon = urls.first { it.startsWith("https://photon.komoot.io/api/") }
+        assertTrue(photon, photon.contains("osm_tag=amenity%3Afuel"))
+        assertFalse(photon, photon.contains("%3D"))
+    }
+
+    @Test
+    fun nearbyUsesReverseWithTagAndRadiusNotApiWithoutQuery() = runBlocking {
+        val urls = mutableListOf<String>()
+        val service = GeocodingService(
+            fetcher = { url -> urls += url; emptyCollection },
+            presets = emptyList()
+        )
+        service.nearby(userLat, userLon, "amenity=fuel")
+        assertEquals(1, urls.size)
+        val url = urls.single()
+        assertTrue(url, url.startsWith("https://photon.komoot.io/reverse?"))
+        assertTrue(url, url.contains("osm_tag=amenity%3Afuel"))
+        assertTrue(url, url.contains("radius=${GeocodingService.NEARBY_RADIUS_KM}"))
+        assertFalse(url, url.contains("q="))
+    }
+
+    @Test
+    fun photonNodeAndWayWithTheSameOsmIdAreDistinctResults() = runBlocking {
+        // osm_id is unique per type only. The UI dedupes suggestions by id, so a shared id
+        // would silently drop one of two real places.
+        val twoObjects = """
+        {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "geometry": { "type": "Point", "coordinates": [77.2245, 28.6045] },
+              "properties": { "osm_type": "N", "osm_id": 42, "name": "Jiwan Service Station", "countrycode": "IN" }
+            },
+            {
+              "type": "Feature",
+              "geometry": { "type": "Point", "coordinates": [77.2405, 28.6146] },
+              "properties": { "osm_type": "W", "osm_id": 42, "name": "Ram Service Station", "countrycode": "IN" }
+            }
+          ]
+        }
+        """.trimIndent()
+        val service = GeocodingService(fetcher = { _ -> twoObjects }, presets = emptyList())
+        val results = service.nearby(userLat, userLon, "amenity=fuel")
+        assertEquals(2, results.size)
+        assertEquals(2, results.map { it.id }.toSet().size)
+        assertTrue(results.any { it.id == "photon_N42" })
+        assertTrue(results.any { it.id == "photon_W42" })
     }
 }
