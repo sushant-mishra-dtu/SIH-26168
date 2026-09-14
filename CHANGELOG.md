@@ -14,6 +14,73 @@ can be traced back to a commit.
 
 ---
 
+## v0.1.4 — 14 Sep 2026 (`versionCode` 4)
+
+**Destination search that reaches past the seven presets, and a calibration pass reviewed before
+it shipped.** Two branches merged to `main` the same evening (`827f876`, `607a293`), each with a
+follow-up commit that fixed what review and simulation found (`fc2bd59`, `8a3889b`, D-129).
+
+### Added
+
+- **Search anywhere in India.** The search bar now queries Photon (`photon.komoot.io`, prefix
+  autocomplete biased to your position) from the first character, with Nominatim as the fallback
+  for queries of three characters or more, throttled to its one-call-per-second policy. The seven
+  Delhi presets are still there and still work offline; online results are merged in, deduplicated
+  by position and title, and ranked by how well the title matches with distance as the tie-break.
+- **Recent destinations.** The last ten places you chose, most recent first, under a *Recent*
+  header when the field is focused and empty; long-press to remove one. Stored in
+  `SharedPreferences`, no new dependency.
+- **Category pills that search online.** *Fuel*, *Food*, *Parking* and *Hospitals* filter the
+  online results by OSM tag; with an empty query they run a nearby-POI search within 5 km.
+- **A dropped pin gets a name.** A long press on the map still starts routing immediately under the
+  coordinate string; the route's destination name is then patched with the reverse-geocoded place
+  name when it arrives, without a second route fetch.
+- **The gyro null offset starts from the hardware's own estimate.** `TYPE_GYROSCOPE_UNCALIBRATED`
+  ships a drift vector alongside the rate; it now seeds the bias for the stretch between launch and
+  the first standstill or GNSS-tracked window that measures it here. Taken once; after that the
+  estimate is the app's own. (D-129)
+- **A fix without a bearing still anchors the course** — from the direction between the previous
+  applied fix and this one, when they are within 2.5 s, at least 3 m apart and above the anchor's
+  2 m/s floor. (D-129)
+
+### Fixed
+
+- **`docs/METHOD.md` §13 and `SUBMISSION_AUDIT.md` no longer list the accelerometer sign
+  convention as open.** D-085 closed R-8 on 1 Sep with real stationary segments; the two documents
+  still said otherwise. The remaining gap is the offline detector's 10 Hz blind spot (D-075), and
+  the text now says what the on-device tilt rule does and does not see about it.
+
+### Caught in review, before this build
+
+Not regressions on a phone — none of this reached a device — but the reason the two merges carry
+follow-up commits:
+
+- Photon's tag filter is `key:value`; the service sent `key=value`, which matches nothing, so every
+  category-filtered search would have returned zero online results, and the nearby search went to
+  an endpoint that is HTTP 400 without a query. Both checked against the public instance. (`fc2bd59`)
+- A yaw-rate gate on the bias observation window, meant to keep GNSS bearing lag out of the
+  estimate, kept only the catch-up half of the lag's effect and tripled the error it was there to
+  remove: simulated over five city turns with the bearing 0.8 s late, −0.04 °/s without it, −0.11
+  with it. Reverted, with a lagged-turn test that fails on the gate. (D-129)
+- The bearing fallback took the direction of the *innovation* (fix minus estimate), which after a
+  dead-reckoned stretch is the direction of the pose error, not of travel. Rewritten to consecutive
+  applied fixes. (D-129)
+
+### Tests
+
+157 JUnit scenarios on the `osm` flavour, run on the Windows dev box: 10 new with the search
+(Photon parsing incl. the `[lon, lat]` order, the non-India drop, the Nominatim fallback, the
+network-failure path, ranking, reverse geocoding; recents order, cap, bump and remove), 3 on the
+Photon request shapes, 1 on the HAL drift seed, 1 on the lagged bearing through turns.
+
+### Installing over v0.1.3
+
+This build is signed with the dev box's debug keystore; v0.1.3 was a CI artifact signed with a
+per-runner one. Android refuses an upgrade across signing keys, so if the install fails with
+"App not installed" or a signature error, uninstall v0.1.3 first.
+
+---
+
 ## v0.1.3 — 14 Sep 2026 (`versionCode` 3)
 
 **The traced curve in tunnel mode, from the same 14 Sep road test.** The speedometer and heading
