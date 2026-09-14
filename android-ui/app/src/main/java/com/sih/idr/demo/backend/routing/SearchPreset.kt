@@ -6,7 +6,16 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Pre-cached landmark or search destination item.
+ * Where a [SearchItem] came from, so the UI can show the right icon and the
+ * recent-search store can distinguish its own entries from live online results.
+ */
+enum class SearchSource { PRESET, ONLINE, RECENT, PIN }
+
+/**
+ * Pre-cached landmark or online search destination item.
+ *
+ * [source] and [osmKind] both carry defaults so every existing `SearchItem(…)` call
+ * site compiles without change.
  */
 data class SearchItem(
     val id: String,
@@ -15,7 +24,11 @@ data class SearchItem(
     val category: String,
     val coordinate: GeoCoordinate,
     val isTunnel: Boolean = false,
-    val postedLimitKmh: Int? = null
+    val postedLimitKmh: Int? = null,
+    /** Where this item came from — used by the UI to pick the row icon. */
+    val source: SearchSource = SearchSource.PRESET,
+    /** OSM key=value tag, e.g. "amenity=cafe", for the category icon override. Null for presets. */
+    val osmKind: String? = null
 )
 
 /**

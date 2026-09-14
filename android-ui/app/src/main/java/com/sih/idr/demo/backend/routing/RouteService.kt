@@ -2,13 +2,11 @@ package com.sih.idr.demo.backend.routing
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 
 /**
  * Navigation routing and destination search service.
@@ -22,84 +20,26 @@ object RouteService {
     private const val READ_TIMEOUT_MS = 3000
 
     /**
-     * Searches for destinations matching [query], combining pre-cached presets and online Nominatim results.
+     * Searches for destinations matching [query], combining pre-cached presets and online results.
+     *
+     * Thin delegating wrapper around [GeocodingService.search]; all geocoding logic lives there.
+     * Kept here so existing call sites in [DestinationSearchBar] and tests compile without change.
      */
     suspend fun searchLocations(
         query: String,
         userLat: Double,
         userLon: Double,
         category: String = "All"
-    ): List<SearchItem> = withContext(Dispatchers.IO) {
-        val trimmed = query.trim()
-        val presets = SearchPreset.findPresets(trimmed, category, userLat, userLon)
-
-        // If query is short or user selected a specific preset category, return presets directly
-        if (trimmed.length < 3 || (category != "All" && category != "Landmarks")) {
-            return@withContext presets
+    ): List<SearchItem> {
+        // Map the UI category pill to an OSM tag filter for online search
+        val osmTagFilter: String? = when (category) {
+            "Fuel"      -> "amenity=fuel"
+            "Food"      -> "amenity=restaurant"
+            "Parking"   -> "amenity=parking"
+            "Hospitals" -> "amenity=hospital"
+            else        -> null      // All / Tunnels / Airports / Landmarks — no tag restriction
         }
-
-        try {
-            val encodedQuery = URLEncoder.encode(trimmed, "UTF-8")
-            val urlString = "https://nominatim.openstreetmap.org/search?format=json&q=$encodedQuery&limit=5&countrycodes=in"
-            val url = URL(urlString)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", USER_AGENT)
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = READ_TIMEOUT_MS
-            }
-
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val reader = BufferedReader(InputStreamReader(connection.inputStream))
-                val response = reader.use { it.readText() }
-                connection.disconnect()
-
-                val jsonArray = JSONArray(response)
-                val onlineResults = ArrayList<SearchItem>()
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val displayName = obj.optString("display_name", "")
-                    val parts = displayName.split(",")
-                    val title = parts.firstOrNull()?.trim() ?: displayName
-                    val subtitle = if (parts.size > 1) parts.drop(1).take(3).joinToString(", ") { it.trim() } else ""
-                    val lat = obj.optDouble("lat", 0.0)
-                    val lon = obj.optDouble("lon", 0.0)
-
-                    if (lat != 0.0 && lon != 0.0) {
-                        onlineResults.add(
-                            SearchItem(
-                                id = "osm_${obj.optString("osm_id", i.toString())}",
-                                title = title,
-                                subtitle = subtitle,
-                                category = "Search",
-                                coordinate = GeoCoordinate(latitude = lat, longitude = lon)
-                            )
-                        )
-                    }
-                }
-
-                // Merge presets first, followed by online results
-                val seenTitles = HashSet<String>()
-                val merged = ArrayList<SearchItem>()
-                for (p in presets) {
-                    if (seenTitles.add(p.title.lowercase())) {
-                        merged.add(p)
-                    }
-                }
-                for (o in onlineResults) {
-                    if (seenTitles.add(o.title.lowercase())) {
-                        merged.add(o)
-                    }
-                }
-                merged
-            } else {
-                connection.disconnect()
-                presets
-            }
-        } catch (_: Exception) {
-            // Offline fallback to presets without breaking navigation
-            presets
-        }
+        return GeocodingService.default.search(query, userLat, userLon, osmTagFilter)
     }
 
     /**

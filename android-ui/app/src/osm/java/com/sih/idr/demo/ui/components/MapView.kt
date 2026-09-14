@@ -37,6 +37,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.errorEllipse
 import com.sih.idr.demo.backend.routing.NavigationRoute
+import com.sih.idr.demo.backend.routing.SearchItem
 import com.sih.idr.demo.backend.tunnel.TunnelState
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
@@ -71,7 +72,13 @@ fun MapView(
     /** Height of whatever the screen stacks over the bottom of the map; the Re-center pill clears it. */
     bottomInset: Dp = 0.dp,
     /** A long press on the map, as WGS84 latitude and longitude. */
-    onMapLongPress: ((Double, Double) -> Unit)? = null
+    onMapLongPress: ((Double, Double) -> Unit)? = null,
+    /**
+     * Optional search results to show as numbered markers on the map.
+     * Shown only when the list is non-empty and [courseUpMode] is false, so the heading-locked
+     * camera is not disturbed. Defaults to empty (no markers) so existing call sites compile.
+     */
+    searchResults: List<SearchItem> = emptyList()
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -100,8 +107,11 @@ fun MapView(
             var lastRenderedLat = 0.0
             var lastRenderedLon = 0.0
             var lastRenderedHeading = -999f
+            var lastSearchResults: List<SearchItem>? = null
         }
     }
+
+    val searchResultMarkers = remember { mutableListOf<Marker>() }
 
     // Night Mode Color Filter for OSM Tiles (Google Maps Night Mode look)
     val nightFilter = remember {
@@ -338,6 +348,30 @@ fun MapView(
                     }
                 }
 
+                // 6c. Update numbered search result markers
+                if (searchResults != renderCache.lastSearchResults) {
+                    renderCache.lastSearchResults = searchResults
+                    for (marker in searchResultMarkers) {
+                        osmView.overlays.remove(marker)
+                    }
+                    searchResultMarkers.clear()
+                    if (searchResults.isNotEmpty() && !courseUpMode) {
+                        searchResults.take(10).forEachIndexed { idx, item ->
+                            val m = Marker(osmView).apply {
+                                position = GeoPoint(item.coordinate.latitude, item.coordinate.longitude)
+                                icon = getNumberedMarkerIcon(context, idx + 1)
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                title = item.title
+                                snippet = item.subtitle
+                                infoWindow = null
+                            }
+                            searchResultMarkers.add(m)
+                            osmView.overlays.add(m)
+                        }
+                        osmView.invalidate()
+                    }
+                }
+
                 // 7. Navigation Lookahead Lead & Continuous Camera Gliding (Google Maps style)
                 val hasValidPos = (telemetry.latitude != 0.0 || telemetry.longitude != 0.0)
                 if (hasValidPos) {
@@ -505,6 +539,36 @@ private fun getDestinationIcon(context: Context): Drawable {
     // White inner dot
     paint.color = android.graphics.Color.WHITE
     canvas.drawCircle(center, sizePx * 0.38f, sizePx * 0.12f, paint)
+
+    return BitmapDrawable(context.resources, bitmap)
+}
+
+private fun getNumberedMarkerIcon(context: Context, number: Int): Drawable {
+    val density = context.resources.displayMetrics.density
+    val sizePx = (28 * density).roundToInt()
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // Background circle
+    paint.color = android.graphics.Color.parseColor("#008CFF")
+    paint.style = Paint.Style.FILL
+    canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f - 2f * density, paint)
+
+    // White border
+    paint.color = android.graphics.Color.WHITE
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 2f * density
+    canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f - 2f * density, paint)
+
+    // Number text
+    paint.style = Paint.Style.FILL
+    paint.color = android.graphics.Color.WHITE
+    paint.textSize = 13f * density
+    paint.textAlign = Paint.Align.CENTER
+    paint.isFakeBoldText = true
+    val yPos = (sizePx / 2f - (paint.descent() + paint.ascent()) / 2f)
+    canvas.drawText(number.toString(), sizePx / 2f, yPos, paint)
 
     return BitmapDrawable(context.resources, bitmap)
 }
