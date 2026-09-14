@@ -27,6 +27,19 @@ import kotlin.math.roundToInt
  *   canned JSON without any real network. The default calls [defaultFetch].
  * @param presets Offline preset list; injectable so tests can assert against a fixed catalogue.
  */
+/**
+ * Result of a geocoding operation containing merged/ranked items and network connectivity status.
+ *
+ * @param items Destination items matching the query or POI request.
+ * @param isOffline True if every attempted online geocoder (Photon and Nominatim) threw a network
+ *   error, meaning the app fell back purely to offline presets. False if any online geocoder responded
+ *   (even with 0 results) or if no network request was needed.
+ */
+data class GeocodingResult(
+    val items: List<SearchItem>,
+    val isOffline: Boolean = false
+)
+
 class GeocodingService(
     private val fetcher: (String) -> String = ::defaultFetch,
     private val presets: List<SearchItem> = SearchPreset.PRESETS
@@ -44,7 +57,7 @@ class GeocodingService(
      *
      * Pipeline:
      * 1. Photon (prefix autocomplete, any query length, `countrycode=in` filter)
-     * 2. Nominatim (full-text, only when Photon fails, only for query.length >= 3)
+     * 2. Nominatim (full-text, only when Photon fails or returns empty, only for query.length >= 3)
      * 3. Offline presets on any failure — never throws, always returns something
      *
      * @param osmTagFilter Optional OSM tag constraint passed to Photon, e.g. "amenity=fuel".
@@ -54,7 +67,18 @@ class GeocodingService(
         userLat: Double,
         userLon: Double,
         osmTagFilter: String? = null
-    ): List<SearchItem> = withContext(Dispatchers.IO) {
+    ): List<SearchItem> = searchWithStatus(query, userLat, userLon, osmTagFilter).items
+
+    /**
+     * Searches for destinations matching [query], returning both the ranked result items
+     * and a boolean flag indicating if all online geocoders failed (actual network offline).
+     */
+    suspend fun searchWithStatus(
+        query: String,
+        userLat: Double,
+        userLon: Double,
+        osmTagFilter: String? = null
+    ): GeocodingResult = withContext(Dispatchers.IO) {
         val trimmed = query.trim()
         val q = trimmed.lowercase()
         val offlineResults = presets.filter { item ->
@@ -63,38 +87,88 @@ class GeocodingService(
             SearchPreset.distanceBetweenM(userLat, userLon, item.coordinate.latitude, item.coordinate.longitude)
         }.map { it.copy(source = SearchSource.PRESET) }
 
-        val photonResults = runCatching {
-            fetchPhoton(trimmed, userLat, userLon, osmTagFilter)
-        }.getOrNull() ?: emptyList()
-
-        val onlineResults: List<SearchItem> = when {
-            photonResults.isNotEmpty() -> photonResults
-            trimmed.length >= 3 -> runCatching {
-                throttleNominatim()
-                fetchNominatim(trimmed, userLat, userLon)
-            }.getOrNull() ?: emptyList()
-            else -> emptyList()
+        if (trimmed.isEmpty()) {
+            return@withContext GeocodingResult(
+                items = offlineResults,
+                isOffline = false
+            )
         }
 
-        mergeAndRank(offlineResults, onlineResults, trimmed, userLat, userLon)
+        val photonAttempt = runCatching {
+            fetchPhoton(trimmed, userLat, userLon, osmTagFilter)
+        }
+        val photonResults = photonAttempt.getOrNull() ?: emptyList()
+        val photonSuccess = photonAttempt.isSuccess
+
+        val (onlineResults, isOffline) = when {
+            photonResults.isNotEmpty() -> Pair(photonResults, false)
+            photonSuccess -> {
+                // Photon succeeded (200 OK) with 0 features; fallback to Nominatim if eligible
+                if (trimmed.length >= 3) {
+                    val nomAttempt = runCatching {
+                        throttleNominatim()
+                        fetchNominatim(trimmed, userLat, userLon)
+                    }
+                    val nomResults = nomAttempt.getOrNull() ?: emptyList()
+                    // Network connection was verified by Photon, so device is not offline
+                    Pair(nomResults, false)
+                } else {
+                    Pair(emptyList(), false)
+                }
+            }
+            else -> {
+                // Photon failed with a network exception
+                if (trimmed.length >= 3) {
+                    val nomAttempt = runCatching {
+                        throttleNominatim()
+                        fetchNominatim(trimmed, userLat, userLon)
+                    }
+                    val nomResults = nomAttempt.getOrNull() ?: emptyList()
+                    val nomSuccess = nomAttempt.isSuccess
+                    Pair(nomResults, !nomSuccess)
+                } else {
+                    // Photon failed and query < 3 -> full online failure
+                    Pair(emptyList(), true)
+                }
+            }
+        }
+
+        val merged = mergeAndRank(offlineResults, onlineResults, trimmed, userLat, userLon)
+        GeocodingResult(
+            items = merged,
+            isOffline = isOffline
+        )
     }
 
     /**
      * Nearby POI search for a selected category pill with an empty query.
-     * Photon`s `osm_tag=` parameter combined with lat/lon returns proximity-ranked POIs
+     * Photon's `osm_tag=` parameter combined with lat/lon returns proximity-ranked POIs
      * without requiring any query text.
      */
     suspend fun nearby(
         userLat: Double,
         userLon: Double,
         osmTag: String
-    ): List<SearchItem> = withContext(Dispatchers.IO) {
-        runCatching {
+    ): List<SearchItem> = nearbyWithStatus(userLat, userLon, osmTag).items
+
+    /**
+     * Nearby POI search returning both items and whether the network failed.
+     */
+    suspend fun nearbyWithStatus(
+        userLat: Double,
+        userLon: Double,
+        osmTag: String
+    ): GeocodingResult = withContext(Dispatchers.IO) {
+        val attempt = runCatching {
             val encodedTag = URLEncoder.encode(osmTag, "UTF-8")
             val url = "https://photon.komoot.io/api/" +
                 "?lat=$userLat&lon=$userLon&osm_tag=$encodedTag&limit=10&lang=en"
             parsePhotonGeoJson(fetcher(url))
-        }.getOrDefault(emptyList())
+        }
+        GeocodingResult(
+            items = attempt.getOrDefault(emptyList()),
+            isOffline = attempt.isFailure
+        )
     }
 
     /**

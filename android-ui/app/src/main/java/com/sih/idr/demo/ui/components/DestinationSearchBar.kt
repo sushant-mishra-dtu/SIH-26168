@@ -1,4 +1,4 @@
-﻿package com.sih.idr.demo.ui.components
+package com.sih.idr.demo.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -110,6 +110,7 @@ fun DestinationSearchBar(
     expanded: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {},
     recentSearches: RecentSearches? = null,
+    onResultsChanged: (List<SearchItem>) -> Unit = {},
 ) {
     val palette     = LocalIDRPalette.current
     val focusManager = LocalFocusManager.current
@@ -132,6 +133,11 @@ fun DestinationSearchBar(
     // Sync when expanded state is driven from outside (map tap closes search)
     LaunchedEffect(expanded) {
         if (!expanded) focusManager.clearFocus()
+    }
+
+    // Propagate search results upward so map views can render numbered pins
+    LaunchedEffect(suggestions) {
+        onResultsChanged(suggestions)
     }
 
     // ── Core search trigger ───────────────────────────────────────────────────
@@ -158,29 +164,31 @@ fun DestinationSearchBar(
             delay(300)
             isLoading = true
 
-            val online: List<SearchItem> = if (trimmed.isEmpty() && pill.osmTag != null) {
+            val (fetchedItems, networkFailed) = if (trimmed.isEmpty() && pill.osmTag != null) {
                 // Empty query + category pill → nearby POI search
-                runCatching {
-                    GeocodingService.default.nearby(userLat, userLon, pill.osmTag)
-                }.getOrNull() ?: emptyList()
+                val res = runCatching {
+                    GeocodingService.default.nearbyWithStatus(userLat, userLon, pill.osmTag)
+                }.getOrNull()
+                Pair(res?.items ?: emptyList(), res?.isOffline ?: true)
             } else if (trimmed.isNotEmpty()) {
-                runCatching {
-                    GeocodingService.default.search(trimmed, userLat, userLon, pill.osmTag)
-                }.getOrNull() ?: emptyList()
+                val res = runCatching {
+                    GeocodingService.default.searchWithStatus(trimmed, userLat, userLon, pill.osmTag)
+                }.getOrNull()
+                Pair(res?.items ?: emptyList(), res?.isOffline ?: true)
             } else {
-                emptyList()
+                Pair(emptyList(), false)
             }
 
             isLoading = false
+            // Only flag offline if the network request actually failed, NOT when search returned 0 results
+            isOffline = networkFailed && trimmed.isNotEmpty()
 
-            if (online.isEmpty() && trimmed.isNotEmpty()) {
-                isOffline = true
-            }
-
-            suggestions = if (online.isNotEmpty()) {
-                buildMergedSuggestions(recents, online)
-            } else {
+            suggestions = if (fetchedItems.isNotEmpty()) {
+                buildMergedSuggestions(recents, fetchedItems)
+            } else if (networkFailed || trimmed.isEmpty()) {
                 immediate
+            } else {
+                emptyList()
             }
         }
     }
@@ -468,6 +476,25 @@ fun DestinationSearchBar(
                         }
                     }
                 }
+            }
+        }
+
+        // ── Empty Results Feedback (distinct from offline banner) ────────────
+        AnimatedVisibility(
+            visible = expanded && suggestions.isEmpty() && query.isNotBlank() && !isLoading && !isOffline,
+            enter   = fadeIn(),
+            exit    = fadeOut()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    text  = "No places found for \"$query\"",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.textSecondary
+                )
             }
         }
     }

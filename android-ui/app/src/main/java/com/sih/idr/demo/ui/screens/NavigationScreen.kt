@@ -91,6 +91,7 @@ fun NavigationScreen(
     val activeRoute = telemetry.activeRoute
     var isSearchExpanded by remember { mutableStateOf(false) }
     var isSheetExpanded by remember { mutableStateOf(false) }
+    var searchResultsForMap by remember { mutableStateOf<List<SearchItem>>(emptyList()) }
 
     // The bottom chrome (speed HUD + sheet) is measured, not assumed: the sheet roughly triples
     // in height when the diagnostics drawer opens, and anything anchored to the bottom of the map
@@ -115,6 +116,7 @@ fun NavigationScreen(
             courseUpMode = courseUpMode,
             onToggleCourseUp = onToggleCourseUp,
             bottomInset = bottomChromeHeight,
+            searchResults = if (isSearchExpanded) searchResultsForMap else emptyList(),
             onMapLongPress = { lat, lon ->
                 // Step 1: start routing immediately with a coordinate-string name so the user
                 // sees the route line right away without waiting for the geocoder.
@@ -256,6 +258,7 @@ fun NavigationScreen(
                     expanded = isSearchExpanded,
                     onExpandedChange = { isSearchExpanded = it },
                     recentSearches = recentSearches,
+                    onResultsChanged = { searchResultsForMap = it },
                     onSelectDestination = { item ->
                         scope.launch {
                             val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)

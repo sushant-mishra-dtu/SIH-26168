@@ -1,4 +1,4 @@
-﻿package com.sih.idr.demo.backend.routing
+package com.sih.idr.demo.backend.routing
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -214,5 +214,51 @@ class GeocodingServiceTest {
         assertNotNull(result)
         assertEquals("Kartavya Path Central", result!!.title)
         assertEquals(SearchSource.PIN, result.source)
+    }
+
+    @Test
+    fun searchWithStatusReportsOfflineOnNetworkFailure() = runBlocking {
+        val service = GeocodingService(
+            fetcher = { _ -> throw IOException("No route to host") },
+            presets = SearchPreset.PRESETS
+        )
+
+        val result = service.searchWithStatus("Connaught", userLat, userLon)
+        assertTrue("isOffline must be true when network throws", result.isOffline)
+        assertFalse("Presets should still be returned as fallback", result.items.isEmpty())
+    }
+
+    @Test
+    fun searchWithStatusReportsOnlineEvenWhenResultsEmpty() = runBlocking {
+        // Photon and Nominatim return valid empty responses (device is online, just 0 matches)
+        val service = GeocodingService(
+            fetcher = { url ->
+                if (url.contains("photon.komoot.io")) {
+                    """{"type":"FeatureCollection","features":[]}"""
+                } else {
+                    "[]"
+                }
+            },
+            presets = emptyList()
+        )
+
+        val result = service.searchWithStatus("xyznonsensequery123", userLat, userLon)
+        assertFalse("isOffline must be false when network succeeds with 0 matches", result.isOffline)
+        assertTrue("Result items should be empty", result.items.isEmpty())
+    }
+
+    @Test
+    fun nearbyWithStatusReportsOfflineOnFailure() = runBlocking {
+        val failingService = GeocodingService(
+            fetcher = { _ -> throw IOException("DNS resolution failed") }
+        )
+        val offlineResult = failingService.nearbyWithStatus(userLat, userLon, "amenity=fuel")
+        assertTrue("nearbyWithStatus must be offline on network error", offlineResult.isOffline)
+
+        val workingService = GeocodingService(
+            fetcher = { _ -> """{"type":"FeatureCollection","features":[]}""" }
+        )
+        val onlineResult = workingService.nearbyWithStatus(userLat, userLon, "amenity=fuel")
+        assertFalse("nearbyWithStatus must not be offline when network succeeds", onlineResult.isOffline)
     }
 }
