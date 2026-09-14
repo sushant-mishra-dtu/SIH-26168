@@ -14,6 +14,62 @@ can be traced back to a commit.
 
 ---
 
+## v0.1.5 — 15 Sep 2026 (`versionCode` 5)
+
+**Search that says what it means, and a Reset Origin button that says when it works.** Two
+branches from the 14 Sep evening, `fix/search-refinements-and-bom` (`6c929f4`) and
+`temp-fix-recenter-button` (`04e7216`), merged to `main` as `5c25e64` and `1436d24` after review,
+each with fixes folded into the merge commit.
+
+### Added
+
+- **Search results on the map.** While the search list is open, the `osm` map shows the
+  first ten suggestions as numbered pins in list order; they clear when the list closes or the
+  camera is heading-locked (Course-Up), so the locked camera is not disturbed.
+- **"No places found for …".** A query the geocoders answered with zero matches now says so under
+  the field, instead of showing the offline banner. (`GeocodingResult.isOffline`)
+
+### Fixed
+
+- **The offline banner meant "no results", not "no network".** The search bar raised it whenever
+  the online result list came back empty, so a misspelling in perfect coverage looked like a
+  dropped connection. The geocoder now reports whether the network was reachable — offline only
+  when every service it tried threw; a `200` with no features counts as reachable — and the banner
+  follows that.
+- **Reset Origin did nothing until recording started, without saying so.** `resetOrigin()`
+  returns early with no running service. The quick-action pill and the sheet's *Reset Pose Origin*
+  button are now disabled and dimmed until recording is on, the same treatment the tunnel-override
+  selector already had.
+- **Back gesture on an empty search list.** It was wired to close the list only when the list had
+  items; with the zero-result state now designed, it closes the list regardless.
+- Four Kotlin sources carried a UTF-8 byte-order mark before `package`; stripped.
+
+### Caught in review, before this build
+
+- The search branch predated `fc2bd59` and its `nearbyWithStatus` still carried the Photon `/api`
+  URL that is HTTP 400 without `q`. Resolved to `/reverse` with the `key:value` tag filter and
+  radius, so the category pills keep working online.
+- "No places found" keyed on an empty list and no spinner — which is also the state during the
+  300 ms debounce — so it flashed on every keystroke that matched no preset. It now waits for the
+  search to settle.
+- The Reset Origin branch disabled the click but left the pill looking live, so a tap still did
+  nothing, now silently. Hence the dimming above.
+- The `mapbox` flavour's `MapView` did not take the `searchResults` parameter the screen now passes
+  by name; it accepts it (not drawn there yet) so that flavour still compiles.
+
+### Tests
+
+157 JUnit tests on the `osm` flavour, all passing on the Windows dev box: 5 new on the
+online/offline status (network throws → offline with presets; Photon empty → online; Photon empty
+and Nominatim throws → online; short query decided by Photon alone; `nearbyWithStatus` both ways).
+
+### Installing over v0.1.4
+
+Same dev-box debug keystore as v0.1.4, so this installs as an upgrade. Coming from v0.1.3 or
+earlier (CI-signed), uninstall first.
+
+---
+
 ## v0.1.4 — 14 Sep 2026 (`versionCode` 4)
 
 **Destination search that reaches past the seven presets, and a calibration pass reviewed before
