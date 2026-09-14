@@ -109,6 +109,7 @@ dependencies {
     "mapboxImplementation"("com.mapbox.extension:maps-compose-ndk27:11.30.1")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

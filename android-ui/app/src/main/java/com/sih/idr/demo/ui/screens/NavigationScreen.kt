@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.TelemetryStore
 import com.sih.idr.demo.backend.routing.GeoCoordinate
+import com.sih.idr.demo.backend.routing.GeocodingService
 import com.sih.idr.demo.backend.routing.RouteService
 import com.sih.idr.demo.backend.routing.SearchItem
 import com.sih.idr.demo.backend.tunnel.TunnelOverride
@@ -79,6 +80,12 @@ fun NavigationScreen(
     val palette = LocalIDRPalette.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val recentSearches = remember {
+        com.sih.idr.demo.backend.routing.RecentSearches(
+            context.getSharedPreferences("idr_recent_searches", android.content.Context.MODE_PRIVATE)
+        )
+    }
     val tunnelState = telemetry.tunnelState
     val inTunnel = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
     val activeRoute = telemetry.activeRoute
@@ -109,11 +116,11 @@ fun NavigationScreen(
             onToggleCourseUp = onToggleCourseUp,
             bottomInset = bottomChromeHeight,
             onMapLongPress = { lat, lon ->
-                // A long press is a destination, the way it is in every maps app. The pin is
-                // named by its coordinates: there is no reverse geocoder here to name it better.
+                // Step 1: start routing immediately with a coordinate-string name so the user
+                // sees the route line right away without waiting for the geocoder.
                 val pin = SearchItem(
-                    id = "pin_%.5f_%.5f".format(Locale.US, lat, lon),
-                    title = "Dropped pin",
+                    id       = "pin_%.5f_%.5f".format(Locale.US, lat, lon),
+                    title    = "Dropped pin",
                     subtitle = "%.5f, %.5f".format(Locale.US, lat, lon),
                     category = "Landmarks",
                     coordinate = GeoCoordinate(lat, lon)
@@ -122,6 +129,11 @@ fun NavigationScreen(
                 scope.launch {
                     val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)
                     TelemetryStore.setActiveRoute(RouteService.fetchRoute(start, pin))
+                    // Step 2: patch the route name once the geocoder returns — no second route fetch
+                    val named = GeocodingService.default.reverse(lat, lon)
+                    if (named != null) {
+                        TelemetryStore.updateRouteName(named.title)
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -243,6 +255,7 @@ fun NavigationScreen(
                     userLon = telemetry.longitude,
                     expanded = isSearchExpanded,
                     onExpandedChange = { isSearchExpanded = it },
+                    recentSearches = recentSearches,
                     onSelectDestination = { item ->
                         scope.launch {
                             val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)

@@ -208,4 +208,16 @@ object TelemetryStore {
             routeProgressFraction = 0f
         )
     }
+
+    /**
+     * Updates the [NavigationRoute.destinationName] of the active route in-place.
+     * Used by long-press reverse geocoding: the route starts immediately with a coordinate
+     * string, then the name is patched once the geocoder returns. A no-op if no route is active.
+     */
+    fun updateRouteName(name: String) {
+        val current = mutableState.value.activeRoute ?: return
+        mutableState.value = mutableState.value.copy(
+            activeRoute = current.copy(destinationName = name)
+        )
+    }
 }
