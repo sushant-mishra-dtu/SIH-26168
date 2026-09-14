@@ -255,6 +255,7 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 headingIsCourse = estimate.headingIsCourse,
                 mountOffsetRad = estimate.mountOffsetRad,
                 attitudeDisturbed = estimate.attitudeDisturbed,
+                gyroBiasRadPerSec = estimate.gyroBiasRadPerSec,
                 motionMode = estimate.motionMode,
                 positionNorthM = estimate.positionNorthM,
                 positionEastM = estimate.positionEastM,
