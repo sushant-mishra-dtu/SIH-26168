@@ -7,7 +7,9 @@ Smart India Hackathon 2026 · Problem Statement **26168** · AI-based intelligen
 > **Status:** 14 Sep 2026. CI green, 728 Python tests plus JUnit on both Android roots.
 > **The demo app is installable.** `releases/app-osm-debug.apk` is the `osm` flavour of the
 > operator UI (`android-ui/`), built from `main`; download link and install steps in
-> [releases/README.md](releases/README.md). It carries the navigation screen, the autonomous
+> [releases/README.md](releases/README.md). The committed APK is **v0.1.0**; the source is at
+> **v0.1.2** and the file has not been refreshed yet — what changed is
+> [CHANGELOG.md](CHANGELOG.md). It carries the navigation screen, the autonomous
 > tunnel state machine (D-126), turn guidance and the covariance ellipse (D-125). A `mapbox`
 > flavour exists behind two tokens that are not checked in (D-121, D-122) and is not published.
 > **Gate 1 is measured and does not close.** The sweep runs end to end on IO-VNBD (D-110); at 60 s
