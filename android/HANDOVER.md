@@ -271,6 +271,12 @@ it; `org.gradle.java.home` does not help, because that reaches only the daemon.
 
 ## 7. The second app, at `android-ui/`
 
+> **That module now has its own handover:** [`android-ui/HANDOVER.md`](../android-ui/HANDOVER.md),
+> written 14 Sep at the end of the D-128 session. It covers the traced-curve work of D-127 and
+> D-128, what those fixes do *not* claim, and why the published APK is still v0.1.0. The decision
+> this section ends on — whether the module exists at all — is unchanged by it and is still §9
+> item 6.
+
 It arrived on 5 Sep in one commit (`9a6f6c2`, saksham-eng560), a complete Compose operator UI —
 1,184 lines, its own Gradle root, its own application id `com.sih.idr.demo`, no shared code with
 `android/`. Nobody read it against §2. **It broke four of the six constraints there**, and the four
