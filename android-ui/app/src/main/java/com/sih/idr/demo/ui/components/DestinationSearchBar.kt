@@ -110,6 +110,7 @@ fun DestinationSearchBar(
     expanded: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {},
     recentSearches: RecentSearches? = null,
+    onResultsChanged: (List<SearchItem>) -> Unit = {},
 ) {
     val palette     = LocalIDRPalette.current
     val focusManager = LocalFocusManager.current
@@ -121,6 +122,10 @@ fun DestinationSearchBar(
     var searchJob        by remember { mutableStateOf<Job?>(null) }
     var isLoading        by remember { mutableStateOf(false) }
     var isOffline        by remember { mutableStateOf(false) }
+    // True once the network leg of the latest query has finished (or been skipped). The empty-
+    // results text keys on it: without it the text would show for the 300 ms debounce window,
+    // when the list is empty but nothing has been asked yet.
+    var searchSettled    by remember { mutableStateOf(true) }
     var recents          by remember { mutableStateOf<List<SearchItem>>(emptyList()) }
 
     // Load recents once on first composition
@@ -132,6 +137,11 @@ fun DestinationSearchBar(
     // Sync when expanded state is driven from outside (map tap closes search)
     LaunchedEffect(expanded) {
         if (!expanded) focusManager.clearFocus()
+    }
+
+    // Propagate search results upward so map views can render numbered pins
+    LaunchedEffect(suggestions) {
+        onResultsChanged(suggestions)
     }
 
     // ── Core search trigger ───────────────────────────────────────────────────
@@ -150,37 +160,43 @@ fun DestinationSearchBar(
                 recents,
                 SearchPreset.findPresets(trimmed, category, userLat, userLon)
             )
-            suggestions = immediate
-            isLoading   = false
-            isOffline   = false
+            suggestions   = immediate
+            isLoading     = false
+            isOffline     = false
+            searchSettled = false
 
             // Debounce before hitting the network
             delay(300)
             isLoading = true
 
-            val online: List<SearchItem> = if (trimmed.isEmpty() && pill.osmTag != null) {
+            val (fetchedItems, networkFailed) = if (trimmed.isEmpty() && pill.osmTag != null) {
                 // Empty query + category pill → nearby POI search
-                runCatching {
-                    GeocodingService.default.nearby(userLat, userLon, pill.osmTag)
-                }.getOrNull() ?: emptyList()
+                val res = runCatching {
+                    GeocodingService.default.nearbyWithStatus(userLat, userLon, pill.osmTag)
+                }.getOrNull()
+                Pair(res?.items ?: emptyList(), res?.isOffline ?: true)
             } else if (trimmed.isNotEmpty()) {
-                runCatching {
-                    GeocodingService.default.search(trimmed, userLat, userLon, pill.osmTag)
-                }.getOrNull() ?: emptyList()
+                val res = runCatching {
+                    GeocodingService.default.searchWithStatus(trimmed, userLat, userLon, pill.osmTag)
+                }.getOrNull()
+                Pair(res?.items ?: emptyList(), res?.isOffline ?: true)
+            } else {
+                Pair(emptyList(), false)
+            }
+
+            isLoading     = false
+            searchSettled = true
+            // Only flag offline if the network request actually failed, NOT when search returned 0 results
+            isOffline = networkFailed && trimmed.isNotEmpty()
+
+            // Recents are not filtered by the query, so a real query that matched nothing shows
+            // nothing (and the empty-results text below), not a list of unrelated recents.
+            suggestions = if (fetchedItems.isNotEmpty()) {
+                buildMergedSuggestions(recents, fetchedItems)
+            } else if (networkFailed || trimmed.isEmpty()) {
+                immediate
             } else {
                 emptyList()
-            }
-
-            isLoading = false
-
-            if (online.isEmpty() && trimmed.isNotEmpty()) {
-                isOffline = true
-            }
-
-            suggestions = if (online.isNotEmpty()) {
-                buildMergedSuggestions(recents, online)
-            } else {
-                immediate
             }
         }
     }
@@ -203,7 +219,7 @@ fun DestinationSearchBar(
     }
 
     // Back gesture closes the list before leaving the app
-    BackHandler(enabled = expanded && suggestions.isNotEmpty()) { dismiss() }
+    BackHandler(enabled = expanded) { dismiss() }
 
     // ── Layout ────────────────────────────────────────────────────────────────
     Column(
@@ -468,6 +484,26 @@ fun DestinationSearchBar(
                         }
                     }
                 }
+            }
+        }
+
+        // ── Empty Results Feedback (distinct from offline banner) ────────────
+        AnimatedVisibility(
+            visible = expanded && searchSettled && suggestions.isEmpty() &&
+                query.isNotBlank() && !isLoading && !isOffline,
+            enter   = fadeIn(),
+            exit    = fadeOut()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    text  = "No places found for \"$query\"",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.textSecondary
+                )
             }
         }
     }

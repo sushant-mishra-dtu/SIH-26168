@@ -48,6 +48,7 @@ import com.sih.idr.demo.R
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.errorEllipse
 import com.sih.idr.demo.backend.mapbox.InekfLocationProvider
+import com.sih.idr.demo.backend.routing.SearchItem
 import com.sih.idr.demo.ui.LocalIDRPalette
 import com.sih.idr.demo.ui.LocalIsDarkTheme
 import kotlin.math.cos
@@ -78,7 +79,13 @@ fun MapView(
     /** Height of whatever the screen stacks over the bottom of the map; the Re-center pill clears it. */
     bottomInset: Dp = 0.dp,
     /** A long press on the map, as WGS84 latitude and longitude. */
-    onMapLongPress: ((Double, Double) -> Unit)? = null
+    onMapLongPress: ((Double, Double) -> Unit)? = null,
+    /**
+     * Search results to show as numbered markers, as the `osm` flavour does. Accepted so the
+     * screen's one call site compiles against both flavours; not drawn here yet -- the marker
+     * layer arrives with the rest of this map's annotation work (section 7 of the UI plan).
+     */
+    @Suppress("UNUSED_PARAMETER") searchResults: List<SearchItem> = emptyList()
 ) {
     val context = LocalContext.current
     val isDark = LocalIsDarkTheme.current
