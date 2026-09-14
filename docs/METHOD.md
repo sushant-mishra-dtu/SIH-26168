@@ -527,18 +527,22 @@ demonstrated pipeline**, and no figure or caption implies otherwise.
 | Speed + variance head, adaptive `R_NHC` | Architecture written and tested; **not trained** — blocked by Gate 1 (H-4). |
 | The Onyekpe baseline reproduction | Nine of its eighteen hyperparameters are ours, not the papers' (§14). Not trained. |
 
-**Two open items that are gaps rather than deferrals**, stated here because a limitation we state
+**One open item that is a gap rather than a deferral**, stated here because a limitation we state
 costs a fraction of what one a judge finds costs:
 
-1. **The mount-disturbance detector cannot see a 5° knock at 10 Hz** (§7, D-075). Its threshold
-   corresponds to a 17.2° knock. Not tuned around; it needs a real measurement.
-2. **The IO-VNBD accelerometer sign convention is unconfirmed** (D-059). SE₂(3) test 2 ("stationary
-   60 s → drift < 1 mm") is a self-consistency check of our own mechanisation until someone reads a
-   stationary segment and reports the mean specific-force vector. Half an hour on a machine with the
-   files, and skipping it invalidates a Gate 1 result.
+1. **The mount-disturbance detector cannot see a 5° knock at 10 Hz** (§7, D-075). The reference InEKF
+   threshold (`mount_disturbance_gyro_thresh = 3.0` rad/s) corresponds to a 17.2° knock under 10 Hz sampling.
+   In the on-device operator UI (`CourseTracker`), this is resolved via direct rotation-matrix gravity-vector
+   tilt tracking (`acos(dot)/dt > 0.45` rad/s), which reliably detects a 5° knock (0.87 rad/s). The offline
+   filter detector remains un-tuned around to avoid fitting without cradle hardware recordings.
 
-A third item listed here earlier — Gate 0 being open — is closed: the split was re-picked against
-measured truth pairing (D-092) and [EVALUATION.md](EVALUATION.md) was frozen on 03 Sep 2026 (D-103).
+**Closed items previously listed as open:**
+- **The IO-VNBD accelerometer sign convention (R-8 / D-059) is CLOSED by D-085**: measured on real
+  stationary segments `S-T2[31422:36490]` (norm 9.7561 m/s²) and `S-T7[47809:52285]` (norm 9.8781 m/s²).
+  Confirmed specific force with gravity included, `GRAVITY` channel points UP, and `R_sv @ accel` has
+  `z ≈ -9.8` matching `-GRAVITY_NED` in `core/reference/inekf.py:191`. SE₂(3) test 2 is confirmed.
+- **Gate 0 being open is CLOSED**: the split was re-picked against measured truth pairing (D-092) and
+  [EVALUATION.md](EVALUATION.md) was frozen on 03 Sep 2026 (D-103).
 
 **Where our numbers are worse than published ones, the reason is the sensor grade and the permitted
 inputs, and we say so rather than letting the comparison stand.** §14.

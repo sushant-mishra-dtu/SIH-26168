@@ -170,6 +170,10 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                     kotlin.math.abs((now - lastTimestampNs) / 1_000_000f - REQUESTED_PERIOD_US / 1000f)
                 }
                 lastTimestampNs = now
+                // When uncalibrated sensor supplies estimated drift (values[3..5]), seed the estimator
+                if (event.sensor.type == Sensor.TYPE_GYROSCOPE_UNCALIBRATED && event.values.size >= 6) {
+                    estimator.onHardwareGyroDrift(event.values[3], event.values[4], event.values[5])
+                }
                 // All three axes: the turn rate about the world vertical is a projection of the
                 // whole vector onto gravity, not whichever axis happens to be device z (D-127).
                 val estimate = estimator.onGyro(event.values[0], event.values[1], event.values[2], now)
