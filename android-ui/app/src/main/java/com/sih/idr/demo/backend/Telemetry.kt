@@ -25,7 +25,21 @@ data class TelemetryState(
     val running: Boolean = false,
     val mode: NavigationMode = NavigationMode.INIT,
     val speedMps: Float = 0f,
+    /**
+     * Course over ground, bearing convention, radians (D-127). This is the vehicle's direction of
+     * travel, **not** the direction the phone is pointing: `CourseTracker` propagates it from the
+     * gyro's component along the world vertical and anchors it to the GNSS course. The map rotates
+     * with it in course-up mode, so a heading that followed the handset spun the whole canvas.
+     */
     val yawRad: Float = 0f,
+    /** True once a GNSS course has anchored [yawRad]; false while it is only the phone's azimuth. */
+    val headingIsCourse: Boolean = false,
+    /** `deviceAzimuth - course`: how the phone sits relative to travel. Null until both are known. */
+    val mountOffsetRad: Float? = null,
+    /** True while the phone is being handled and the course is held rather than propagated. */
+    val attitudeDisturbed: Boolean = false,
+    /** What the estimator believes it is riding in; the step model runs only outside a vehicle. */
+    val motionMode: MotionMode = MotionMode.UNKNOWN,
     val positionNorthM: Float = 0f,
     val positionEastM: Float = 0f,
     /** 1 sigma along the major axis of the position covariance ellipse, metres. */

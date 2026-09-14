@@ -4,7 +4,6 @@ import android.location.Location
 import android.os.SystemClock
 import com.sih.idr.demo.backend.tunnel.FixVerdict
 import com.sih.idr.demo.backend.tunnel.TunnelState
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -13,7 +12,17 @@ import kotlin.math.sqrt
 
 /**
  * Device-side demo estimator. Fuses accelerometer motion sensing (ZUPT + step/cadence estimation),
- * 3D gyroscope/orientation tracking, and GNSS position updates.
+ * gyroscope heading propagation, and GNSS position updates.
+ *
+ * **Heading is course over ground, not where the phone points** (D-127). [CourseTracker] owns it:
+ * the turn rate is the gyro's component along the world vertical, the absolute reference is the
+ * GNSS course, and the handset's own attitude only ever carries the mount offset. Nothing here
+ * steers the track from the phone's orientation, so re-seating the phone at a different angle
+ * leaves the traced path where it was.
+ *
+ * **Speed comes from measurements, not from a 60 ms silence** (D-127). [MotionClassifier] owns the
+ * ZUPT and step detection, over durations rather than sample counts and with the pedestrian step
+ * model gated off in a vehicle.
  *
  * **Uncertainty Growth Model**:
  * - When stationary (ZUPT active): velocity is zero and position is locked, so uncertainty DOES NOT grow.
@@ -30,21 +39,17 @@ class LocalNavigationEstimator {
     private var northM = 0f
     private var eastM = 0f
     private var speedMps = 0f
-    private var yawRad = 0f
     private var uncertaintyM = 3.5f
     private var lastTrackPointMs = 0L
     private val track = ArrayDeque<TrackPoint>()
     private var totalDistanceM = 0f
     private var sessionStartMs = 0L
 
-    // Motion & Adaptive ZUPT state
-    private var lastStepTimeNs = 0L
-    private var stepCount = 0
-    private var isStationary = true
-    private var stationaryFrames = 0
-    private var runningGravityNorm = 9.80665f
-    private var filteredDynamicAccel = 0f
-    private var lastGyroRate = 0f
+    /** Course over ground and the mount offset (D-127). */
+    private val course = CourseTracker()
+
+    /** ZUPT, step detection and the pedestrian/vehicle decision (D-127). */
+    private val motion = MotionClassifier()
 
     // Tunnel machine state (D-126). The machine decides; this estimator only obeys it: while the
     // state suppresses GNSS, fixes are gated and counted but never applied to the pose.
@@ -64,54 +69,69 @@ class LocalNavigationEstimator {
     private var pendingStepDistM = 0f
     private var activeStepSpeed = 0f
     private var stepHeadingRad = 0f
+    private var lastStepTimeNs = 0L
 
-    // Heading smoothing
-    private var hasExternalOrientation = false
-
-    fun onGyro(zRateRadPerSecond: Float, timestampNs: Long): Estimate {
-        lastGyroRate = abs(zRateRadPerSecond)
+    /**
+     * A gyro sample in the **device frame**, all three axes.
+     *
+     * It used to be the single device-Z rate, which is the turn rate about the world vertical only
+     * when the phone is lying flat, and carried the wrong sign even then. [CourseTracker] projects
+     * the vector onto gravity instead, so a phone in a cradle, in a pocket or face-down all read
+     * the same vehicle turn.
+     */
+    fun onGyro(gxRadPerSecond: Float, gyRadPerSecond: Float, gzRadPerSecond: Float, timestampNs: Long): Estimate {
+        val gyroMag = sqrt(
+            gxRadPerSecond * gxRadPerSecond +
+                gyRadPerSecond * gyRadPerSecond +
+                gzRadPerSecond * gzRadPerSecond
+        )
+        motion.onGyroMagnitude(gyroMag)
         if (lastTimestampNs != 0L) {
             if (sessionStartMs == 0L) sessionStartMs = SystemClock.elapsedRealtime()
             val dt = ((timestampNs - lastTimestampNs).coerceIn(0L, 250_000_000L)) / 1_000_000_000f
-            if (!hasExternalOrientation) {
-                yawRad = wrapAngle(yawRad + zRateRadPerSecond * dt)
-            }
+            course.onGyro(gxRadPerSecond, gyRadPerSecond, gzRadPerSecond, dt, timestampNs, speedMps)
+            val yawRad = course.headingRad()
 
             val timeSinceLastStepNs = if (lastStepTimeNs != 0L) timestampNs - lastStepTimeNs else Long.MAX_VALUE
 
             if (tunnelState.suppressesGnss || !hasFreshGnss()) {
                 // Dead Reckoning during GNSS denial (Vehicular coasting + pedestrian step integration):
-                if (pendingStepDistM > 0.001f && timeSinceLastStepNs < STEP_TIMEOUT_NS) {
+                if (motion.isStationary) {
+                    pendingStepDistM = 0f
+                    speedMps = 0f
+                } else if (pendingStepDistM > 0.001f && timeSinceLastStepNs < STEP_TIMEOUT_NS) {
                     val advance = min(pendingStepDistM, max(activeStepSpeed, 1.2f) * dt * 2.5f)
                     pendingStepDistM -= advance
                     northM += advance * cos(stepHeadingRad)
                     eastM += advance * sin(stepHeadingRad)
                     totalDistanceM += advance
                     speedMps = activeStepSpeed
-                    isStationary = false
 
                     val dSigma = advance * 0.035f + 0.012f * dt
                     uncertaintyM = (uncertaintyM + dSigma).coerceAtMost(50f)
                     appendTrackPoint()
-                } else if (speedMps > 0.2f && !isStationary) {
-                    // Vehicle coasting through tunnel / GNSS outage along heading
+                } else if (speedMps > 0.2f) {
+                    // Vehicle coasting through the outage along the course.
                     val advance = speedMps * dt
                     northM += advance * cos(yawRad)
                     eastM += advance * sin(yawRad)
                     totalDistanceM += advance
-                    // Smooth deceleration modeling vehicle rolling resistance
-                    speedMps = max(0f, speedMps - 0.35f * dt)
+                    // Constant velocity is the honest assumption with no speed head in this demo
+                    // (AGENTS.md: accelerometer is never integrated for it). The old 0.35 m/s^2
+                    // ramp was not a model of anything -- it put a 20 m/s car at a standstill 57 s
+                    // into a tunnel, and the track stopped with it. What remains is a slow bleed
+                    // so a forgotten outage does not coast forever; ZUPT is what actually stops it.
+                    speedMps = max(0f, speedMps - speedMps * dt / COAST_TAU_SEC)
                     val dSigma = advance * 0.035f + 0.012f * dt
                     uncertaintyM = (uncertaintyM + dSigma).coerceAtMost(50f)
                     appendTrackPoint()
                 } else {
                     pendingStepDistM = 0f
                     speedMps = 0f
-                    isStationary = true
                 }
             } else {
                 // GNSS Available mode:
-                // Gyroscope updates yawRad at 200 Hz for instant heading response.
+                // The course tracks at sensor rate for instant heading response.
                 // Position is anchored and tracked via incoming GNSS fixes in onLocation().
                 uncertaintyM = uncertaintyM.coerceAtMost(5.0f)
             }
@@ -121,61 +141,29 @@ class LocalNavigationEstimator {
     }
 
     fun onAccelerometer(ax: Float, ay: Float, az: Float, timestampNs: Long): Estimate {
-        val norm = sqrt(ax * ax + ay * ay + az * az)
-
-        // Adaptively track local gravity baseline to absorb uncalibrated sensor bias
-        runningGravityNorm = 0.985f * runningGravityNorm + 0.015f * norm
-        val dynamicAccel = abs(norm - runningGravityNorm)
-
-        // Exponential smoothing of dynamic acceleration energy
-        filteredDynamicAccel = 0.85f * filteredDynamicAccel + 0.15f * dynamicAccel
-
-        // Zero Velocity Update (ZUPT) detector: requires low dynamic accel AND low angular rate
-        val isQuiet = filteredDynamicAccel < ZUPT_ACCEL_THRESHOLD && lastGyroRate < ZUPT_GYRO_THRESHOLD
-        if (isQuiet) {
-            stationaryFrames++
-            if (stationaryFrames >= STATIONARY_FRAME_COUNT) {
-                isStationary = true
-                pendingStepDistM = 0f
-                speedMps = 0f
-            }
-        } else {
-            stationaryFrames = 0
-            if (filteredDynamicAccel > MOTION_TRIGGER_THRESHOLD) {
-                isStationary = false
-            }
-
-            // Step & motion cadence detection
-            val dtStepNs = timestampNs - lastStepTimeNs
-            if (dynamicAccel > STEP_PEAK_THRESHOLD && dtStepNs > MIN_STEP_INTERVAL_NS) {
-                lastStepTimeNs = timestampNs
-                stepCount++
-
-                // Stride length model: 0.50m - 0.78m based on dynamic peak energy
-                val stepLen = (0.45f + 0.14f * dynamicAccel.coerceIn(0.8f, 3.5f)).coerceIn(0.50f, 0.78f)
-                val dtStepSec = (dtStepNs.coerceIn(250_000_000L, 1_200_000_000L)) / 1_000_000_000f
-                val estimatedCadenceSpeed = stepLen / dtStepSec
-
-                // Queue exact physical step displacement along the current ground-plane heading
-                pendingStepDistM += stepLen
-                stepHeadingRad = yawRad
-                activeStepSpeed = estimatedCadenceSpeed
-                isStationary = false
-            }
+        val step = motion.onAccelerometer(ax, ay, az, timestampNs)
+        if (step != null) {
+            // Queue exact physical step displacement along the current course.
+            pendingStepDistM += step.strideM
+            stepHeadingRad = course.headingRad()
+            activeStepSpeed = step.cadenceSpeedMps
+            lastStepTimeNs = timestampNs
         }
-
         return snapshot()
     }
 
-    fun onOrientation(azimuthRad: Float, pitchRad: Float, rollRad: Float) {
-        if (!hasExternalOrientation) {
-            hasExternalOrientation = true
-            yawRad = azimuthRad
-        } else {
-            // Smooth angular filtering (shortest arc) to eliminate micro-jitter
-            val diff = wrapAngle(azimuthRad - yawRad)
-            yawRad = wrapAngle(yawRad + 0.22f * diff)
-        }
+    /**
+     * The device->world rotation matrix as `SensorManager.getRotationMatrixFromVector` fills it.
+     *
+     * This replaces the old `onOrientation(azimuth, ...)`, which handed the estimator the azimuth
+     * of the phone's +Y axis and let it *be* the heading. That is what made a cradle angle rotate
+     * the whole track, and what made a near-upright portrait phone -- +Y pointing at the sky --
+     * swing the heading on a couple of degrees of tilt. The tracker needs the whole matrix: the
+     * third row is gravity in the device frame, which is both the turn-rate projection and the
+     * evidence that the phone is being handled rather than the vehicle turning.
+     */
+    fun onAttitude(rotationMatrix: FloatArray, timestampNs: Long) {
+        course.onRotationMatrix(rotationMatrix, timestampNs)
     }
 
     fun hasOrigin(): Boolean = origin != null
@@ -252,25 +240,25 @@ class LocalNavigationEstimator {
             return snapshot()
         }
 
-        // Motion detection:
-        // A delta >= 0.7m or speed > 0.3 m/s indicates real vehicle/pedestrian motion, rejecting multipath jitter
-        if (location.hasSpeed() && location.speed > 0.3f) {
-            speedMps = location.speed
-            isStationary = false
+        // Speed. The receiver's own Doppler speed is the best measurement of it this demo has, so
+        // it is taken whenever the fix carries one -- including the small values. It used to be
+        // ignored below 0.3 m/s, which sent a crawling vehicle down the fix-differencing path and
+        // let the ZUPT detector zero the speedometer against a fix that said otherwise.
+        val nowMs = SystemClock.elapsedRealtime()
+        if (location.hasSpeed()) {
+            speedMps = location.speed.coerceIn(0f, MAX_PLAUSIBLE_SPEED)
         } else if (deltaFixM > 0.7f) {
-            isStationary = false
-            val nowMs = SystemClock.elapsedRealtime()
+            // A delta this size is real motion rather than multipath jitter.
             val dtSec = if (lastGnssElapsedMs > 0L) ((nowMs - lastGnssElapsedMs).coerceIn(200L, 3000L)) / 1000f else 1f
-            speedMps = (deltaFixM / dtSec).coerceIn(0f, 45f)
-        } else if (deltaFixM < 0.35f && filteredDynamicAccel < ZUPT_ACCEL_THRESHOLD) {
+            speedMps = (deltaFixM / dtSec).coerceIn(0f, MAX_PLAUSIBLE_SPEED)
+        } else if (deltaFixM < 0.35f && motion.dynamicAccelMps2 < MotionClassifier.ZUPT_ACCEL_THRESHOLD) {
             // Truly resting at a stoplight or table: lock zero speed
-            isStationary = true
             speedMps = 0f
         }
+        motion.observeSpeed(speedMps)
 
-        if (!isStationary) {
+        if (!motion.isStationary) {
             // Smoothly move position towards fix according to accuracy
-            val acc = if (location.hasAccuracy()) location.accuracy else 10f
             val alpha = (1.0f / (1.0f + acc / 8.0f)).coerceIn(0.40f, 0.85f)
             northM += alpha * dNorth
             eastM += alpha * dEast
@@ -278,12 +266,16 @@ class LocalNavigationEstimator {
             appendTrackPoint(force = true)
         }
 
-        if (speedMps > 1.0f && !hasExternalOrientation && location.hasBearing()) {
-            yawRad = location.bearing.toRadians()
+        // The GNSS course over ground is the only absolute heading here that is about the vehicle.
+        // It anchors the course and, through it, re-learns where the phone is pointing relative to
+        // the direction of travel -- the mount offset. The tracker decides whether the speed makes
+        // the bearing worth believing.
+        if (location.hasBearing()) {
+            course.onGnssCourse(location.bearing.toRadians(), speedMps)
         }
 
         uncertaintyM = if (location.hasAccuracy()) location.accuracy.coerceIn(2.0f, 10.0f) else 3.5f
-        lastGnssElapsedMs = SystemClock.elapsedRealtime()
+        lastGnssElapsedMs = nowMs
         return snapshot()
     }
 
@@ -301,10 +293,7 @@ class LocalNavigationEstimator {
             outageResidualM = null
             outageForced = false
             consecutiveRejections = 0
-            if (speedMps < 0.15f) {
-                isStationary = true
-                speedMps = 0f
-            }
+            if (speedMps < 0.15f) speedMps = 0f
         } else if (wasSuppressed && !state.suppressesGnss) {
             // The outage ends: fixes apply again from the next one. The GNSS branch of onGyro
             // caps the uncertainty as fixes arrive; nothing is reset to a nominal value here.
@@ -339,13 +328,13 @@ class LocalNavigationEstimator {
         pendingStepDistM = 0f
         activeStepSpeed = 0f
         stepHeadingRad = 0f
+        lastStepTimeNs = 0L
         track.clear()
         track.addLast(TrackPoint(0f, 0f))
-        stepCount = 0
+        course.reset()
+        motion.reset()
         uncertaintyM = 3.5f
         lastTrackPointMs = 0L
-        isStationary = true
-        stationaryFrames = 0
         totalDistanceM = 0f
         sessionStartMs = SystemClock.elapsedRealtime()
         outageStartDistanceM = 0f
@@ -375,7 +364,11 @@ class LocalNavigationEstimator {
         return Estimate(
             mode = if (gnssFresh) NavigationMode.GNSS else NavigationMode.INS,
             speedMps = speedMps,
-            yawRad = yawRad,
+            yawRad = course.headingRad(),
+            headingIsCourse = course.hasCourse,
+            mountOffsetRad = if (course.hasMountOffset) course.mountOffsetRad else null,
+            attitudeDisturbed = course.isDisturbed,
+            motionMode = motion.mode,
             positionNorthM = northM,
             positionEastM = eastM,
             uncertaintyM = uncertaintyM,
@@ -391,7 +384,7 @@ class LocalNavigationEstimator {
             outageAcceptedFixes = outageAccepted,
             outageRejectedFixes = outageRejected,
             lastExit = lastExit,
-            stepCount = stepCount,
+            stepCount = motion.stepCount,
             latitude = currentLat,
             longitude = currentLon,
             originLat = originLat,
@@ -406,7 +399,7 @@ class LocalNavigationEstimator {
         SystemClock.elapsedRealtime() - lastGnssElapsedMs < GNSS_TIMEOUT_MS
 
     private fun appendTrackPoint(force: Boolean = false) {
-        if (isStationary && !force) return
+        if (motion.isStationary && !force) return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastTrackPointMs < TRACK_PERIOD_MS) return
         val last = track.lastOrNull()
@@ -421,24 +414,18 @@ class LocalNavigationEstimator {
         lastTrackPointMs = now
     }
 
-    private fun wrapAngle(angle: Float): Float {
-        var result = angle
-        while (result > Math.PI) result -= (Math.PI * 2).toFloat()
-        while (result < -Math.PI) result += (Math.PI * 2).toFloat()
-        return result
-    }
-
     companion object {
         private const val GNSS_TIMEOUT_MS = 6_000L
         private const val TRACK_PERIOD_MS = 100L
         private const val MAX_TRACK_POINTS = 500
-        private const val ZUPT_ACCEL_THRESHOLD = 0.30f
-        private const val ZUPT_GYRO_THRESHOLD = 0.12f
-        private const val MOTION_TRIGGER_THRESHOLD = 0.55f
-        private const val STATIONARY_FRAME_COUNT = 12
-        private const val STEP_PEAK_THRESHOLD = 1.20f
-        private const val MIN_STEP_INTERVAL_NS = 260_000_000L // Max 3.8 steps/sec
         private const val STEP_TIMEOUT_NS = 1_100_000_000L // Decelerate if no step within 1.1s
+        /** Faster than any ground vehicle this is demonstrated in; a fix past it is not a speed. */
+        private const val MAX_PLAUSIBLE_SPEED = 60f
+        /**
+         * Coasting decays with this time constant rather than a fixed ramp: a constant-velocity
+         * hold with a slow bleed, not a model of rolling resistance, and honest about it.
+         */
+        private const val COAST_TAU_SEC = 120f
         /** D-115's rule, mirrored: the fix after this many consecutive rejections is applied, as forced. */
         private const val MAX_CONSECUTIVE_REJECTIONS = 5
     }
@@ -448,6 +435,13 @@ data class Estimate(
     val mode: NavigationMode,
     val speedMps: Float,
     val yawRad: Float,
+    /** True when [yawRad] is a GNSS-anchored course; false while it is only the phone's azimuth. */
+    val headingIsCourse: Boolean,
+    /** `deviceAzimuth - course`, radians; null until a course and an attitude have both been seen. */
+    val mountOffsetRad: Float?,
+    /** True while the phone is being handled and the course is held rather than propagated. */
+    val attitudeDisturbed: Boolean,
+    val motionMode: MotionMode,
     val positionNorthM: Float,
     val positionEastM: Float,
     val uncertaintyM: Float,

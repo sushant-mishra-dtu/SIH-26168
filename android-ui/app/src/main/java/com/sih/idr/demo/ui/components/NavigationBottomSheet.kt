@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sih.idr.demo.backend.MotionMode
 import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.routing.NavigationRoute
 import com.sih.idr.demo.backend.tunnel.TunnelOverride
@@ -48,6 +49,39 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+
+/**
+ * What is steering the traced track right now (D-127), for the diagnostics drawer.
+ *
+ * The two bugs this chip exists to make visible were both silent on screen. A heading that was
+ * really the phone's own azimuth looked exactly like a heading that was the vehicle's course, and
+ * the only symptom was that the map turned when the handset did. "Course" means the heading is
+ * GNSS-anchored and the phone's attitude is not steering anything; "phone azimuth" means no GNSS
+ * course has been seen yet and the heading is still a guess; "held" means the phone is being
+ * handled and the course is deliberately frozen.
+ */
+internal fun headingSourceLabel(
+    headingIsCourse: Boolean,
+    attitudeDisturbed: Boolean
+): String = when {
+    attitudeDisturbed -> "held"
+    headingIsCourse -> "course"
+    else -> "phone azimuth"
+}
+
+/** The learned mount offset in whole degrees, or null before there is one to show. */
+internal fun mountOffsetLabel(mountOffsetRad: Float?): String? {
+    if (mountOffsetRad == null) return null
+    val deg = Math.toDegrees(mountOffsetRad.toDouble()).roundToInt()
+    return "mount ${if (deg > 0) "+" else ""}$deg°"
+}
+
+/** Which motion model is running, or null while the estimator has not committed to one. */
+internal fun motionModeLabel(mode: MotionMode): String? = when (mode) {
+    MotionMode.VEHICLE -> "vehicle"
+    MotionMode.PEDESTRIAN -> "on foot"
+    MotionMode.UNKNOWN -> null
+}
 
 /**
  * Interactive 2-state navigation card modeled after Google Maps and Mappls.
@@ -367,6 +401,35 @@ fun NavigationBottomSheet(
                                     )
                                 }
                             }
+                        }
+
+                        // What is steering the track, and what the phone's angle is doing about it
+                        // (D-127). Every part is a `TelemetryState` field, not a derived quantity.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Rounded.Explore,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = if (telemetry.attitudeDisturbed) palette.statusWarn else palette.primary
+                            )
+                            val parts = listOfNotNull(
+                                headingSourceLabel(telemetry.headingIsCourse, telemetry.attitudeDisturbed),
+                                mountOffsetLabel(telemetry.mountOffsetRad),
+                                motionModeLabel(telemetry.motionMode)
+                            )
+                            Text(
+                                text = parts.joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (telemetry.attitudeDisturbed) palette.statusWarn else palette.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
 

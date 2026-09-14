@@ -170,7 +170,9 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                     kotlin.math.abs((now - lastTimestampNs) / 1_000_000f - REQUESTED_PERIOD_US / 1000f)
                 }
                 lastTimestampNs = now
-                val estimate = estimator.onGyro(event.values[2], now)
+                // All three axes: the turn rate about the world vertical is a projection of the
+                // whole vector onto gravity, not whichever axis happens to be device z (D-127).
+                val estimate = estimator.onGyro(event.values[0], event.values[1], event.values[2], now)
                 applyEstimate(estimate)
             }
             Sensor.TYPE_ACCELEROMETER_UNCALIBRATED, Sensor.TYPE_ACCELEROMETER -> {
@@ -191,13 +193,13 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
             Sensor.TYPE_ROTATION_VECTOR -> {
                 val rotationMatrix = FloatArray(9)
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                // Project device forward axis [0, 1, 0] in portrait orientation onto world ground plane (ENU):
-                // v_world = R * [0, 1, 0]^T = [R[1], R[4], R[7]]
-                // East = R[1], North = R[4]
-                val eastComponent = rotationMatrix[1]
-                val northComponent = rotationMatrix[4]
-                val azimuthRad = kotlin.math.atan2(eastComponent, northComponent)
-                estimator.onOrientation(azimuthRad, 0f, 0f)
+                // The whole matrix, not an azimuth read off one axis (D-127). This used to project
+                // the device +Y axis onto the ground plane and hand the result over as the
+                // heading, which made the phone's mounting angle the vehicle's heading and went
+                // ill-conditioned the moment +Y pointed anywhere near the sky. `CourseTracker`
+                // needs the third row (gravity in the device frame) to project the gyro and to
+                // tell a handset being re-seated from a vehicle turning.
+                estimator.onAttitude(rotationMatrix, event.timestamp)
             }
         }
     }
@@ -250,6 +252,10 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
                 mode = estimate.mode,
                 speedMps = estimate.speedMps,
                 yawRad = estimate.yawRad,
+                headingIsCourse = estimate.headingIsCourse,
+                mountOffsetRad = estimate.mountOffsetRad,
+                attitudeDisturbed = estimate.attitudeDisturbed,
+                motionMode = estimate.motionMode,
                 positionNorthM = estimate.positionNorthM,
                 positionEastM = estimate.positionEastM,
                 uncertaintyM = estimate.uncertaintyM,
