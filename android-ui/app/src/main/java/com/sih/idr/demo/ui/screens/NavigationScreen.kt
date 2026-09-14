@@ -335,7 +335,8 @@ fun NavigationScreen(
                     FloatingActionPill(
                         icon = Icons.Rounded.GpsFixed,
                         contentDescription = "Reset Origin",
-                        onClick = onResetOrigin
+                        onClick = onResetOrigin,
+                        enabled = isRecording
                     )
                 }
             }
@@ -351,7 +352,8 @@ private fun FloatingActionPill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean = false,
     contentDescription: String? = null,
-    onClick: () -> Unit = {}
+    onClick: () -> Unit = {},
+    enabled: Boolean = true
 ) {
     val palette = LocalIDRPalette.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -380,6 +382,7 @@ private fun FloatingActionPill(
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                enabled = enabled,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
