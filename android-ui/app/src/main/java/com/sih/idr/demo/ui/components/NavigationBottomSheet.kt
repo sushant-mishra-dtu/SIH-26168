@@ -483,15 +483,19 @@ fun NavigationBottomSheet(
                         )
                     }
 
-                    // Reset / Origin recenter button row
+                    // Reset / Origin recenter button row. Like the tunnel selector above it,
+                    // this needs a running service (resetOrigin() is a no-op otherwise), so
+                    // it is disabled and dimmed until recording starts.
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 4.dp)
+                            .alpha(if (isRecording) 1f else 0.4f),
                         horizontalArrangement = Arrangement.End
                     ) {
                         TextButton(
                             onClick = onResetOrigin,
+                            enabled = isRecording,
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = palette.textSecondary)

@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -334,11 +335,14 @@ fun NavigationScreen(
                         onClick = onToggleTheme
                     )
 
-                    // Reset Origin Button
+                    // Reset Origin Button. SensorForegroundService.resetOrigin() is a no-op
+                    // without a running service, so the pill is disabled -- and dimmed, so it
+                    // does not look like a button that ignores taps -- until recording starts.
                     FloatingActionPill(
                         icon = Icons.Rounded.GpsFixed,
-                        contentDescription = "Reset Origin",
-                        onClick = onResetOrigin
+                        contentDescription = if (isRecording) "Reset Origin" else "Reset Origin (available while recording)",
+                        onClick = onResetOrigin,
+                        enabled = isRecording
                     )
                 }
             }
@@ -354,15 +358,23 @@ private fun FloatingActionPill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean = false,
     contentDescription: String? = null,
-    onClick: () -> Unit = {}
+    onClick: () -> Unit = {},
+    enabled: Boolean = true
 ) {
     val palette = LocalIDRPalette.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.88f else 1f,
+        targetValue = if (isPressed && enabled) 0.88f else 1f,
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 400f),
         label = "icon_scale"
+    )
+    // Same disabled treatment as the sheet's tunnel selector, so "not available now" reads the
+    // same everywhere on the screen.
+    val disabledAlpha by animateFloatAsState(
+        targetValue = if (enabled) 1f else 0.4f,
+        animationSpec = spring(stiffness = 300f),
+        label = "pill_alpha"
     )
 
     val pillBg = if (active) palette.primary.copy(alpha = 0.25f) else palette.glassSurface
@@ -372,6 +384,7 @@ private fun FloatingActionPill(
         modifier = Modifier
             .size(42.dp)
             .scale(scale)
+            .alpha(disabledAlpha)
             .glassmorphic(
                 shape = CircleShape,
                 backgroundColor = pillBg,
@@ -383,6 +396,7 @@ private fun FloatingActionPill(
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                enabled = enabled,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
