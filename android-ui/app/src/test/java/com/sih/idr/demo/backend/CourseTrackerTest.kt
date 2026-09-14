@@ -553,4 +553,23 @@ class CourseTrackerTest {
         assertFalse(tracker.hasGyroBias)
         assertEquals(0f, tracker.gyroBiasRadPerSec, 1e-6f)
     }
+
+    @Test
+    fun seedHardwareDrift_seeds_bias_when_uncalibrated_and_retains_it() {
+        val tracker = CourseTracker()
+        val flatAttitude = flatPhone(0f)
+        tracker.onRotationMatrix(flatAttitude, 0L)
+        assertFalse(tracker.hasGyroBias)
+
+        // Hardware reports 0.8 deg/s of drift on z axis
+        val driftZ = (0.8 * Math.PI / 180.0).toFloat()
+        tracker.seedHardwareDrift(0f, 0f, driftZ)
+
+        assertTrue(tracker.hasGyroBias)
+        assertEquals(-driftZ, tracker.gyroBiasRadPerSec, 1e-4f)
+
+        // Secondary call when already calibrated does not overwrite
+        tracker.seedHardwareDrift(0f, 0f, 0.05f)
+        assertEquals(-driftZ, tracker.gyroBiasRadPerSec, 1e-4f)
+    }
 }

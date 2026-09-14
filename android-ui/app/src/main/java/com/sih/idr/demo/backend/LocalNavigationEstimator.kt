@@ -4,6 +4,7 @@ import android.location.Location
 import android.os.SystemClock
 import com.sih.idr.demo.backend.tunnel.FixVerdict
 import com.sih.idr.demo.backend.tunnel.TunnelState
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -335,15 +336,25 @@ class LocalNavigationEstimator {
 
         // The GNSS course over ground is the only absolute heading here that is about the vehicle.
         // It anchors the course and, through it, re-learns where the phone is pointing relative to
-        // the direction of travel -- the mount offset. The tracker decides whether the speed makes
-        // the bearing worth believing.
-        if (location.hasBearing()) {
-            course.onGnssCourse(location.bearing.toRadians(), speedMps)
+        // the direction of travel -- the mount offset. If the receiver omitted bearing, compute it
+        // from the position delta whenever motion is significant (D-127/D-128 follow-up).
+        val bearingRad = when {
+            location.hasBearing() -> location.bearing.toRadians()
+            deltaFixM >= 1.0f && speedMps >= 1.0f -> atan2(dEast, dNorth)
+            else -> null
+        }
+        if (bearingRad != null) {
+            course.onGnssCourse(bearingRad, speedMps)
         }
 
         uncertaintyM = if (location.hasAccuracy()) location.accuracy.coerceIn(2.0f, 10.0f) else 3.5f
         lastGnssElapsedMs = nowMs
         return snapshot()
+    }
+
+    /** Seeds the gyro bias from the HAL uncalibrated gyro drift vector if available. */
+    fun onHardwareGyroDrift(dx: Float, dy: Float, dz: Float) {
+        course.seedHardwareDrift(dx, dy, dz)
     }
 
     /** The tunnel machine's state, applied by the service after every machine update (D-126). */
