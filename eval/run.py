@@ -677,19 +677,27 @@ ZARU_SIGMA_FROM_WINDOW = True
 #: Whether the gyro bias is moved only by the update that observes it directly, ZARU
 #: (`InEKF.gyro_bias_direct_only`, D-133), or by every update through the covariance's
 #: cross-correlations, which is bit-for-bit the pre-D-133 filter. Measured on TRAIN S1 against the
-#: truth-standstill bias at its four still stops: the filter's bias block carried a NEES of 27.3
-#: (3.0 expected; error / sigma 4.1 on the worst axis) with every update allowed, because at a 9 s
-#: fix cadence the Doppler velocity, NHC and position updates blame `b_g` for tilt and heading
-#: error they cannot separate from it -- the estimate stepped 0.030 deg/s per 30 s against the
-#: 0.0097 `gyro_bias_rw` allows and the 0.009-0.02 the bias actually walks between S1's stops.
-#: With only ZARU allowed the NEES is 2.1, the step 0.008-0.015 deg/s per 30 s, and on S3a the
-#: last-ten-minute |b_g| falls from [0.06, 0.23, 0.03] to [0.01, 0.006, 0.014] deg/s. Applied in
-#: the aided pass and in every replayed window alike (`run_filter`, `replay_window`), and it
-#: travels in `summary.json` as `gyro_bias_direct_only` so an artefact says which variant
-#: produced it; flip it here, never per call, and only with a DECISION_LOG row that carries both
-#: sweeps. A stem with no detected stop never estimates `b_g` under this policy; its block grows
-#: at `gyro_bias_rw` and says so.
-GYRO_BIAS_DIRECT_ONLY = True
+#: truth-standstill bias at its four still stops: with every update allowed the bias block carries
+#: a NEES of 27.3 (3.0 expected; error / sigma 4.1 on the worst axis), because at a 9 s fix
+#: cadence the Doppler velocity, NHC and position updates blame `b_g` for tilt and heading error
+#: they cannot separate from it -- the estimate steps 0.030 deg/s per 30 s against the 0.0097
+#: `gyro_bias_rw` allows and the 0.009-0.02 the bias walks between S1's stops. With only ZARU
+#: allowed the NEES is 2.1, the step 0.008-0.015, and on S3a the last-ten-minute |b_g| falls from
+#: [0.06, 0.23, 0.03] to [0.01, 0.006, 0.014] deg/s. **Shipped off, by rule 4 of
+#: core/HANDOVER.md section 3: the quoted number did not improve.** Two clean sweeps, same
+#: protocol: off (`dd5e3ff`) quiet 56.0 % / 9.13 % = 6.14x on 101 windows, vibrating 84.0 % /
+#: 4.26 % = 19.72x on 113; on (`4389558`) quiet 56.6 % / 9.13 % = 6.20x on the same 101,
+#: vibrating 86.1 % / 4.35 % = 19.81x on 127. On is ahead on both quiet per-stem medians (S3a
+#: 42.2 -> 40.6, S3c 72.3 -> 71.0), keeps 14 more Vw2 windows and cuts replay divergences from
+#: 51 to 19; the paired median difference on the quiet windows is +0.09 points with a bootstrap
+#: 95 % interval of [-5.0, +4.7] (sign test p = 0.62) -- a wash -- and the pooled quiet median,
+#: the number the gate reads, is 0.58 points worse. A consistent bias block that does not move
+#: the drift says the remaining quiet-class gap is not the gyro bias (D-133). When on it applies
+#: to the aided pass and to every replayed window alike (`run_filter`, `replay_window`); it
+#: travels in `summary.json` as `gyro_bias_direct_only`; flip it here, never per call, and only
+#: with a DECISION_LOG row that carries both sweeps. A stem with no detected stop never
+#: estimates `b_g` under this policy; its block grows at `gyro_bias_rw` and says so.
+GYRO_BIAS_DIRECT_ONLY = False
 
 
 def _step_constraints(
