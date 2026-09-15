@@ -145,8 +145,8 @@
     "semantic_hash": ""
   },
   "core/reference/inekf.py": {
-    "mtime": 1789468922.376327,
-    "ast_hash": "8731b5573d449f575b82319edc967e7b",
+    "mtime": 1789492189.0967047,
+    "ast_hash": "85c9e64113c1d68c4d3abcede42d8f37",
     "semantic_hash": ""
   },
   "eval/__init__.py": {
@@ -155,8 +155,8 @@
     "semantic_hash": ""
   },
   "eval/allan.py": {
-    "mtime": 1789294862.553658,
-    "ast_hash": "0040b95943476c4f975bbed9a52e2ece",
+    "mtime": 1789469819.3564546,
+    "ast_hash": "f834857ee940745b0ff09d824d1ab86e",
     "semantic_hash": ""
   },
   "eval/axis_check.py": {
@@ -190,8 +190,8 @@
     "semantic_hash": ""
   },
   "eval/figures/summary.json": {
-    "mtime": 1788692683.0209365,
-    "ast_hash": "dff12b57989993e6153d29034c9b1cbb",
+    "mtime": 1789492189.099306,
+    "ast_hash": "1184aca21e4f56a4c8c5f786c23209f1",
     "semantic_hash": ""
   },
   "eval/loaders/__init__.py": {
@@ -200,7 +200,7 @@
     "semantic_hash": ""
   },
   "eval/loaders/columns.py": {
-    "mtime": 1788502441.713392,
+    "mtime": 1789489303.6074224,
     "ast_hash": "f72e3047380c9948816659199c804be1",
     "semantic_hash": ""
   },
@@ -235,8 +235,8 @@
     "semantic_hash": ""
   },
   "eval/run.py": {
-    "mtime": 1789468930.4739938,
-    "ast_hash": "e5e8e7d3c427dea090ab596ee02ef35b",
+    "mtime": 1789492189.105445,
+    "ast_hash": "213bcac0377a7ec77346388711ac2322",
     "semantic_hash": ""
   },
   "eval/splits.py": {
@@ -325,8 +325,8 @@
     "semantic_hash": ""
   },
   "tests/test_filter.py": {
-    "mtime": 1789468881.013366,
-    "ast_hash": "7f87df3769335665c1e317dc4394dff6",
+    "mtime": 1789492189.106445,
+    "ast_hash": "4efefc5e48e20867f9e3bc72b4abc386",
     "semantic_hash": ""
   },
   "tests/test_geo.py": {
@@ -335,8 +335,8 @@
     "semantic_hash": ""
   },
   "tests/test_harness_wiring.py": {
-    "mtime": 1789465908.1532385,
-    "ast_hash": "f427f9d9f521a2e2632794a59b15a0c0",
+    "mtime": 1789492189.106445,
+    "ast_hash": "3cbbe2a0579fb75fa8b66a6fa410a1da",
     "semantic_hash": ""
   },
   "tests/test_leakage.py": {
@@ -430,8 +430,8 @@
     "semantic_hash": ""
   },
   "docs/DECISION_LOG.md": {
-    "mtime": 1789396901.184784,
-    "ast_hash": "fd36f0c72789969f6602c1ded339fc13",
+    "mtime": 1789493029.1242304,
+    "ast_hash": "810e184a8fdfa652772dfc3b23cb8fe4",
     "semantic_hash": ""
   },
   "docs/ERROR_BUDGET.md": {
@@ -460,8 +460,8 @@
     "semantic_hash": ""
   },
   "docs/SE23_PROPAGATION.md": {
-    "mtime": 1789294862.5516582,
-    "ast_hash": "44b5693c0019f98e5812ba4c79da0150",
+    "mtime": 1789476645.3331518,
+    "ast_hash": "07f7eb2f80d3de26b98e6b8926f93c9f",
     "semantic_hash": ""
   },
   "docs/SPRINT_BOARD.md": {
@@ -490,8 +490,8 @@
     "semantic_hash": ""
   },
   "models/README.md": {
-    "mtime": 1788456795.0610206,
-    "ast_hash": "b36f0c7e77c14c18de73e9b96563e312",
+    "mtime": 1789492776.3482223,
+    "ast_hash": "35d54caf4d893c506e6e0518d014e396",
     "semantic_hash": ""
   },
   "phases.md": {
@@ -600,8 +600,8 @@
     "semantic_hash": ""
   },
   ".github/workflows/android.yml": {
-    "mtime": 1789324478.2145545,
-    "ast_hash": "a379fd21f9d0e3f159bff83b5f46e296",
+    "mtime": 1789493603.4921064,
+    "ast_hash": "ecfb3a31758ce23f292a3270b388d3a3",
     "semantic_hash": ""
   },
   "android-ui/README.md": {
@@ -960,13 +960,73 @@
     "semantic_hash": ""
   },
   "core/HANDOVER.md": {
-    "mtime": 1789455547.1900816,
-    "ast_hash": "7c4f91d5db92aa4b8e7a6c62cf0b6435",
+    "mtime": 1789492189.094638,
+    "ast_hash": "b8b1c3455118337d1f76c4db88f7b58c",
     "semantic_hash": ""
   },
   "releases/README.md": {
     "mtime": 1789411658.3504026,
     "ast_hash": "61ece53f1ba99fa644c759188852ecdb",
+    "semantic_hash": ""
+  },
+  "eval/figures/speed_head_summary.json": {
+    "mtime": 1789492776.3469923,
+    "ast_hash": "367359d9aad16d08591a2c2b5e823b92",
+    "semantic_hash": ""
+  },
+  "eval/figures/trajectory_S3a.json": {
+    "mtime": 1789492189.1003487,
+    "ast_hash": "07f9a213f8ee0978dae5ae28c117ee81",
+    "semantic_hash": ""
+  },
+  "models/rocm_check.py": {
+    "mtime": 1789492776.3492274,
+    "ast_hash": "c083a84c6024054a6256596780d55a7f",
+    "semantic_hash": ""
+  },
+  "models/train_speed_head.py": {
+    "mtime": 1789492776.3492274,
+    "ast_hash": "eed7c5b5a7347442ad190b81142cee16",
+    "semantic_hash": ""
+  },
+  "tests/test_speed_head.py": {
+    "mtime": 1789492776.3502269,
+    "ast_hash": "f7701bb322a3b188b7ed8624f2ea7b8e",
+    "semantic_hash": ""
+  },
+  "tests/test_speed_head_model.py": {
+    "mtime": 1789492776.351228,
+    "ast_hash": "54ba45028181446edb1839d1df7563f8",
+    "semantic_hash": ""
+  },
+  "android/measured/README.md": {
+    "mtime": 1789493603.441606,
+    "ast_hash": "6b6f93783e52c1872d3761e61b9e9bbe",
+    "semantic_hash": ""
+  },
+  "core/HANDOVER_BIAS.md": {
+    "mtime": 1789492189.0951564,
+    "ast_hash": "054d6b8ed8fe2197abdc99eae7fdc395",
+    "semantic_hash": ""
+  },
+  "core/HANDOVER_ZARU.md": {
+    "mtime": 1789480681.8359704,
+    "ast_hash": "bbb6d8321804d2b8f2febb5d5debd224",
+    "semantic_hash": ""
+  },
+  "docs/TRAINING_ENVIRONMENT.md": {
+    "mtime": 1789492776.344918,
+    "ast_hash": "8c2850aa6be300622b7501f72b7fcc3b",
+    "semantic_hash": ""
+  },
+  "models/HANDOVER_P08.md": {
+    "mtime": 1789474108.4747157,
+    "ast_hash": "5274d4d4bd0ba5c23a81e2a198876064",
+    "semantic_hash": ""
+  },
+  "eval/figures/speed_head_calibration.png": {
+    "mtime": 1789492776.346474,
+    "ast_hash": "4aa72e31823ec22467e3ae4f342bfd23",
     "semantic_hash": ""
   }
 }
