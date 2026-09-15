@@ -8,6 +8,21 @@ Companion to [`HANDOVER.md`](HANDOVER.md) (the wider filter/Gate 1 state) and to
 
 Where this file disagrees with [`../docs/DECISION_LOG.md`](../docs/DECISION_LOG.md), the log wins.
 
+> **Status, 15 Sep 2026 evening — done; D-131 is the record.** Code `dd5e3ff` (`update_zaru(gyro,
+> sigma=)`, `zaru_sigma_from_window`, `eval/run.py::ZARU_SIGMA_FROM_WINDOW`), artefacts and row in
+> the commit after it, both clean-stamped. The candidate that shipped is C read at the stop itself:
+> R per axis from the detector window's own sample std, floored at the desk figure. A rejected
+> 98.8 % on S3a became 99.1 % applied — **and the bias estimate did not move, and the quiet ratio
+> is 6.14× against 6.27×, a wash.** §8's questions are answered in the row: (1) the standstill
+> level is half the warm-up level on S1 and is not one number across TRAIN; (2) the widened gate
+> admits the run-out and nothing else refuses it, at a measured cost ≤ 0.008 °/s; (3) `b_g` on S3a
+> does not converge, because the bias block is over-confident 3–7× (0.03 °/s claimed, 0.2–0.4
+> °/s walked) and ZARU's gain against it is 7e-4 per sample; (4) the remaining gap is the bias
+> block's consistency, not observability — `HANDOVER.md` §11 (4) says what to measure next. The
+> probes are in the 15 Sep evening session's scratchpad (`zaru_measure.py`, `zaru_objective.py`,
+> `nees_means.py`); `zaru_objective.py`'s "before" arm reproduces D-130 to the digit and is the
+> template for any on/off A/B of a filter change through `run_filter` + `replay_window`.
+
 ---
 
 ## 0. Parallel-work protocol (both handovers carry this section verbatim)

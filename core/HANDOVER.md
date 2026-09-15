@@ -1,7 +1,10 @@
 # Handover — Filter & Gate 1: where the number stands and what is left
 
 **Written:** 15 Sep 2026, while the three D-115 fixes were being implemented (see §6); audited after they
-landed. `main` is at `eae873f` (`7e3a8b0` fixes, `d3c2464` D-130 artefacts, `eae873f` audit fix). **Seats S (filter) and D (harness).** Companion to [`../android/HANDOVER.md`](../android/HANDOVER.md),
+landed; **updated the same evening after D-131** (`dd5e3ff` ZARU R fix, the artefact commit after it —
+see [`HANDOVER_ZARU.md`](HANDOVER_ZARU.md) for that work). Before D-131 `main` was at `3526a08`
+(`7e3a8b0` fixes, `d3c2464` D-130 artefacts, `eae873f` audit fix, the handovers, then the android-ui
+commit). **Seats S (filter) and D (harness).** Companion to [`../android/HANDOVER.md`](../android/HANDOVER.md),
 which covers the phone; nothing here is on that path and nothing there is on this one.
 
 Read with [`../phases.md`](../phases.md) §1's loop in mind: restate, plan, edit small, verify with a
@@ -18,12 +21,12 @@ Verifiable, not remembered:
 |---|---|
 | The Python reference filter is the specification — no C++/Rust port exists (D-022) | `wc -l core/reference/inekf.py` → 1,427 lines; `core/ffi/idr_core.h` is a header with nothing behind it |
 | The harness runs end to end and produces the Gate 1 number | `.venv\Scripts\python -m eval.run --dry-run` plans 12 held-out stems × 5 lengths; a real run takes ~6–7 min |
-| **823 tests** at `eae873f`, all green (829 on this box: six are parametrised over the untracked `android-ui/` files) | `.venv\Scripts\python -m pytest -q` (`--collect-only -q` prints the count) |
-| **The committed number is D-130's**: `eval/figures/summary.json` at `commit 7e3a8b0 \| seed 0`, clean — 6.27× quiet / 19.5× vibrating / 12.3× pooled at 60 s (D-110's `9fdd261-dirty` artefacts are gone) | `python -c "import json;print(json.load(open('eval/figures/summary.json'))['gate1'])"` |
+| **832 tests pass, 1 skipped** at `dd5e3ff` (823 at `eae873f`, plus four for D-131 and the six parametrised over the `android-ui/` files, now tracked) | `.venv\Scripts\python -m pytest -q` (`--collect-only -q` prints the count) |
+| **The committed number is D-131's**: `eval/figures/summary.json` at `commit dd5e3ff \| seed 0`, clean — 6.14× quiet / 19.72× vibrating / 11.55× pooled at 60 s, on 101 / 113 / 214 windows (D-130's `7e3a8b0` artefacts: 6.27× / 19.5× / 12.3× on 101 / 125 / 226) | `python -c "import json;print(json.load(open('eval/figures/summary.json'))['gate1'])"`; the artefact also says `zaru_sigma_from_window: true` |
 | D-115's 6.2× was measured on a dirty tree into a scratch dir and **never committed** | DECISION_LOG D-115, last sentence; the outputs are in a session scratchpad (§10) |
 | IO-VNBD is local: 288 synchronised CSVs, 825 MB | `.venv\Scripts\python -m eval.fetch --sync-only` → `already-present=288 failed=0` (SHA-verifies every file, downloads nothing) |
 | `.venv` is Py 3.13.5 with numpy 2.5.3 / pandas / pytest 9.1.1 / ruff; **no torch, no matplotlib** | `.venv\Scripts\python -c "import torch"` fails; `pip install -e ".[plot]"` adds matplotlib |
-| The working tree carries **uncommitted `android-ui/` work that is not the filter's** | `git status --short` → `RouteTracker.kt`, `EtaPaceModel.kt`, `SensorForegroundService.kt`. Never stage it from here. It is why every sweep from this checkout stamps `-dirty` (§7) |
+| The `android-ui/` work that used to sit uncommitted in the tree is on `main` since `3526a08`; a sweep from a clean main checkout now stamps clean, but the worktree recipe (§7) is still the safe one while anyone else's WIP is in the tree | `git status --short` empty → the stamp is clean; anything listed → `-dirty` |
 | The NEES consistency test (test 11) is green, five cases, ZARU-only asserted one-sided | `pytest tests/test_se23_derivation.py -k nees -q`; ERROR_BUDGET §10.2 has the table |
 | Strapdown and GNSS-available baselines are wired; the Onyekpe INS RNN is **not** | `eval/run.py` `METHODS = ("filter","strapdown","gnss_available")`; `models/train_baseline_rnn.py` needs torch and a training run |
 
@@ -41,14 +44,22 @@ closes it; the harness only reports it.
 | D-115, 13 Sep | **11.8×** pooled (78.6% / 6.7%) | 205 | `0e43e08-dirty`, scratch only | Doppler velocity update ungated; per-stem `Q` from the stream's own white level; `P0` re-expressed right-invariant; one aided pass with per-window snapshot/replay; 3-strikes re-anchor on the position gate. |
 | D-115, split | **6.2×** quiet-mount (S3a+S3c, 56.7% / 9.1%); **22×** vibrating-mount (ten Vta/Vw stems, 86.8% / 3.9%); **1.95×** at 10 s on the quiet pair | 101 / 104 | same | The split is the number to quote, never the pool (§9). |
 | D-130, 15 Sep | **6.27×** quiet (57.2% / 9.13%); **19.5×** vibrating (84.2% / 4.31%); 12.3× pooled; **1.84×** at 10 s on the quiet pair | 101 / 125 / 226 | `7e3a8b0`, clean — committed in `d3c2464` | Fixes 1–3 below + `gate1.by_mount_class`; Fix 3 shipped **off** after its A/B; Vta16 now skipped (aided pass diverges under the wider accel-bias prior — D-130 has the probe). |
+| D-131, 15 Sep | **6.14×** quiet (56.0% / 9.13%); **19.72×** vibrating (84.0% / 4.26%); 11.55× pooled; **1.81×** at 10 s on the quiet pair | 101 / 113 / 214 | `dd5e3ff`, clean — committed with the row | ZARU's R read from the stop detector's own window instead of the Allan desk figure (`zaru_sigma_from_window`, `update_zaru(sigma=)`). S3a now applies 1,356 of 1,368 ZARUs (16 of 1,372 before) and its bias estimate **does not move**; S3a 42.0 → 42.2%, S3c 69.5 → 72.3% at 60 s; Vw2 loses 12 of 80 windows to replay divergence. A wash on the quoted class, shipped on because the R is the measured one; `ZARU_SIGMA_FROM_WINDOW` flips it. |
 
-**The gap that is the filter's (D-115, last third).** On S3a every 60 s window opens from an aided
-state whose bias estimates have walked to 0.3–0.5 °/s (gyro, horizontal axes) and 0.65–1.1 m/s²
-(accel) — 15–25 σ of the process model — because the bias is never observed directly: ZARU never
-runs (the stop detector reads the raw gyro norm, 1.55 °/s at S3a's standstill against a 0.57 °/s
-threshold), and at a 9 s fix cadence tilt, gyro bias and accel bias separate only through turns.
-Inside the window the tilt error that bias implies collapses the speed by 3–17 m/s. Scaling
-`accel_bias_rw`, `gyro_bias_rw` or the gyro turn-on prior moved the median by under 1%.
+**The gap that is the filter's — re-read after D-131.** D-115 named it bias observability: on S3a
+every 60 s window opens from an aided state whose gyro-bias estimate has walked to 0.2–0.4 °/s,
+and ZARU, the only direct observation, never ran. D-130 made the detector fire (1,372 stops) and
+D-131 made the gate accept (1,356 applied). **The bias still walks.** Its last-ten-minute |b_g| on
+S3a is 0.23 °/s on the y axis before and after, at 6.9 σ of the filter's own bias block, which sits
+at 0.03 °/s throughout (`gyro_bias_rw` is the desk Allan run's 22 °/hr) while the estimate steps
+0.03–0.04 °/s every 30 s — three to four times what that process noise allows. Against a 0.03 °/s
+block a ZARU at S3a's 1.17 °/s per-sample noise has a gain of 7e-4 per sample: 200 samples at a
+stop move a 0.23 °/s error by 13%. The Doppler velocity and NHC updates push the bias between stops
+through the cross-correlations, and a correctly weighted observation at the next stop cannot undo
+it. **So the remaining quiet-class gap is the gyro-bias block's consistency, not its
+observability.** The next fix is a bias process noise measured in motion on TRAIN, the way
+`in_motion_config` measures the white terms (D-115) — see §11 (4). Inside the window the tilt error
+the wrong bias implies still collapses the speed by 3–17 m/s.
 
 **The gap that is not the filter's.** On the ten Vta/Vw stems 95% of the yaw-axis gyro variance is
 vibration folded into 0–5 Hz by 10 Hz sampling with no anti-alias filter (gyro–truth course-rate
@@ -240,9 +251,9 @@ IMPLEMENTATION_PLAN §7, Gate 1, in the order to do them:
 
 | Item | Status 15 Sep | What closes it |
 |---|---|---|
-| Physics-only InEKF within 3–5× of GNSS-available at 60 s, update count beside it | **6.27× quiet / 19.5× vibrating (D-130, `7e3a8b0`, committed)** — not in band | §6, then a human reads `summary.json` against §7 and signs or does not |
-| `Q` from the IO-VNBD Allan run | done (D-045, D-120), per-stem floored in motion (D-115) | — |
-| SE₂(3) tests 7–11 incl. NEES | green, five cases (ERROR_BUDGET §10.2) | re-check after Fix 2 |
+| Physics-only InEKF within 3–5× of GNSS-available at 60 s, update count beside it | **6.14× quiet / 19.72× vibrating (D-131, `dd5e3ff`, committed)** — not in band; ZARU now applied at 97–99% of detected stops (`aided_pass.n_zaru_applied`, `zaru_sigma_mean_used`) | the bias block's consistency (§2, §11 (4)), then a human reads `summary.json` against §7 and signs or does not |
+| `Q` from the IO-VNBD Allan run | done (D-045, D-120), per-stem floored in motion (D-115); **`gyro_bias_rw` is still the desk figure and the bias block is over-confident 3–7× in a car (D-131)** | a bias process noise measured in motion on TRAIN |
+| SE₂(3) tests 7–11 incl. NEES | green, five cases, means unchanged at `dd5e3ff` (17.419 / 18.593 / 16.620 / 18.672 / 13.568; ERROR_BUDGET §10.2) | re-check after any change to `P0` or `Q` |
 | Raw-strapdown and GNSS-available baselines | done, in every sweep | — |
 | Onyekpe INS baseline reproduced, gap explained | **not started**: `models/baseline_rnn.py` + `train_baseline_rnn.py` exist, no checkpoint, no torch here, no GPU | someone with a GPU trains it; then a `--with-rnn` fourth entry in `METHODS` |
 | Yaw error instrumented and plotted separately | instrumented (`yaw_rmse_deg`, `yaw_max_deg` in every window row); **no plot — no matplotlib installed, no `eval/plots.py`** | `pip install -e ".[plot]"`, an `eval/plots.py` that reads `summary.json` + `windows.csv` and calls `idr.stamp.stamp_figure` |
@@ -303,3 +314,13 @@ Each hard-codes `sys.path.insert(0, <its own scratchpad>)`; fix that line, do no
    both checksums; the run uses whatever is on disk.
 3. Does anyone own the Onyekpe reproduction? It is the one Gate 1 line item with no code path and
    no machine.
+4. **Answered in D-131, and it opens the next one.** Was the quiet-class gap ZARU observability?
+   No: with ZARU applied at 1,356 of 1,368 stops on S3a the bias estimate is where it was
+   (0.23 °/s on y in the last ten minutes, 6.9 σ of a bias block that sits at 0.03 °/s), because
+   the block is over-confident and the other updates move the bias 3–4× faster than
+   `gyro_bias_rw` allows. **Open:** what does the gyro bias actually do in a car, measured on
+   TRAIN — the in-motion analogue of D-120's desk Allan run for the bias term (the walk of the
+   aided-pass estimate against the truth-standstill bias, per stem, on M/S1/S2/S4), and whether
+   a `gyro_bias_rw` read from it, floored at the desk value the way `in_motion_config` floors
+   the white terms, lets ZARU's now-correct R carry weight. Measure before setting anything;
+   D-115's downward sweep of `gyro_bias_rw` (×0.1) moved nothing, and nobody has swept it up.
