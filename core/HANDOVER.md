@@ -314,7 +314,8 @@ Each hard-codes `sys.path.insert(0, <its own scratchpad>)`; fix that line, do no
    both checksums; the run uses whatever is on disk.
 3. Does anyone own the Onyekpe reproduction? It is the one Gate 1 line item with no code path and
    no machine.
-4. **Answered in D-131, and it opens the next one.** Was the quiet-class gap ZARU observability?
+4. **Answered in D-131, and it opens the next one — [`HANDOVER_BIAS.md`](HANDOVER_BIAS.md) is the
+   brief for it, self-contained.** Was the quiet-class gap ZARU observability?
    No: with ZARU applied at 1,356 of 1,368 stops on S3a the bias estimate is where it was
    (0.23 °/s on y in the last ten minutes, 6.9 σ of a bias block that sits at 0.03 °/s), because
    the block is over-confident and the other updates move the bias 3–4× faster than
@@ -324,3 +325,9 @@ Each hard-codes `sys.path.insert(0, <its own scratchpad>)`; fix that line, do no
    a `gyro_bias_rw` read from it, floored at the desk value the way `in_motion_config` floors
    the white terms, lets ZARU's now-correct R carry weight. Measure before setting anything;
    D-115's downward sweep of `gyro_bias_rw` (×0.1) moved nothing, and nobody has swept it up.
+   **First measurements are already in `HANDOVER_BIAS.md` §1** and they complicate the question:
+   on TRAIN stem S1 the filter's bias-block NEES against the truth-standstill bias is **27.3
+   against 3.0 expected** (error/σ 4.1 on the worst axis), so the block is over-confident — but
+   the *true* bias walks at only ×1–2 of `gyro_bias_rw` while the *estimate* moves ×3, so most of
+   the estimate's motion is the Doppler and NHC updates blaming `b_g` for tilt and heading error,
+   not an under-modelled walk. Raising the process noise alone will not close that.

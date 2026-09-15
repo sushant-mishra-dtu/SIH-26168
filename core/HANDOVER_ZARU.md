@@ -22,6 +22,10 @@ Where this file disagrees with [`../docs/DECISION_LOG.md`](../docs/DECISION_LOG.
 > probes are in the 15 Sep evening session's scratchpad (`zaru_measure.py`, `zaru_objective.py`,
 > `nees_means.py`); `zaru_objective.py`'s "before" arm reproduces D-130 to the digit and is the
 > template for any on/off A/B of a filter change through `run_filter` + `replay_window`.
+>
+> **The next piece of work is briefed in [`HANDOVER_BIAS.md`](HANDOVER_BIAS.md)** (the gyro-bias
+> block's consistency, row D-133 reserved). Nothing below this block needs doing; it is kept as
+> the record of what was asked and what the answer turned out to be.
 
 ---
 
