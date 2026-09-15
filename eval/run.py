@@ -50,6 +50,7 @@ from core.reference.inekf import (
     nhc_is_valid,
     pca_mount_yaw,
     right_invariant_from_plain,
+    zaru_sigma_from_window,
 )
 from eval.baselines import (
     MIN_HEADING_DISPLACEMENT_M,
@@ -84,6 +85,7 @@ from eval.outages.inject import (
 from eval.splits import (
     LONG_OUTAGE,
     MANDATORY_PLOT_SEQUENCES,
+    QUIET_MOUNT,
     assert_split_disjoint,
     assert_split_is_loadable,
     test_sequences,
@@ -447,6 +449,10 @@ class FilterRun:
     #: warmup -- so a number can be read next to the stem it came from.
     gyro_arw_used: float = float("nan")
     accel_vrw_used: float = float("nan")
+    #: The ZARU measurement sigma the pass tested against, worst axis, averaged over every
+    #: offered ZARU (applied or refused): `zaru_sigma_from_window` on the detector's own window
+    #: (D-131), in rad/s. NaN when no stop was detected. Read it next to `n_zaru_rejected`.
+    zaru_sigma_mean_used: float = float("nan")
 
     def aided_pass_summary(self) -> dict[str, object]:
         """What the aided pass did, for `summary.json`: how it aligned, what it was fed, and
@@ -460,6 +466,7 @@ class FilterRun:
             "mount_spread_deg": None if init is None else float(np.degrees(init.mount_spread_rad)),
             "gyro_arw_used": self.gyro_arw_used,
             "accel_vrw_used": self.accel_vrw_used,
+            "zaru_sigma_mean_used": self.zaru_sigma_mean_used,
             "n_gnss_applied": self.n_gnss_applied,
             "n_gnss_rejected": self.n_gnss_rejected,
             "n_gnss_reanchored": self.n_gnss_reanchored,
@@ -505,15 +512,17 @@ def run_filter(
     ungated -- `velocity_measurement` and `FilterConfig.gate_gnss_velocity` say why each.
 
     Gating is the caller's job, per the filter's own contract: `is_stationary` and `nhc_is_valid`
-    read the raw IMU stream, which is not a property of the state. ZUPT and ZARU are **offered
-    together** at every detected stop (D-004); ZARU may decline at its own χ² gate (D-057), which
-    is counted separately so a run can be read for how often that happens.
+    read the IMU stream (passing `gyro_bias=state.b_g` to `is_stationary`), which is not an
+    intrinsic property of the state. ZUPT and ZARU are **offered together** at every detected
+    stop (D-004); ZARU may decline at its own χ² gate (D-057), which is counted separately so a
+    run can be read for how often that happens.
     """
     cfg = cfg or FilterConfig()
     n = gyro.shape[0]
     if seq is not None:
         cfg = in_motion_config(cfg, gyro, accel, dt, upto=min(n, WARMUP_S * SAMPLE_RATE_HZ))
     f = InEKF(cfg)
+    f.gyro_bias_direct_only = GYRO_BIAS_DIRECT_ONLY
 
     # **Before the first propagate, not after it.** See `initialise_filter`: starting from
     # R = R_sv = I integrates gravity into the horizontal axes and the run diverges (D-094).
@@ -606,7 +615,14 @@ def run_filter(
         n_gnss_reanchored=counts["reanchor"],
         gyro_arw_used=cfg.gyro_arw,
         accel_vrw_used=cfg.accel_vrw,
+        zaru_sigma_mean_used=_mean_zaru_sigma(counts),
     )
+
+
+def _mean_zaru_sigma(counts: dict[str, float]) -> float:
+    """Worst-axis ZARU sigma averaged over every ZARU `_step_constraints` offered, or NaN."""
+    offered = counts["zaru_ok"] + counts["zaru_no"]
+    return float(counts.get("zaru_sigma_sum", 0.0) / offered) if offered else float("nan")
 
 
 def _check_physical(f: InEKF, k: int, name: str, where: str) -> None:
@@ -638,10 +654,55 @@ GNSS_REJECTIONS_BEFORE_REANCHOR = 3
 ZUPT_VETO_MIN_SPEED_MPS = 1.0
 ZUPT_VETO_NSIGMA = 3.0
 
+#: Whether `replay_window` freezes the bias states for the outage (`InEKF.hold_biases`: bias
+#: process noise zeroed before Van Loan, bias gain rows zeroed for every update but ZARU).
+#: ERROR_BUDGET section 3.2 calls for the snapshot; the A/B did not support it (D-130). From
+#: the same S3a + S3c aided snapshots, every 60 s window, hold on vs off, median / p90 drift-%:
+#: S3a 42.5 / 97.2 vs 42.0 / 95.2 (40 windows); S3c 72.1 / 121.7 vs 69.5 / 121.5 (61); pooled
+#: 56.9 / 119.7 vs 57.2 / 119.5. A wash inside the noise, with off ahead on both per-stem
+#: medians and every p90 -- a mechanism that does not measurably help does not ship on.
+#: The value travels in `summary.json` as `biases_held_in_outage` so an artefact says which
+#: variant produced it; flip it here, never per call.
+HOLD_BIASES_IN_OUTAGE = False
+
+#: Whether ZARU is tested against the stop's own gyro noise (`zaru_sigma_from_window` on the
+#: detector window, D-131) or against the Allan desk figure `FilterConfig.zaru_sigma` alone,
+#: which is bit-for-bit the pre-D-131 filter. The window figure is the measured one -- the desk
+#: figure is 10-35x too small at rest in a car and refused 1,356 of S3a's 1,372 offered ZARUs
+#: (D-130) -- and it is what the mechanism ships with. Travels in `summary.json` as
+#: `zaru_sigma_from_window` so an artefact says which variant produced it; flip it here, never
+#: per call, and only with a DECISION_LOG row that carries both sweeps.
+ZARU_SIGMA_FROM_WINDOW = True
+
+#: Whether the gyro bias is moved only by the update that observes it directly, ZARU
+#: (`InEKF.gyro_bias_direct_only`, D-133), or by every update through the covariance's
+#: cross-correlations, which is bit-for-bit the pre-D-133 filter. Measured on TRAIN S1 against the
+#: truth-standstill bias at its four still stops: with every update allowed the bias block carries
+#: a NEES of 27.3 (3.0 expected; error / sigma 4.1 on the worst axis), because at a 9 s fix
+#: cadence the Doppler velocity, NHC and position updates blame `b_g` for tilt and heading error
+#: they cannot separate from it -- the estimate steps 0.030 deg/s per 30 s against the 0.0097
+#: `gyro_bias_rw` allows and the 0.009-0.02 the bias walks between S1's stops. With only ZARU
+#: allowed the NEES is 2.1, the step 0.008-0.015, and on S3a the last-ten-minute |b_g| falls from
+#: [0.06, 0.23, 0.03] to [0.01, 0.006, 0.014] deg/s. **Shipped off, by rule 4 of
+#: core/HANDOVER.md section 3: the quoted number did not improve.** Two clean sweeps, same
+#: protocol: off (`dd5e3ff`) quiet 56.0 % / 9.13 % = 6.14x on 101 windows, vibrating 84.0 % /
+#: 4.26 % = 19.72x on 113; on (`4389558`) quiet 56.6 % / 9.13 % = 6.20x on the same 101,
+#: vibrating 86.1 % / 4.35 % = 19.81x on 127. On is ahead on both quiet per-stem medians (S3a
+#: 42.2 -> 40.6, S3c 72.3 -> 71.0), keeps 14 more Vw2 windows and cuts replay divergences from
+#: 51 to 19; the paired median difference on the quiet windows is +0.09 points with a bootstrap
+#: 95 % interval of [-5.0, +4.7] (sign test p = 0.62) -- a wash -- and the pooled quiet median,
+#: the number the gate reads, is 0.58 points worse. A consistent bias block that does not move
+#: the drift says the remaining quiet-class gap is not the gyro bias (D-133). When on it applies
+#: to the aided pass and to every replayed window alike (`run_filter`, `replay_window`); it
+#: travels in `summary.json` as `gyro_bias_direct_only`; flip it here, never per call, and only
+#: with a DECISION_LOG row that carries both sweeps. A stem with no detected stop never
+#: estimates `b_g` under this policy; its block grows at `gyro_bias_rw` and says so.
+GYRO_BIAS_DIRECT_ONLY = False
+
 
 def _step_constraints(
     f: InEKF, k: int, gyro: np.ndarray, accel: np.ndarray, cfg: FilterConfig, window: int,
-    counts: dict[str, int],
+    counts: dict[str, float],
 ) -> None:
     """ZUPT+ZARU at a detected stop, else NHC where it is valid -- the same step for the aided
     pass and for every window replayed from it, so the two cannot drift apart.
@@ -651,10 +712,20 @@ def _step_constraints(
     acceleration on its own y axis -- so the gate used to read braking as cornering and
     cornering as nothing on every stem whose mount is not near zero (D-115). `R_sv` takes both
     into the vehicle frame first.
+
+    **ZARU is tested against the stop's own gyro noise, not the desk figure** (D-131). The
+    detector window that just fired is bias plus white noise, so its per-axis sample std is
+    ZARU's measurement sigma (`zaru_sigma_from_window`, floored at `cfg.zaru_sigma`). Against
+    the Allan run's 0.039 deg/s the gate refused 1,356 of S3a's 1,372 offered ZARUs (D-130);
+    at rest in a car this phone carries 0.3-1.4 deg/s per sample. The sigma is read here, on the
+    stream, and never from a held-out stem: the same rule as `in_motion_config`. Its worst-axis
+    mean over the pass travels in `summary.json` as `zaru_sigma_mean_used`.
     """
     lo = max(0, k - window + 1)
     st = f.state
-    if k + 1 >= window and is_stationary(accel[lo : k + 1], gyro[lo : k + 1], cfg):
+    if k + 1 >= window and is_stationary(
+        accel[lo : k + 1], gyro[lo : k + 1], cfg, gyro_bias=st.b_g
+    ):
         # **A steady cruise looks stationary to an IMU.** `is_stationary` reads accelerometer
         # variance and gyro magnitude, and a quiet phone at a constant 3.5 m/s on a smooth road
         # is under both thresholds -- S3a, 2 s in, on the first run this harness made with a
@@ -673,7 +744,13 @@ def _step_constraints(
             return
         f.update_zupt()
         counts["zupt"] += 1
-        if f.update_zaru(gyro[k]):
+        sigma = (
+            zaru_sigma_from_window(gyro[lo : k + 1], cfg)
+            if ZARU_SIGMA_FROM_WINDOW
+            else np.full(3, float(cfg.zaru_sigma))
+        )
+        counts["zaru_sigma_sum"] = counts.get("zaru_sigma_sum", 0.0) + float(np.max(sigma))
+        if f.update_zaru(gyro[k], sigma=sigma):
             counts["zaru_ok"] += 1
         else:
             counts["zaru_no"] += 1
@@ -726,6 +803,8 @@ def replay_window(
     could be applied -- a re-acquisition belongs to the aided pass, not to the outage it closes.
     """
     f = copy.deepcopy(snapshot.filter)
+    f.hold_biases = HOLD_BIASES_IN_OUTAGE
+    f.gyro_bias_direct_only = GYRO_BIAS_DIRECT_ONLY
     cfg = f.cfg
     window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
     n_rows = outage.n_samples + 1
@@ -1573,7 +1652,53 @@ def summarise_by_method_and_length(results: list[WindowResult]) -> dict[str, dic
     }
 
 
-def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
+def gate1_by_mount_class(results: list[WindowResult]) -> dict[str, dict[str, object]]:
+    """Gate 1 drift ratio and window counts partitioned by mount class (D-115).
+
+    The in-motion gyro white level on quiet mounts (S3a, S3c) is 1.7-1.9 deg/s vs 4-20 deg/s on
+    every Vta/Vw stem; heading random walk 2.9 deg vs 21-44 deg at 60 s. On vibrating mounts the
+    IMU stream carries un-anti-aliased engine and cabin vibration aliased into 10 Hz, random-walking
+    the heading integral. Gate 1 should be quoted with this split, never pooled (D-115).
+    """
+    windows_60s = [r for r in results if r.length_s == GATE1_LENGTH_S]
+    out: dict[str, dict[str, object]] = {}
+    for mount_class in ("quiet", "vibrating"):
+        class_windows = [
+            r
+            for r in windows_60s
+            if (
+                r.sequence in QUIET_MOUNT
+                if mount_class == "quiet"
+                else r.sequence not in QUIET_MOUNT
+            )
+        ]
+        filter_drifts = [r.metrics.drift_pct for r in class_windows if r.method == "filter"]
+        gnss_drifts = [r.metrics.drift_pct for r in class_windows if r.method == "gnss_available"]
+
+        n_filter = len(filter_drifts)
+        n_gnss = len(gnss_drifts)
+
+        filter_med = float(np.median(filter_drifts)) if n_filter > 0 else None
+        gnss_med = float(np.median(gnss_drifts)) if n_gnss > 0 else None
+
+        ratio = filter_med / gnss_med if filter_med is not None and gnss_med else None
+        in_range = None if ratio is None else GATE1_RATIO_RANGE[0] <= ratio <= GATE1_RATIO_RANGE[1]
+
+        out[mount_class] = {
+            "filter_drift_pct_median": filter_med,
+            "gnss_available_drift_pct_median": gnss_med,
+            "ratio": ratio,
+            "in_range": in_range,
+            "n_windows_filter": n_filter,
+            "n_windows_gnss_available": n_gnss,
+        }
+    return out
+
+
+def gate1_ratio(
+    by_method: dict[str, dict[str, dict]],
+    results: list[WindowResult] | None = None,
+) -> dict[str, object]:
     """The Gate 1 number: physics-only median drift over GNSS-available median drift, at 60 s.
 
     Reported, never judged. The gate is 3-5x and a human closes it against
@@ -1583,12 +1708,17 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
     key = str(GATE1_LENGTH_S)
     have = [m for m in ("filter", "gnss_available") if key in by_method.get(m, {})]
     if len(have) < 2:
-        return {"measured": False, "why": f"no {GATE1_LENGTH_S} s windows for {METHODS[0]} and/or "
-                f"{METHODS[2]}"}
+        out: dict[str, object] = {
+            "measured": False,
+            "why": f"no {GATE1_LENGTH_S} s windows for {METHODS[0]} and/or {METHODS[2]}",
+        }
+        if results is not None:
+            out["by_mount_class"] = gate1_by_mount_class(results)
+        return out
     num = by_method["filter"][key]
     den = by_method["gnss_available"][key]
     ratio = num["drift_pct_median"] / den["drift_pct_median"] if den["drift_pct_median"] else None
-    return {
+    out = {
         "measured": True,
         "length_s": GATE1_LENGTH_S,
         "filter_drift_pct_median": num["drift_pct_median"],
@@ -1601,6 +1731,9 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
         "n_windows_filter": num["n_sequences"],
         "n_windows_gnss_available": den["n_sequences"],
     }
+    if results is not None:
+        out["by_mount_class"] = gate1_by_mount_class(results)
+    return out
 
 
 def write_artefacts(
@@ -1639,7 +1772,13 @@ def write_artefacts(
             for kind in sorted({d.kind for d in dropped})
         },
         "by_method": by_method,
-        "gate1": gate1_ratio(by_method),
+        # Whether outage windows froze the bias states (`HOLD_BIASES_IN_OUTAGE`, D-130).
+        "biases_held_in_outage": HOLD_BIASES_IN_OUTAGE,
+        # Whether ZARU was tested against the stop's own gyro noise (D-131) or the desk figure.
+        "zaru_sigma_from_window": ZARU_SIGMA_FROM_WINDOW,
+        # Whether b_g moved only under ZARU (`GYRO_BIAS_DIRECT_ONLY`, D-133).
+        "gyro_bias_direct_only": GYRO_BIAS_DIRECT_ONLY,
+        "gate1": gate1_ratio(by_method, results=results),
         "trajectories": sorted(replay or {}),
         "dropped_windows": [d.as_row() for d in dropped],
         # The aided pass each stem's windows were replayed from (D-115): alignment, the process

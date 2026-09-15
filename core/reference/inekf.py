@@ -63,7 +63,7 @@ REORTHONORMALISE_EVERY = 1000
 GYRO_ARW_MEASURED = 2.18e-4  # rad/s/sqrt(Hz) == 0.75 deg/sqrt(hr)
 
 #: Measured accelerometer bias instability, worst axis, same run (D-120; D-045 read 0.34 mg). It
-#: is the accel-bias block of `P0` (`initial_covariance`), which is why it has a name here.
+#: is the floor the accel-bias block converges to, not where it opens (D-115 step 2).
 ACCEL_BIAS_INSTABILITY_MEASURED = 2.48e-3  # m/s^2 == 0.25 mg
 
 #: `S-` stream rate, measured from the timestamps (D-047: median dt = 100.0 ms).
@@ -276,6 +276,18 @@ class FilterConfig:
     # observes the dominant error term never ran (D-115).
     gyro_bias_turn_on: float = float(np.deg2rad(0.2))  # rad/s
 
+    # Accelerometer **turn-on** bias, 1-sigma per axis: the uncertainty of a bias nothing has
+    # estimated yet, which is what `P0` has to carry. It is not the bias *instability* (0.25 mg =
+    # 2.45 mm/s^2, D-120; D-045 read 0.34 mg), which is how far an already-estimated bias wanders
+    # and is the floor the block converges to, not where it starts. Measured as mean(|f|) - g
+    # over every stationary run of 5 s or longer in the TRAIN stems that have one (M, S1, S2, S4
+    # -- the same 638 s D-115 used for the gyro): RMS across runs 6.2 mg (0.060 m/s^2), largest
+    # single run 8.2 mg (0.081 m/s^2, M). That is the one accelerometer-offset component
+    # independent of levelling; the horizontal components are confounded with a levelling
+    # derived from the same sensor and are NOT measurable this way. 0.08 m/s^2 puts the largest
+    # measured offset at one sigma.
+    accel_bias_turn_on: float = 0.08  # m/s^2
+
     # The receiver's course over ground, `gps_orientation_deg` in the `S-` stream, is a Doppler
     # heading and is the one heading measurement a phone has before it moves far enough for a
     # fix-to-fix chord to mean anything. Its error against the paired `V-` course, pooled over
@@ -304,6 +316,16 @@ class FilterConfig:
     # (D-056). Derived here rather than typed, so it cannot drift away from `gyro_arw`; the
     # relationship is pinned by a test. The 1.0e-3 it replaced predated the Allan run; D-045's
     # 1.2997e-3 was 1.9x this, read off segments that still held the stop's settle (D-120).
+    #
+    # **This is the floor, not the figure the harness tests against (D-131).** The Allan run
+    # was a phone on a desk; the same phone at rest in a car carries 0.3-1.4 deg/s of idle
+    # vibration per sample (TRAIN S1: innovation std [0.72, 0.38, 0.60] deg/s per axis at the
+    # 3,066 samples the stop detector fired on), 10-35x this in sigma, and against R = (0.039
+    # deg/s)^2 the chi-squared gate refused 1,356 of S3a's 1,372 offered ZARUs (D-130). The
+    # caller reads the stop's own level from the detector window (`zaru_sigma_from_window`) and
+    # passes it to `update_zaru(gyro, sigma=)`; this value is what that reading is floored at,
+    # and what `update_zaru` uses when no sigma is passed (the NEES scenario, whose simulated
+    # sensor *is* the Allan sensor).
     zaru_sigma: float = GYRO_ARW_MEASURED * _SQRT_IMU_RATE_HZ  # rad/s == 6.894e-4 at 10 Hz
 
     #: `S-` stream sample rate. Measured, not nominal: D-047 confirmed median dt = 100.0 ms from
@@ -314,16 +336,14 @@ class FilterConfig:
     # Stationary detection. Thresholds are conservative on purpose: a missed ZUPT costs a little
     # accuracy, a false ZUPT while rolling injects a hard error the filter believes.
     #
-    # Measured against the paired `V-` track speed (D-115). At the previous 0.5 s / 0.05 /
-    # 0.02 rad/s, the detector fired *while rolling* for 31% of its firings on S3a and 41% on
-    # S3c -- median 4.1 and 7.7 m/s, p90 13.8 and 20.4 m/s: a phone that sits quietly in its
-    # cradle looks stationary to an IMU-only detector at motorway speed, and a ZUPT at 20 m/s
-    # is a 20 m/s velocity error asserted at 2 cm/s. At 2 s / 0.02 / 0.01 the rolling share of
-    # firings is 0% on S3a and 1.9% on S3c (median 1.5 m/s, p90 3.4 m/s -- the run-in to a
-    # stop, which the harness's state veto refuses), against 76% recall of S3c's true stops.
-    # S3a's stops are not detectable at either setting (29% then 0%): its idle vibration is
-    # above the variance floor. The vibrating-mount stems (Vta1a, Vw4) never false-fire at
-    # either setting and detect a third of their stops at most.
+    # Measured against the paired `V-` track speed (D-115, Fix 1). At 2 s / 0.02 (m/s^2)^2 on
+    # accel variance and 0.01 rad/s on bias-corrected gyro window mean |mean(gyro) - b_g|,
+    # rolling false-fire share is 0.0% on S1, 1.07% on S2 (0.09% rolling FPR), 0.84% on S3a
+    # (0.06% FPR), and 1.13% on S3c (0.08% FPR), against 70.0% recall of S3a's stops and 82.1% of
+    # S3c's. S3a's standstill gyro norm is ~1.55 deg/s of idle vibration floor that previously
+    # prevented detection entirely (0% recall); subtracting gyro bias and taking the norm of the
+    # window mean rather than the mean of norms recovers stop detection while keeping rolling
+    # false-fires ~0%. The run-in to a stop is refuted by the harness's state veto.
     zupt_accel_var_thresh: float = 0.02  # (m/s^2)^2
     zupt_gyro_norm_thresh: float = 0.01  # rad/s
     zupt_window_s: float = 2.0
@@ -719,11 +739,12 @@ def initial_covariance(
         yaw            1.81 deg        14.56 deg       8x too tight
         roll, pitch    1.81 deg        0.83 deg        2.2x too loose
         gyro bias      1810 deg/hr     720 deg/hr      2.5x too loose
-        accel bias     3.2 cm/s^2      2.5 mm/s^2      12.7x too loose
+        accel bias     3.2 cm/s^2      8 cm/s^2        2.5x too tight
         mount          1.81 deg        5 deg           2.8x too tight
 
-    (The gyro-bias row read 42 deg/hr and the roll/pitch row 1.31 deg until D-115; see
-    `FilterConfig.gyro_bias_turn_on` for why a bias instability is the wrong quantity to start an
+    (The gyro-bias row read 42 deg/hr and the roll/pitch row 1.31 deg until D-115; the accel-bias
+    row read 2.5 mm/s^2 until D-115 step 2; see `FilterConfig.gyro_bias_turn_on` and
+    `FilterConfig.accel_bias_turn_on` for why a bias instability is the wrong quantity to start an
     unestimated bias from, and the `zupt_*` thresholds for the tighter stop detector.)
 
     A `P0` that is too tight makes the chi-squared gate reject good measurements, and that failure
@@ -748,7 +769,7 @@ def initial_covariance(
       heading nobody has measured (D-115).
     * **Position** is the fix itself; **velocity** is that same differenced pair.
     * **The gyro bias block** is the measured turn-on bias (D-115); **the accel bias block** is
-      the Allan run's measured bias instability (`ACCEL_BIAS_INSTABILITY_MEASURED`, D-120).
+      the measured turn-on bias (`FilterConfig.accel_bias_turn_on`, 0.08 m/s^2, D-115 step 2).
     * **The mount block** takes `mount_sigma_rad` when the PCA initialiser (`pca_mount_yaw`)
       has run and measured a spread; without one it falls back to a stated 5 degrees. See below.
 
@@ -787,14 +808,15 @@ def initial_covariance(
     else:
         sigma_yaw = float(yaw_sigma_rad)
 
-    # Gyro: the measured turn-on bias (`FilterConfig.gyro_bias_turn_on`), because the block
-    # starts from a bias nothing has estimated. Accel: still the Allan run's bias instability
-    # (0.25 mg since D-120; D-045 read 0.34), which is too tight for the same reason and is an
-    # open item in D-115 -- there is no clean standstill measurement of an accelerometer offset
-    # to replace it with, since at rest the offset is confounded with the levelling that was
-    # derived from the same sensor.
+    # Gyro and accel: the measured turn-on biases (`FilterConfig.gyro_bias_turn_on`,
+    # `FilterConfig.accel_bias_turn_on`), because the blocks start from biases nothing has
+    # estimated yet. The Allan run's bias instabilities (22 deg/hr, 0.25 mg since D-120; D-045 read
+    # 42 and 0.34) are how far an already-estimated bias wanders -- the floor the blocks converge
+    # to, not where they start. The vertical accelerometer offset is measured as mean(|f|) - g
+    # over standstill runs (the one component independent of levelling); 0.08 m/s^2 puts the
+    # largest measured offset at one sigma.
     sigma_bg = cfg.gyro_bias_turn_on
-    sigma_ba = ACCEL_BIAS_INSTABILITY_MEASURED
+    sigma_ba = cfg.accel_bias_turn_on
 
     # The mount block. Without a PCA spread the block starts from no measurement, and the prior
     # therefore must not assert knowledge we do not have. The ~1.15 deg figure in
@@ -963,21 +985,65 @@ def van_loan(a: np.ndarray, gqg: np.ndarray, dt: float) -> tuple[np.ndarray, np.
 # --------------------------------------------------------------------------------------------
 
 
-def is_stationary(accel_window: np.ndarray, gyro_window: np.ndarray, cfg: FilterConfig) -> bool:
+def is_stationary(
+    accel_window: np.ndarray,
+    gyro_window: np.ndarray,
+    cfg: FilterConfig,
+    *,
+    gyro_bias: np.ndarray | None = None,
+) -> bool:
     """Detect a stopped vehicle for ZUPT/ZARU.
 
-    Both conditions must hold: low accelerometer variance *and* low gyro magnitude. Variance
-    rather than magnitude on the accelerometer because gravity dominates its magnitude at all
-    times; a stationary phone still reads ~9.8 m/s^2.
+    Both conditions must hold: low accelerometer variance *and* low bias-corrected gyro magnitude.
+    Variance rather than magnitude on the accelerometer because gravity dominates its magnitude at
+    all times; a stationary phone still reads ~9.8 m/s^2.
+
+    The gyro condition checks `|mean(gyro_window) - gyro_bias| < zupt_gyro_norm_thresh`, where
+    `gyro_bias` defaults to zero if omitted. Evaluating the norm of the window mean rather than the
+    mean of per-sample norms prevents high-frequency sensor noise and idle cabin vibration (such as
+    S3a's ~1.55 deg/s standstill gyro norm) from masking a true stop and locking out ZARU.
     """
     accel_window = np.asarray(accel_window, dtype=float)
     gyro_window = np.asarray(gyro_window, dtype=float)
     if accel_window.ndim != 2 or accel_window.shape[1] != 3:
         raise ValueError(f"expected (n, 3) accel window, got {accel_window.shape}")
+    if gyro_window.ndim != 2 or gyro_window.shape[1] != 3:
+        raise ValueError(f"expected (n, 3) gyro window, got {gyro_window.shape}")
 
     accel_var = float(np.mean(np.var(accel_window, axis=0)))
-    gyro_norm = float(np.mean(np.linalg.norm(gyro_window, axis=1)))
+    bias = np.zeros(3) if gyro_bias is None else np.asarray(gyro_bias, dtype=float).ravel()
+    if bias.shape != (3,):
+        raise ValueError(f"expected 3-vector gyro_bias, got {bias.shape}")
+    gyro_mean = np.mean(gyro_window, axis=0) - bias
+    gyro_norm = float(np.linalg.norm(gyro_mean))
     return accel_var < cfg.zupt_accel_var_thresh and gyro_norm < cfg.zupt_gyro_norm_thresh
+
+
+def zaru_sigma_from_window(gyro_window: np.ndarray, cfg: FilterConfig) -> np.ndarray:
+    """Per-axis ZARU measurement sigma, read from the stop detector's own window (D-131).
+
+    At a standstill the window is bias plus white noise, so its per-axis sample standard
+    deviation (ddof = 1) is the noise ZARU's innovation `z = w~ - b_g_hat` carries -- the stop's
+    own figure, read causally from the same 2 s `is_stationary` fired on, never a constant.
+    Floored at `cfg.zaru_sigma`, the Allan run's desk figure: a stream cannot be quieter than
+    its sensor, and a quantised gyro that repeats a value at rest would otherwise report zero.
+
+    Why not a constant, measured on TRAIN against the paired `V-` truth (D-131): the level a
+    phone shows at rest in a car is 0.3-1.4 deg/s per axis and it is not one number. Over
+    every >= 5 s truth stop the worst-axis white level reads 0.77 deg/s on S1, 5.1 on S4, 5.6
+    on M and 30 on S2 -- on M and S2 the phone is not still at its truth stops at all and the
+    detector fires on 0 % of them -- while at the samples the detector *does* fire on it reads
+    0.70 on S1 and 0.70 on S4. A window of 20 samples estimates its own sigma to about 16 %:
+    on S1 the window figure is [0.70, 0.35, 0.59] deg/s per axis against an innovation std of
+    [0.72, 0.38, 0.60] at the same 3,066 samples, and the gate then accepts 99.4 % of them
+    (0.5 % under the desk figure). Why not the in-motion level `in_motion_config` reads on the
+    warm-up: it is 1.52 deg/s on S1 and 2.04 on S4, 2-3x the standstill level -- a different
+    physical quantity, and R four to nine times too wide in variance.
+    """
+    w = np.asarray(gyro_window, dtype=float)
+    if w.ndim != 2 or w.shape[1] != 3 or w.shape[0] < 2:
+        raise ValueError(f"expected an (n >= 2, 3) gyro window, got {w.shape}")
+    return np.maximum(np.std(w, axis=0, ddof=1), float(cfg.zaru_sigma))
 
 
 def nhc_is_valid(
@@ -1040,10 +1106,11 @@ class InEKF:
     FFI surface without waiting.
 
     **Gating is the caller's job, not this class's.** `is_stationary` and `nhc_is_valid` read the
-    raw IMU stream -- accelerometer variance, gyro magnitude, yaw rate, lateral acceleration --
-    and none of those is a property of the state, so the filter cannot check them for itself. The
-    harness calls the detector, then the update. ZUPT and ZARU fire **together** at every detected
-    stop: a stop where only one runs is a bug, not a tuning choice.
+    raw IMU stream -- accelerometer variance, bias-corrected gyro magnitude (the caller passes
+    `gyro_bias=state.b_g`), yaw rate, lateral acceleration -- and none of those is an intrinsic
+    property of the state, so the filter cannot check them for itself. The harness calls the
+    detector, then the update. ZUPT and ZARU fire **together** at every detected stop: a stop where
+    only one runs is a bug, not a tuning choice.
     """
 
     def __init__(self, cfg: FilterConfig | None = None) -> None:
@@ -1052,6 +1119,26 @@ class InEKF:
         self.P = initial_covariance(self.cfg)
         #: Steps since the last re-projection of R onto SO(3). See REORTHONORMALISE_EVERY.
         self.steps = 0
+        #: When True, hold gyro and accel biases during an outage: propagate zeroes Q_c on the
+        #: b_g and b_a blocks before Van Loan, and _apply_update zeroes Kalman gain rows for
+        #: IDX_GYRO_BIAS and IDX_ACCEL_BIAS unless explicitly exempted in allow_bias.
+        #: ZARU is exempt because it directly observes b_g; constraints that cannot observe
+        #: biases (ZUPT, NHC) cannot perturb them. The P bias blocks therefore stay at their
+        #: entry value.
+        self.hold_biases: bool = False
+        #: When True, `b_g` moves only under an update that observes it directly -- ZARU, which
+        #: passes `allow_bias=(IDX_GYRO_BIAS,)` -- and every other update's Kalman gain has its
+        #: gyro-bias rows zeroed (D-133). Unlike `hold_biases` nothing is done to `Q`: the block's
+        #: uncertainty keeps growing at `gyro_bias_rw` between stops, its cross-terms keep
+        #: updating, and the next ZARU is weighed against an honest covariance. Why: at a 9 s fix
+        #: cadence the Doppler velocity, NHC and position updates cannot separate tilt, heading
+        #: and gyro bias, and through the cross-correlations they moved `b_g` 2-3x faster than
+        #: the bias walks while the block claimed 0.03 deg/s -- measured on TRAIN S1 against the
+        #: truth-standstill bias, a bias-block NEES of 27.3 against 3.0 expected, and 2.1 with
+        #: this set. The harness sets it from `eval.run.GYRO_BIAS_DIRECT_ONLY`; it is not a
+        #: `FilterConfig` field because it is a policy about which updates are believed, not a
+        #: sensor parameter.
+        self.gyro_bias_direct_only: bool = False
 
     def propagate(self, gyro: np.ndarray, accel: np.ndarray, dt: float) -> None:
         """IMU propagation. Always runs, GNSS or not -- this is the spine.
@@ -1091,7 +1178,12 @@ class InEKF:
         mid_rot, mid_v, mid_p = propagate_nominal(s.R, s.v, s.p, omega, specific_force, dt / 2)
         a = a_ri(mid_rot, mid_v, mid_p)
         g = g_ri(mid_rot, mid_v, mid_p)
-        gqg = g @ process_noise_psd(self.cfg) @ g.T
+        qc = process_noise_psd(self.cfg)
+        if self.hold_biases:
+            qc = qc.copy()
+            qc[6:12, :] = 0.0
+            qc[:, 6:12] = 0.0
+        gqg = g @ qc @ g.T
 
         phi, q_d = van_loan(a, gqg, dt)
 
@@ -1110,7 +1202,14 @@ class InEKF:
     # The one update step. Every measurement below reduces to (z, H, R) and calls this.
     # ----------------------------------------------------------------------------------------
 
-    def _apply_update(self, z: np.ndarray, h: np.ndarray, r: np.ndarray) -> None:
+    def _apply_update(
+        self,
+        z: np.ndarray,
+        h: np.ndarray,
+        r: np.ndarray,
+        *,
+        allow_bias: tuple[slice, ...] = (),
+    ) -> None:
         """Error-state Kalman update, with the correction **subtracted** (D-050).
 
         The sign is not a convention we are free to pick. Section 5 defines the right-invariant
@@ -1132,6 +1231,16 @@ class InEKF:
         z = np.asarray(z, dtype=float).ravel()
         s = h @ self.P @ h.T + r
         gain = self.P @ h.T @ np.linalg.inv(s)
+        if self.hold_biases:
+            if IDX_GYRO_BIAS not in allow_bias:
+                gain[IDX_GYRO_BIAS, :] = 0.0
+            if IDX_ACCEL_BIAS not in allow_bias:
+                gain[IDX_ACCEL_BIAS, :] = 0.0
+        if self.gyro_bias_direct_only and IDX_GYRO_BIAS not in allow_bias:
+            # A zeroed gain row is a legitimate (sub-optimal) linear estimator, and the Joseph
+            # form below gives its exact covariance: the b_g block is left where propagation put
+            # it while its cross-terms with the corrected states are updated (D-133).
+            gain[IDX_GYRO_BIAS, :] = 0.0
         delta = gain @ z
 
         st = self.state
@@ -1287,7 +1396,9 @@ class InEKF:
             np.eye(3) * self.cfg.zupt_sigma**2,
         )
 
-    def update_zaru(self, gyro: np.ndarray) -> bool:
+    def update_zaru(
+        self, gyro: np.ndarray, sigma: np.ndarray | float | None = None
+    ) -> bool:
         """Zero-angular-rate update, chi-squared gated. Returns whether it was applied.
 
         Observes gyro bias -- the dominant error term. Offered at *every* detected stop; the
@@ -1298,6 +1409,25 @@ class InEKF:
         expands to `-db_g` and gives `H_zaru = [0, 0, 0, -I, 0, 0]`. A **direct** observation of
         `b_g` -- no coupling, no integration, no waiting. Compare section 7.1, where yaw is only
         reachable through a second-order path; this is why ZARU matters more for yaw than NHC.
+
+        **`sigma` is the gyro white noise at *this* stop, per axis** (D-131): the caller reads it
+        from the detector's own window with `zaru_sigma_from_window` and passes it here, so
+        `R = diag(sigma^2)`. It is floored at `cfg.zaru_sigma`, the Allan run's desk figure,
+        which is also what runs when nothing is passed -- the NEES scenario, whose simulated
+        sensor is that sensor. Why the desk figure alone was wrong, measured on the real
+        stream: at rest in a car the same phone carries 0.3-1.4 deg/s of idle vibration per
+        sample (S3a's aided pass: per-axis std [0.33, 1.31, 1.39] deg/s at its truth stops),
+        so against R = (0.039 deg/s)^2 the innovation's chi-squared distance sat in the
+        hundreds and the gate refused **1,356 of the 1,372 stops the detector found on S3a**
+        (241 of 1,524 on S3c, 2 of 739 on Vw2 -- D-130); the bias the whole budget rests on was
+        detected and still not observed. With the window's own figure the gate accepts 99.4 % of
+        the 3,066 detector-positive standstill samples on TRAIN S1 (0.5 % before), and the
+        pull-away samples it now admits -- the trailing window's lag after the truth says
+        moving, 0.2-2.7 deg/s, 61 samples over 23 stops -- shift the admitted mean by
+        <= 0.008 deg/s against the standstill bias, inside ERROR_BUDGET section 3.2's operating
+        row. D-057's synthetic 2.9 deg/s pull-away sample is still refused at S1's level (0.7
+        deg/s: chi-squared 15.5) and is admitted at S3a's (1.4 deg/s: 4.1); on the real stems no
+        run-out sample reached 2.9 deg/s.
 
         **The gate is the fix for D-053** (superseded by D-057), and it is not defensive
         programming -- it was measured. `is_stationary` averages over a 0.5 s window, so at the
@@ -1327,13 +1457,23 @@ class InEKF:
         gyro = np.asarray(gyro, dtype=float).ravel()
         if gyro.shape != (3,):
             raise ValueError(f"expected a 3-vector gyro sample, got {gyro.shape}")
+        floor = float(self.cfg.zaru_sigma)
+        if sigma is None:
+            sig = np.full(3, floor)
+        else:
+            sig = np.asarray(sigma, dtype=float).ravel()
+            if sig.shape == (1,):
+                sig = np.full(3, sig[0])
+            if sig.shape != (3,) or not np.isfinite(sig).all():
+                raise ValueError(f"expected a finite scalar or 3-vector ZARU sigma, got {sigma!r}")
+            sig = np.maximum(sig, floor)
         h = np.zeros((3, ERROR_STATE_DIM))
         h[:, IDX_GYRO_BIAS] = -np.eye(3)
         z = gyro - self.state.b_g
-        r = np.eye(3) * self.cfg.zaru_sigma**2
+        r = np.diag(sig**2)
         if not chi2_gate(z, h @ self.P @ h.T + r, self.cfg.chi2_gate_3dof):
             return False
-        self._apply_update(z, h, r)
+        self._apply_update(z, h, r, allow_bias=(IDX_GYRO_BIAS,))
         return True
 
     def reinflate_mount(self, sigma_rad: float = MOUNT_KNOCK_RAD) -> None:

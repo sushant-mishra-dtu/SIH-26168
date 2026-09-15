@@ -93,6 +93,17 @@ LONG_OUTAGE: tuple[str, ...] = (
     "Vw4",
 )
 
+#: Stems recorded on a quiet mount (D-115).
+#:
+#: Measured in-motion gyro white level 1.7-1.9 deg/s on S3a/S3c vs 4-20 deg/s on every Vta/Vw stem;
+#: heading random walk 2.9 vs 21-44 deg at 60 s. On the vibrating mounts the IMU stream carries
+#: un-anti-aliased engine and cabin vibration aliased into 10 Hz, random-walking the heading
+#: integral.
+#:
+#: Everything in `LONG_OUTAGE` not in `QUIET_MOUNT` is the vibrating class; do not add a second
+#: tuple for it, derive it.
+QUIET_MOUNT: tuple[str, ...] = ("S3a", "S3c")
+
 #: Challenging scenarios, 10 s outages. Grouped because they are reported per-scenario, not pooled
 #: -- a mean over roundabouts and motorway is a number that describes nothing.
 #: Dropped for want of an "S-" stream: Vfb02d, Vfb02e, Vtb13.

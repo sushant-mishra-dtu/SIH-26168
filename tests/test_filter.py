@@ -31,6 +31,7 @@ from core.reference.inekf import (
     nhc_is_valid,
     right_invariant_from_plain,
     skew,
+    zaru_sigma_from_window,
 )
 
 CFG = FilterConfig()
@@ -91,6 +92,34 @@ def test_turning_at_constant_speed_is_not_stationary():
 def test_stationary_rejects_malformed_windows():
     with pytest.raises(ValueError, match=r"\(n, 3\)"):
         is_stationary(np.zeros((10,)), np.zeros((10, 3)), CFG)
+    with pytest.raises(ValueError, match=r"\(n, 3\)"):
+        is_stationary(np.zeros((10, 3)), np.zeros((10,)), CFG)
+    with pytest.raises(ValueError, match=r"3-vector"):
+        is_stationary(np.zeros((10, 3)), np.zeros((10, 3)), CFG, gyro_bias=np.zeros(4))
+
+
+def test_still_window_with_constant_offset_requires_bias_compensation():
+    """A still phone with a 1.5 deg/s gyro offset (such as S3a's standstill level) fails the raw
+    gyro norm threshold (0.01 rad/s = 0.573 deg/s) and is detected as stationary only when
+    `gyro_bias` carries the offset."""
+    accel = np.tile([0.0, 0.0, 9.80665], (20, 1)) + RNG.normal(0, 0.01, (20, 3))
+    offset = np.deg2rad([1.5, 0.0, 0.0])  # 1.5 deg/s == 0.0262 rad/s > 0.01 rad/s
+    gyro = np.tile(offset, (20, 1)) + RNG.normal(0, 0.001, (20, 3))
+
+    # Without bias compensation (default None / zeros), raw mean exceeds threshold
+    assert not is_stationary(accel, gyro, CFG)
+
+    # With gyro_bias passed, bias-corrected mean is inside threshold
+    assert is_stationary(accel, gyro, CFG, gyro_bias=offset)
+
+
+def test_zupt_thresholds_pinned_to_measured_values():
+    """Conservative stop thresholds measured against truth speed (D-115, Fix 1)."""
+    assert CFG.zupt_accel_var_thresh == 0.02  # (m/s^2)^2, 12x below rolling p10 on S3a
+    assert CFG.zupt_gyro_norm_thresh == 0.01  # rad/s (~0.57 deg/s), admits stops after bias
+    assert CFG.zupt_window_s == 2.0  # seconds, eliminates high-speed false stops
+
+
 
 
 # ------------------------------------------------------------------------------------------
@@ -243,14 +272,15 @@ def test_p0_gyro_bias_block_is_the_measured_turn_on_bias_not_the_instability():
     assert CFG.gyro_bias_turn_on > 22.0 * (np.pi / 180.0) / 3600.0
 
 
-def test_p0_accel_bias_block_is_the_allan_runs_measured_bias_instability():
-    """docs/ERROR_BUDGET.md section 9.1 (D-045, D-120): 0.25 mg, measured on IO-VNBD's own
-    stationary segments. Still the instability rather than a turn-on figure, and D-115 records
-    why: at a standstill an accelerometer offset is confounded with the levelling derived from
-    the same sensor, so there is no clean measurement of one to put here."""
-    assert _sd(IDX_ACCEL_BIAS) == pytest.approx(ACCEL_BIAS_INSTABILITY_MEASURED)
-    assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(2.48e-3, abs=1e-7)
-    assert _sd(IDX_ACCEL_BIAS)[0] * 1000.0 / 9.80665 == pytest.approx(0.25, abs=5e-3)  # mg
+def test_p0_accel_bias_block_is_the_measured_turn_on_bias_not_the_instability():
+    """`P0` carries the uncertainty of a bias nothing has estimated yet, which is the *turn-on*
+    bias -- measured at 6.2 mg RMS across runs, 8.2 mg largest single run, over the 638 s of
+    TRAIN standstill -- and not the bias *instability* (0.25 mg = 2.45 mm/s^2 since D-120; D-045
+    read 0.34 mg), which is how far an already-estimated bias wanders. Measured as mean(|f|) - g,
+    the one component independent of levelling."""
+    assert _sd(IDX_ACCEL_BIAS) == pytest.approx(CFG.accel_bias_turn_on)
+    assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(0.08)
+    assert CFG.accel_bias_turn_on > ACCEL_BIAS_INSTABILITY_MEASURED
 
 
 def test_p0_mount_block_is_the_knock_not_the_requirement():
@@ -317,9 +347,99 @@ def test_zaru_at_a_false_stop_is_rejected_and_changes_nothing():
 
 def test_zaru_sigma_is_derived_from_the_allan_run_not_typed():
     """`zaru_sigma` is the gyro white noise per sample, so it is `gyro_arw * sqrt(rate)` and not a
-    free parameter. Derived in `FilterConfig` so the two cannot drift apart (D-056)."""
+    free parameter. Derived in `FilterConfig` so the two cannot drift apart (D-056). Since D-131
+    it is the *floor* under the stop's own level (`zaru_sigma_from_window`), and what
+    `update_zaru` uses when no sigma is passed; the identity and the value are unchanged."""
     assert CFG.zaru_sigma == pytest.approx(CFG.gyro_arw * np.sqrt(CFG.imu_rate_hz), rel=1e-12)
     assert CFG.zaru_sigma == pytest.approx(6.894e-4, abs=1e-6)
+
+
+def test_zaru_sigma_from_window_is_the_stops_own_noise_floored_at_the_allan_figure():
+    """D-131. At a standstill the detector's window is bias plus white noise, so its per-axis
+    sample std is the noise ZARU's innovation carries. Measured on TRAIN S1 at the 3,066
+    detector-positive standstill samples: innovation std [0.72, 0.38, 0.60] deg/s per axis, the
+    window estimate [0.70, 0.35, 0.59]. The Allan desk figure is the floor, so a quantised gyro
+    that repeats a value at rest reports the sensor's noise rather than zero."""
+    rng = np.random.default_rng(11)
+    sigma = np.deg2rad([0.7, 0.35, 0.6])
+    bias = np.deg2rad([0.05, -0.06, 0.16])
+    window = bias + rng.normal(0.0, 1.0, (4000, 3)) * sigma
+    assert zaru_sigma_from_window(window, CFG) == pytest.approx(sigma, rel=0.05)
+    assert zaru_sigma_from_window(window[:20], CFG) == pytest.approx(sigma, rel=0.5)
+    still = np.tile(bias, (20, 1))
+    assert zaru_sigma_from_window(still, CFG) == pytest.approx(np.full(3, CFG.zaru_sigma))
+    for bad in (np.zeros((1, 3)), np.zeros((20, 2)), np.zeros(20)):
+        with pytest.raises(ValueError, match="gyro window"):
+            zaru_sigma_from_window(bad, CFG)
+
+
+def test_zaru_against_the_stops_own_level_admits_the_idle_vibration_the_desk_figure_refused():
+    """The counter D-131 fixes: S3a's aided pass offered 1,372 stops and the gate refused 1,356,
+    because a ~1 deg/s idle-vibration sample was tested against R = (0.039 deg/s)^2 (D-130).
+    The same sample against the window's own sigma is inside the gate. The sigma is floored at
+    the desk figure, a scalar is accepted, and a malformed one is refused loudly.
+
+    D-057's synthetic pull-away sample (0.05 rad/s of yaw at the first moving step) is still
+    refused at TRAIN S1's level, 0.7 deg/s (chi-squared 15.5 against 11.345); at S3a's 1.4 deg/s
+    it would pass (4.1). On the real stems no run-out sample reached 2.9 deg/s -- they measure
+    0.2-2.7 deg/s and cost <= 0.008 deg/s of admitted mean on S1 -- so the gate is kept and the
+    row records what it admits.
+    """
+    rng = np.random.default_rng(3)
+    level = np.deg2rad([0.33, 1.3, 1.4])  # S3a's standstill level, a diagnostic figure
+    window = rng.normal(0.0, 1.0, (20, 3)) * level
+    idle = np.deg2rad([0.2, -1.1, 1.2])  # one idle sample, |z| = 1.6 deg/s
+    assert InEKF().update_zaru(idle) is False, "the desk figure refuses idle vibration"
+    f = InEKF()
+    assert f.update_zaru(idle, sigma=zaru_sigma_from_window(window, CFG)) is True
+    assert not np.array_equal(f.state.b_g, np.zeros(3)), "an applied ZARU moves b_g"
+    assert InEKF().update_zaru(idle, sigma=np.deg2rad(1.4)) is True, "a scalar sigma is accepted"
+
+    # the floor: a sigma below the desk figure is raised to it, so it changes nothing
+    f_floor, f_default = InEKF(), InEKF()
+    tiny = np.array([2.0e-4, -1.0e-4, 3.0e-4])
+    assert f_floor.update_zaru(tiny, sigma=np.full(3, 1e-9)) is True
+    assert f_default.update_zaru(tiny) is True
+    assert np.array_equal(f_floor.state.b_g, f_default.state.b_g)
+    assert np.array_equal(f_floor.P, f_default.P)
+
+    pull_away = np.array([0.0, 0.0, 0.05])
+    assert InEKF().update_zaru(pull_away, sigma=np.deg2rad(0.7)) is False
+    assert InEKF().update_zaru(pull_away, sigma=np.deg2rad(1.4)) is True
+
+    for bad in (np.zeros(2), np.array([np.nan, 1.0, 1.0]), np.zeros((3, 3)) + 1.0):
+        with pytest.raises(ValueError, match="ZARU sigma"):
+            InEKF().update_zaru(idle, sigma=bad)
+
+
+def test_zaru_with_the_windows_own_sigma_is_consistent_on_a_vibrating_standstill():
+    """The consistency argument for D-131, on the population it is for: a standstill whose gyro
+    carries 1 / 0.4 / 0.7 deg/s of idle vibration per axis and a bias of 0.1-0.2 deg/s. ZARU at
+    every step with `sigma` read from the trailing 2 s window, as `_step_constraints` does, must
+    (a) accept at the gate's own rate rather than refuse 98.8 % as the desk figure did, (b) drive
+    `b_g` to the truth, and (c) leave the bias block's covariance describing its own error:
+    a 3-dof NEES near 3, with the per-axis error inside 3 sigma."""
+    rng = np.random.default_rng(21)
+    level = np.deg2rad([1.0, 0.4, 0.7])
+    truth = np.deg2rad([0.15, -0.1, 0.2])
+    n = 600
+    gyro = truth + rng.normal(0.0, 1.0, (n, 3)) * level
+    window = int(round(CFG.zupt_window_s * CFG.imu_rate_hz))
+    f = InEKF()
+    applied = refused = 0
+    for k in range(window - 1, n):
+        sigma = zaru_sigma_from_window(gyro[k - window + 1 : k + 1], CFG)
+        if f.update_zaru(gyro[k], sigma=sigma):
+            applied += 1
+        else:
+            refused += 1
+    assert refused / (applied + refused) < 0.03, f"{refused} of {applied + refused} refused"
+    err = f.state.b_g - truth
+    sig = np.sqrt(np.diag(f.P)[IDX_GYRO_BIAS])
+    assert np.all(np.abs(err) < 3.0 * sig), f"error {err} outside 3 sigma {sig}"
+    nees = float(err @ np.linalg.solve(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], err))
+    assert nees < 11.345, f"bias-block NEES {nees:.2f} is over-confident"
+    assert np.all(sig < np.deg2rad(0.1)), f"b_g not pinned by 580 ZARUs: sigma {np.rad2deg(sig)}"
 
 
 def test_zupt_is_deliberately_not_gated():
@@ -500,4 +620,161 @@ def test_right_invariant_prior_is_the_identity_map_at_the_origin_at_rest():
     assert np.array_equal(right_invariant_from_plain(plain, np.zeros(3), np.zeros(3)), plain)
     with pytest.raises(ValueError):
         right_invariant_from_plain(np.eye(4), np.zeros(3), np.zeros(3))
+
+
+# ------------------------------------------------------------------------------------------
+# Bias hold in outages (D-115 §3)
+# ------------------------------------------------------------------------------------------
+
+
+def _outage_filter() -> InEKF:
+    """A filter with hold_biases=True, as replay_window sets it when
+    `eval.run.HOLD_BIASES_IN_OUTAGE` is on (off since D-130; the A/B is in its comment)."""
+    f = _aided_filter()
+    f.hold_biases = True
+    return f
+
+
+def test_hold_biases_freezes_bias_covariance_during_propagation():
+    """With hold_biases=True, the bias blocks of Q_c are zeroed before Van Loan, so the
+    diagonal uncertainty on b_g and b_a cannot grow through propagation alone."""
+    f = _outage_filter()
+    p_bg_before = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS].copy()
+    p_ba_before = f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS].copy()
+    for _ in range(50):
+        f.propagate(np.array([0.0, 0.0, 0.05]), np.array([0.1, 0.0, -9.80]), 0.1)
+    # Bias-block diagonals must not have grown: the STM (Phi) couples attitude into biases
+    # through Q_d, but with Q_c[6:12] zeroed the only contribution is Phi * P * Phi^T, which
+    # cannot grow the bias diagonals above their entry values because Phi's bias-to-bias
+    # sub-block is the identity (random walk model) and the cross-terms shrink it.
+    for ax in range(3):
+        assert f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS][ax, ax] <= p_bg_before[ax, ax] * 1.01
+        assert f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS][ax, ax] <= p_ba_before[ax, ax] * 1.01
+
+
+def test_hold_biases_zeroes_gain_rows_for_non_exempt_updates():
+    """An NHC update (no allow_bias) must not move b_g or b_a when hold_biases is True."""
+    f = _outage_filter()
+    bg_before = f.state.b_g.copy()
+    ba_before = f.state.b_a.copy()
+    # Force a large innovation so any gain leak would be visible.
+    f.state.v = np.array([15.0, 3.0, 0.5])  # sideways + vertical -> NHC fires
+    f.update_nhc()
+    assert np.array_equal(f.state.b_g, bg_before)
+    assert np.array_equal(f.state.b_a, ba_before)
+
+
+def test_hold_biases_keeps_bias_states_and_blocks_bit_identical_over_a_60_s_window():
+    """D-115 step 3, the acceptance test as written: with the hold and NHC + ZUPT only, `b_g`,
+    `b_a` and their `P` blocks are *bit-identical* to their entry values across a 60 s window
+    of propagate + update_nhc + update_zupt, not merely bounded. Bit-identity holds because the
+    bias rows of `Phi` and of `I - KH` are identity rows once the gain rows are zeroed."""
+    f = _outage_filter()
+    f.state.b_g = np.array([0.004, -0.002, 0.003])
+    f.state.b_a = np.array([0.05, -0.03, 0.02])
+    bg0, ba0 = f.state.b_g.copy(), f.state.b_a.copy()
+    p_bg0 = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS].copy()
+    p_ba0 = f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS].copy()
+    rng = np.random.default_rng(3)
+    for k in range(600):  # 60 s at 10 Hz
+        gyro = np.array([0.0, 0.0, 0.05]) + rng.normal(0.0, 1e-3, 3)
+        accel = np.array([0.2, 0.0, -9.75]) + rng.normal(0.0, 1e-2, 3)
+        f.propagate(gyro, accel, 0.1)
+        if k % 3 == 0:
+            f.update_nhc()
+        if k % 50 == 0:
+            f.update_zupt()
+    assert np.array_equal(f.state.b_g, bg0)
+    assert np.array_equal(f.state.b_a, ba0)
+    assert np.array_equal(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], p_bg0)
+    assert np.array_equal(f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS], p_ba0)
+
+
+def test_zaru_is_exempt_from_bias_hold():
+    """ZARU directly observes b_g, so it must be allowed to update b_g even when hold_biases is
+    True. It must still not touch b_a (no exemption for IDX_ACCEL_BIAS)."""
+    f = _outage_filter()
+    # Set a small but measurable gyro-bias error. The innovation z = gyro - b_g_hat must pass
+    # the chi2 gate, whose acceptance region scales with sqrt(H P H^T + R). Inflate the gyro-
+    # bias covariance so the gate accepts the 0.005 rad/s innovation.
+    f.state.b_g = np.array([0.005, -0.003, 0.004])
+    f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS] = np.eye(3) * 0.01**2  # 0.01 rad/s sigma per axis
+    ba_before = f.state.b_a.copy()
+    bg_before = f.state.b_g.copy()
+    # Feed near-zero gyro as if the vehicle is still.
+    accepted = f.update_zaru(np.array([0.0001, -0.0001, 0.0002]))
+    assert accepted, "ZARU should accept a near-zero gyro measurement with inflated P"
+    # b_g must have moved toward zero (the measurement is near-zero, bias is 0.005).
+    assert not np.array_equal(f.state.b_g, bg_before), "ZARU must update b_g"
+    assert np.linalg.norm(f.state.b_g) < np.linalg.norm(bg_before), "b_g should shrink"
+    # b_a must be untouched.
+    assert np.array_equal(f.state.b_a, ba_before), "b_a must not be moved by ZARU"
+
+
+def test_hold_biases_off_allows_normal_bias_updates():
+    """Sanity check: with hold_biases=False, NHC *can* move biases through cross-correlations."""
+    f = _aided_filter()
+    assert not f.hold_biases
+    assert not f.gyro_bias_direct_only, "the filter's default: every update; D-133 is the harness's"
+    f.state.v = np.array([15.0, 3.0, 0.5])
+    bg_before = f.state.b_g.copy()
+    f.update_nhc()
+    # In the aided filter with cross-correlations, the Kalman gain's bias rows are generally
+    # non-zero, so at least one axis should have moved (unless the cross-correlation happens to
+    # be exactly zero, which _aided_filter's 20 propagation steps should prevent). This is the
+    # mechanism `gyro_bias_direct_only` switches off in the aided pass (D-133): it stays true of
+    # the filter, and the harness's policy is what changes.
+    moved = not np.allclose(f.state.b_g, bg_before, atol=1e-15)
+    assert moved, "Without hold_biases, NHC should move b_g through cross-terms"
+
+
+# ------------------------------------------------------------------------------------------
+# The gyro bias moves only under its direct observation (D-133)
+# ------------------------------------------------------------------------------------------
+
+
+def test_gyro_bias_direct_only_leaves_b_g_to_zaru_and_q_alone():
+    """D-133. With `gyro_bias_direct_only` the position, Doppler-velocity, NHC and ZUPT updates
+    leave `b_g` and its covariance block exactly where they were -- their gain has no gyro-bias
+    rows -- while `b_a` still moves through the cross-terms (this is not `hold_biases`), the
+    block still grows through `Q` in propagation (also not `hold_biases`), and ZARU, which passes
+    `allow_bias=(IDX_GYRO_BIAS,)`, still corrects it. Measured reason, TRAIN S1 against the
+    truth-standstill bias: bias-block NEES 27.3 with every update allowed, 2.1 with this."""
+    f = _aided_filter()
+    f.gyro_bias_direct_only = True
+    assert not f.hold_biases
+    f.state.v = np.array([15.0, 3.0, 0.5])  # sideways + vertical -> NHC has an innovation
+    bg0 = f.state.b_g.copy()
+    ba0 = f.state.b_a.copy()
+    p_bg0 = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS].copy()
+    p_cross0 = f.P[IDX_GYRO_BIAS, IDX_ATTITUDE].copy()
+
+    f.update_nhc()
+    assert np.array_equal(f.state.b_g, bg0), "NHC may not move b_g"
+    assert np.array_equal(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], p_bg0), "nor its block"
+    assert not np.allclose(f.state.b_a, ba0, atol=1e-15), "b_a still moves: only the gyro rows"
+    assert not np.array_equal(f.P[IDX_GYRO_BIAS, IDX_ATTITUDE], p_cross0), (
+        "the cross-terms are updated: the Joseph form keeps the covariance exact for this gain"
+    )
+    f.update_gnss_velocity(f.state.v[:2] + np.array([2.0, -1.0]), np.eye(2) * 0.25)
+    assert np.array_equal(f.state.b_g, bg0), "the Doppler velocity may not move b_g"
+    assert f.update_gnss(f.state.p + np.array([3.0, -2.0, 0.0]), np.eye(3) * 9.0, gate=False)
+    assert np.array_equal(f.state.b_g, bg0), "the position fix may not move b_g"
+    f.update_zupt()
+    assert np.array_equal(f.state.b_g, bg0), "ZUPT may not move b_g"
+    assert np.array_equal(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], p_bg0)
+
+    for _ in range(50):
+        f.propagate(np.array([0.0, 0.0, 0.05]), np.array([0.1, 0.0, -9.80]), 0.1)
+    p_bg1 = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS]
+    assert np.all(np.diag(p_bg1) > np.diag(p_bg0)), (
+        "Q is untouched: the block keeps growing at gyro_bias_rw between stops"
+    )
+
+    f.state.b_g = np.array([0.005, -0.003, 0.004])
+    f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS] = np.eye(3) * 0.01**2
+    assert f.update_zaru(np.array([0.0001, -0.0001, 0.0002]))
+    assert np.linalg.norm(f.state.b_g) < np.linalg.norm([0.005, -0.003, 0.004]), (
+        "ZARU observes b_g directly and is the one update that may move it"
+    )
 

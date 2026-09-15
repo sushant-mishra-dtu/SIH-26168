@@ -360,6 +360,15 @@ A **direct** observation of `b_g` — no coupling, no integration, no waiting. C
 yaw is only reachable through a second-order path. This is why ZARU fires at every detected stop
 (D-004) and why the error budget assumes it is running.
 
+**R.** The innovation's noise is the gyro's white noise per sample *at the stop*, per axis:
+`R_zaru = diag(σ²)`. σ is not the Allan run's desk figure (`gyro_arw·√rate` = 0.039 °/s, D-056),
+which is only its floor: at rest in a car the same phone carries 0.3–1.4 °/s of idle vibration
+per sample, and against the desk figure the χ² gate refused 1,356 of S3a's 1,372 offered ZARUs
+(D-130). At a standstill the detector's own 2 s window is `b_g` plus that noise, so its per-axis
+sample standard deviation is σ — read causally from the window that fired, floored at the desk
+figure (`zaru_sigma_from_window`, D-131). Nothing about `z` or `H` changes; the raw-sample contract
+of D-052 and the gate of D-057 stand, the gate now testing against the stop's own level.
+
 ### 7.4 GNSS — through the adjoint
 
 `p̂ − p = ξ_p + ξ_R^∧p ≈ ξ_p − p̂^∧ξ_R`, so with innovation `z = p̂ − p_gnss`:
