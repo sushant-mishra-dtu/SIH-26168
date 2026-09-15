@@ -49,4 +49,10 @@ Needs the `ml` extra and the dataset: `pip install -e ".[ml]"` then
 `python -m eval.fetch --sync-only`. `torch` is imported inside the functions that need it, so the
 audit and its tests still run in the CI job that has neither.
 
+**Where this trains:** [../docs/TRAINING_ENVIRONMENT.md](../docs/TRAINING_ENVIRONMENT.md) — the
+RX 7700 XT / WSL2 / ROCm host, its install order, and what a number produced there may be used for
+(D-130). `python -m models.rocm_check` verifies the host and exits non-zero if torch cannot reach
+the GPU. Note section 4: nothing here moves a tensor to a device yet, so the GPU is not in the path
+of any current run.
+
 **The speed+variance head (P-08) is still untrained** — that is Sprint 2, and Gate 1 comes first.
