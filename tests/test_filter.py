@@ -573,6 +573,32 @@ def test_hold_biases_zeroes_gain_rows_for_non_exempt_updates():
     assert np.array_equal(f.state.b_a, ba_before)
 
 
+def test_hold_biases_keeps_bias_states_and_blocks_bit_identical_over_a_60_s_window():
+    """D-115 step 3, the acceptance test as written: with the hold and NHC + ZUPT only, `b_g`,
+    `b_a` and their `P` blocks are *bit-identical* to their entry values across a 60 s window
+    of propagate + update_nhc + update_zupt, not merely bounded. Bit-identity holds because the
+    bias rows of `Phi` and of `I - KH` are identity rows once the gain rows are zeroed."""
+    f = _outage_filter()
+    f.state.b_g = np.array([0.004, -0.002, 0.003])
+    f.state.b_a = np.array([0.05, -0.03, 0.02])
+    bg0, ba0 = f.state.b_g.copy(), f.state.b_a.copy()
+    p_bg0 = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS].copy()
+    p_ba0 = f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS].copy()
+    rng = np.random.default_rng(3)
+    for k in range(600):  # 60 s at 10 Hz
+        gyro = np.array([0.0, 0.0, 0.05]) + rng.normal(0.0, 1e-3, 3)
+        accel = np.array([0.2, 0.0, -9.75]) + rng.normal(0.0, 1e-2, 3)
+        f.propagate(gyro, accel, 0.1)
+        if k % 3 == 0:
+            f.update_nhc()
+        if k % 50 == 0:
+            f.update_zupt()
+    assert np.array_equal(f.state.b_g, bg0)
+    assert np.array_equal(f.state.b_a, ba0)
+    assert np.array_equal(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], p_bg0)
+    assert np.array_equal(f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS], p_ba0)
+
+
 def test_zaru_is_exempt_from_bias_hold():
     """ZARU directly observes b_g, so it must be allowed to update b_g even when hold_biases is
     True. It must still not touch b_a (no exemption for IDX_ACCEL_BIAS)."""
