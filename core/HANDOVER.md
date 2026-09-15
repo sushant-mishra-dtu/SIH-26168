@@ -90,7 +90,7 @@ recovers a heading from that stream, and the write-up says so (§9).
 
 ## 4. How the harness makes the number (read before touching `eval/run.py`)
 
-`eval/run.py` — 1,812 lines, one pass per sequence:
+`eval/run.py` — 1,884 lines, one pass per sequence:
 
 1. **Load** the `S-` stream (`eval/loaders/io_vnbd.py`) and the paired 10 Hz `V-` truth
    (`truth.py`). Fixes are 9.0 s apart on 69 of 72 stems (`cadence.py`); `Vta1a` is 1 Hz.
@@ -109,10 +109,10 @@ recovers a heading from that stream, and the write-up says so (§9).
 5. **Score** each of `filter` / `strapdown` (initialised from truth, D-064) / `gnss_available`
    (ZOH from the last fix) through the same `eval/metrics` path: drift-%, CTE, CRSE, yaw RMSE/max.
 6. **Write** `summary.json` (stamp, `by_method[method][length]`, `gate1`, `dropped_windows`,
-   `skipped`, `aided_passes` with the per-stem update counts), `windows.csv` (one row per window per
+   `skipped`, `aided_pass` with the per-stem update counts), `windows.csv` (one row per window per
    method, `aligned` flag), `trajectory_<stem>.json` for the plot set.
 
-Where the counts are: `aided_passes[stem]` for the aided pass (`n_zaru_applied`,
+Where the counts are: `aided_pass[stem]` for the aided pass (`n_zaru_applied`,
 `n_gnss_reanchored`, alignment source; `zupt_vetoed` is counted in `_step_constraints`), `windows.csv` columns for the replays. `n_filter_windows_unaligned`
 travels with every number (D-089).
 
