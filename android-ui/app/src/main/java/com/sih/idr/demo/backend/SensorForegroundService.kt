@@ -24,6 +24,8 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.sih.idr.demo.backend.routing.EtaPaceModel
+import com.sih.idr.demo.backend.routing.NavigationRoute
 import com.sih.idr.demo.backend.routing.RouteTracker
 import com.sih.idr.demo.backend.tunnel.FixVerdict
 import com.sih.idr.demo.backend.tunnel.TunnelAssetLoader
@@ -64,6 +66,9 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
     private var currentRate = 0f
     private var currentJitter = 0f
     private var lastUiPublishMs = 0L
+    // Smoothed pace the ETA is divided by; reseeded whenever the screen swaps the route.
+    private val etaPace = EtaPaceModel()
+    private var pacedRoute: NavigationRoute? = null
 
     private val gnssCallback = object : GnssStatus.Callback() {
         override fun onSatelliteStatusChanged(status: GnssStatus) {
@@ -241,12 +246,17 @@ class SensorForegroundService : Service(), SensorEventListener, LocationListener
 
         // Route tracking: update along-track progress, maneuver countdown, ETA, and arrival
         val currentRoute = TelemetryStore.state.value.activeRoute
+        if (currentRoute !== pacedRoute) {
+            etaPace.reset(currentRoute)
+            pacedRoute = currentRoute
+        }
         val routeProgress = if (currentRoute != null) {
+            etaPace.update(estimate.speedMps, nowMs)
             RouteTracker.trackProgress(
                 route = currentRoute,
                 currentLat = estimate.latitude,
                 currentLon = estimate.longitude,
-                speedMps = estimate.speedMps,
+                speedMps = etaPace.paceMps,
                 currentStepIndex = TelemetryStore.state.value.activeStepIndex
             )
         } else null

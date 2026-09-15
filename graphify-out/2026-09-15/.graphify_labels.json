@@ -149,5 +149,6 @@
   "147": "test_in_motion_config_raises_q_to_the_stream_and_never_lowers_it",
   "148": "test_the_doppler_velocity_is_along_and_across_the_course",
   "149": "test_evaluate_outage_end_to_end",
-  "150": "test_summary_reports_tail_not_just_mean"
+  "150": "test_summary_reports_tail_not_just_mean",
+  "151": "test_crse_default_is_the_papers_equation_16"
 }

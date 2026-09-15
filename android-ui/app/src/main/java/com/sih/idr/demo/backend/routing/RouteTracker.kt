@@ -27,6 +27,10 @@ data class RouteProgressResult(
  * Continuously projects vehicle position onto the active route polyline,
  * tracks step-by-step progress, computes dynamic speed-adjusted ETA,
  * advances maneuver steps, and detects destination arrival.
+ *
+ * The ETA is `remaining / speedMps`, nothing cleverer: the caller is expected to pass a
+ * smoothed pace ([EtaPaceModel]), not the raw 30 Hz filter speed, or the headline will
+ * flicker. A non-positive speed falls back to a city average so the result is still finite.
  */
 object RouteTracker {
 
@@ -155,7 +159,9 @@ object RouteTracker {
     }
 
     private fun calculateDuration(distanceM: Float, speedMps: Float): Long {
-        val effectiveSpeed = if (speedMps >= 2.0f) speedMps else DEFAULT_CITY_SPEED_MPS
+        // No threshold here: a step from "use the speed" to "use a constant" is exactly the
+        // discontinuity that made the ETA flip between 13 and 52 min while walking at ~2 m/s.
+        val effectiveSpeed = if (speedMps > 0f) speedMps else DEFAULT_CITY_SPEED_MPS
         return (distanceM / effectiveSpeed).toLong().coerceAtLeast(10L)
     }
 
