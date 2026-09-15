@@ -1,144 +1,254 @@
 {
-  "stamp": "commit 9fdd261-dirty | seed 0 | 2026-09-06T11:04:24Z",
-  "reproducible": false,
+  "stamp": "commit 7e3a8b0 | seed 0 | 2026-09-15T11:03:06Z",
+  "reproducible": true,
   "crse_convention": "sum_abs",
-  "n_windows": 135,
-  "n_dropped_windows": 3,
+  "n_windows": 6855,
+  "n_filter_windows_unaligned": 67,
+  "n_dropped_windows": 32,
   "n_dropped_by_kind": {
-    "no_truth_coverage": 3
+    "filter_diverged": 27,
+    "no_truth_coverage": 4,
+    "zero_distance": 1
   },
   "by_method": {
     "filter": {
       "10": {
-        "n_sequences": 33,
-        "drift_pct_median": 190.30254137275702,
-        "drift_pct_p95": 614.064141768535,
-        "drift_pct_max": 775.2658198165412,
-        "frac_under_10pct": 0.0,
-        "cte_m_mean": -172.13358652997468,
-        "crse_m_mean": 309.16387750841056,
-        "yaw_rmse_deg_mean": 109.79259464020362,
-        "yaw_max_deg": 179.64194763023812,
-        "total_distance_m": 4711.548671506458
+        "n_sequences": 1419,
+        "drift_pct_median": 54.88144241277509,
+        "drift_pct_p95": 186.72352263086128,
+        "drift_pct_max": 89420.91622763488,
+        "frac_under_10pct": 0.08949964763918253,
+        "cte_m_mean": -62.11528485243692,
+        "crse_m_mean": 92.92872627333915,
+        "yaw_rmse_deg_mean": 56.10535613868871,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 213318.53931568636
       },
       "30": {
-        "n_sequences": 9,
-        "drift_pct_median": 138.84223537340367,
-        "drift_pct_p95": 331.37523950132834,
-        "drift_pct_max": 334.5523946537427,
-        "frac_under_10pct": 0.0,
-        "cte_m_mean": -484.1662817184056,
-        "crse_m_mean": 902.7738217316441,
-        "yaw_rmse_deg_mean": 111.19615272841882,
-        "yaw_max_deg": 179.64194763023812,
-        "total_distance_m": 3652.742436517513
+        "n_sequences": 465,
+        "drift_pct_median": 72.05097594982954,
+        "drift_pct_p95": 187.14055822828357,
+        "drift_pct_max": 2151.019529804704,
+        "frac_under_10pct": 0.02795698924731183,
+        "cte_m_mean": -305.9256406611376,
+        "crse_m_mean": 439.8837657581241,
+        "yaw_rmse_deg_mean": 86.72771027725634,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 208177.87258471007
       },
       "60": {
-        "n_sequences": 3,
-        "drift_pct_median": 136.7574068663465,
-        "drift_pct_p95": 187.44684139431368,
-        "drift_pct_max": 193.07900078631005,
+        "n_sequences": 226,
+        "drift_pct_median": 77.16841016876032,
+        "drift_pct_p95": 141.84384699020063,
+        "drift_pct_max": 449.0685721407729,
+        "frac_under_10pct": 0.02654867256637168,
+        "cte_m_mean": -674.7897069413101,
+        "crse_m_mean": 1030.881979135568,
+        "yaw_rmse_deg_mean": 96.19209095569148,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 200494.93973829917
+      },
+      "120": {
+        "n_sequences": 106,
+        "drift_pct_median": 78.69574803186225,
+        "drift_pct_p95": 116.79554049461692,
+        "drift_pct_max": 145.2337262710122,
+        "frac_under_10pct": 0.018867924528301886,
+        "cte_m_mean": -1516.3808661665562,
+        "crse_m_mean": 2057.17133650644,
+        "yaw_rmse_deg_mean": 102.022369904693,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 185543.40365424674
+      },
+      "180": {
+        "n_sequences": 69,
+        "drift_pct_median": 79.44615769689365,
+        "drift_pct_p95": 105.1743958553485,
+        "drift_pct_max": 126.74788444166163,
         "frac_under_10pct": 0.0,
-        "cte_m_mean": -683.2178314722206,
-        "crse_m_mean": 1817.7172874179403,
-        "yaw_rmse_deg_mean": 107.54972325282156,
-        "yaw_max_deg": 179.6417075269702,
-        "total_distance_m": 2022.1948857856737
+        "cte_m_mean": -2312.095120045978,
+        "crse_m_mean": 3039.9782148086165,
+        "yaw_rmse_deg_mean": 101.14660359264816,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 182855.37985814636
       }
     },
     "strapdown": {
       "10": {
-        "n_sequences": 33,
-        "drift_pct_median": 34.5752452776364,
-        "drift_pct_p95": 151.1659029995234,
-        "drift_pct_max": 298.93940506121,
-        "frac_under_10pct": 0.030303030303030304,
-        "cte_m_mean": -8.059044601623468,
-        "crse_m_mean": 49.81832334083184,
-        "yaw_rmse_deg_mean": 30.63267262398445,
-        "yaw_max_deg": 175.36009353362533,
-        "total_distance_m": 4711.548671506458
+        "n_sequences": 1419,
+        "drift_pct_median": 34.52003171787964,
+        "drift_pct_p95": 281.2741715395019,
+        "drift_pct_max": 11532.785340102135,
+        "frac_under_10pct": 0.10993657505285412,
+        "cte_m_mean": -3.8105595423061263,
+        "crse_m_mean": 38.73878365455587,
+        "yaw_rmse_deg_mean": 28.4536502516594,
+        "yaw_max_deg": 179.91009432224223,
+        "total_distance_m": 213318.53931568636
       },
       "30": {
-        "n_sequences": 9,
-        "drift_pct_median": 161.785003397554,
-        "drift_pct_p95": 698.7286114692432,
-        "drift_pct_max": 705.806680075487,
-        "frac_under_10pct": 0.0,
-        "cte_m_mean": -326.38589245697676,
-        "crse_m_mean": 712.251685167938,
-        "yaw_rmse_deg_mean": 69.22560066989872,
-        "yaw_max_deg": 176.77494018833264,
-        "total_distance_m": 3652.742436517513
+        "n_sequences": 465,
+        "drift_pct_median": 122.88664948150057,
+        "drift_pct_p95": 517.4517969945384,
+        "drift_pct_max": 34069.6277642503,
+        "frac_under_10pct": 0.017204301075268817,
+        "cte_m_mean": 36.139473378461176,
+        "crse_m_mean": 394.65827910187335,
+        "yaw_rmse_deg_mean": 51.99446210618475,
+        "yaw_max_deg": 179.98014420386292,
+        "total_distance_m": 208177.87258471007
       },
       "60": {
-        "n_sequences": 3,
-        "drift_pct_median": 548.7269865946968,
-        "drift_pct_p95": 1682.5864555746934,
-        "drift_pct_max": 1808.5708410169154,
+        "n_sequences": 226,
+        "drift_pct_median": 249.90960166331382,
+        "drift_pct_p95": 907.973441605324,
+        "drift_pct_max": 2593.4844314142138,
+        "frac_under_10pct": 0.008849557522123894,
+        "cte_m_mean": 289.7117019786346,
+        "crse_m_mean": 1592.833412072865,
+        "yaw_rmse_deg_mean": 64.99559214882588,
+        "yaw_max_deg": 179.98014420386292,
+        "total_distance_m": 200494.93973829917
+      },
+      "120": {
+        "n_sequences": 106,
+        "drift_pct_median": 570.3547226397063,
+        "drift_pct_p95": 2304.444093204005,
+        "drift_pct_max": 5576.58920627957,
         "frac_under_10pct": 0.0,
-        "cte_m_mean": -1125.1682635247325,
-        "crse_m_mean": 3571.666233785145,
-        "yaw_rmse_deg_mean": 84.74134249742826,
-        "yaw_max_deg": 176.77494018833264,
-        "total_distance_m": 2022.1948857856737
+        "cte_m_mean": 2001.3352393452947,
+        "crse_m_mean": 8327.161479744202,
+        "yaw_rmse_deg_mean": 76.11102294861851,
+        "yaw_max_deg": 179.98014420386292,
+        "total_distance_m": 185543.40365424674
+      },
+      "180": {
+        "n_sequences": 69,
+        "drift_pct_median": 987.9644821790597,
+        "drift_pct_p95": 3490.2042712835355,
+        "drift_pct_max": 5533.097851510169,
+        "frac_under_10pct": 0.0,
+        "cte_m_mean": 2072.536543604122,
+        "crse_m_mean": 19219.673198874545,
+        "yaw_rmse_deg_mean": 87.04266205137456,
+        "yaw_max_deg": 179.99857732024378,
+        "total_distance_m": 182855.37985814636
       }
     },
     "gnss_available": {
       "10": {
-        "n_sequences": 33,
-        "drift_pct_median": 11.525872984707478,
-        "drift_pct_p95": 90.36692259130787,
-        "drift_pct_max": 102.50501423180292,
-        "frac_under_10pct": 0.42424242424242425,
-        "cte_m_mean": -2.644178700066127,
-        "crse_m_mean": 218.57215465603235,
-        "yaw_rmse_deg_mean": 40.819513063810845,
-        "yaw_max_deg": 172.3863068491787,
-        "total_distance_m": 4711.548671506458
+        "n_sequences": 1419,
+        "drift_pct_median": 12.060290641586306,
+        "drift_pct_p95": 94.91570018658138,
+        "drift_pct_max": 3958.3490476247366,
+        "frac_under_10pct": 0.3460183227625088,
+        "cte_m_mean": -5.294747487053063,
+        "crse_m_mean": 218.98441123556623,
+        "yaw_rmse_deg_mean": 59.03910571935622,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 213318.53931568636
       },
       "30": {
-        "n_sequences": 9,
-        "drift_pct_median": 10.674086740817993,
-        "drift_pct_p95": 20.39420742642988,
-        "drift_pct_max": 22.750209244229392,
-        "frac_under_10pct": 0.3333333333333333,
-        "cte_m_mean": 11.90942172294914,
-        "crse_m_mean": 611.0795245812931,
-        "yaw_rmse_deg_mean": 30.48490380707622,
-        "yaw_max_deg": 172.38599275986357,
-        "total_distance_m": 3652.742436517513
+        "n_sequences": 465,
+        "drift_pct_median": 11.597880796798202,
+        "drift_pct_p95": 41.51613376479753,
+        "drift_pct_max": 1620.6203015520725,
+        "frac_under_10pct": 0.3634408602150538,
+        "cte_m_mean": -12.385050053658556,
+        "crse_m_mean": 651.5744252844881,
+        "yaw_rmse_deg_mean": 39.991217784755776,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 208177.87258471007
       },
       "60": {
-        "n_sequences": 3,
-        "drift_pct_median": 7.043130517655519,
-        "drift_pct_p95": 7.989188131385688,
-        "drift_pct_max": 8.094305644022374,
+        "n_sequences": 226,
+        "drift_pct_median": 6.265415018964745,
+        "drift_pct_p95": 22.22706101863109,
+        "drift_pct_max": 65.34687738417279,
+        "frac_under_10pct": 0.6946902654867256,
+        "cte_m_mean": -21.254922779008133,
+        "crse_m_mean": 1282.0542663338942,
+        "yaw_rmse_deg_mean": 34.030659689110344,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 200494.93973829917
+      },
+      "120": {
+        "n_sequences": 106,
+        "drift_pct_median": 3.33385020134612,
+        "drift_pct_p95": 9.687076404731544,
+        "drift_pct_max": 15.094500287999907,
+        "frac_under_10pct": 0.9622641509433962,
+        "cte_m_mean": -45.44294744117102,
+        "crse_m_mean": 2490.677803620207,
+        "yaw_rmse_deg_mean": 31.78231857043992,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 185543.40365424674
+      },
+      "180": {
+        "n_sequences": 69,
+        "drift_pct_median": 1.6050512802454056,
+        "drift_pct_p95": 6.422566873891796,
+        "drift_pct_max": 8.195668158304336,
         "frac_under_10pct": 1.0,
-        "cte_m_mean": 17.465083881691218,
-        "crse_m_mean": 852.0201124192739,
-        "yaw_rmse_deg_mean": 31.551328210076107,
-        "yaw_max_deg": 172.38547579335528,
-        "total_distance_m": 2022.1948857856737
+        "cte_m_mean": -69.77318951150576,
+        "crse_m_mean": 3742.2071347694095,
+        "yaw_rmse_deg_mean": 28.51333306479672,
+        "yaw_max_deg": 180.0,
+        "total_distance_m": 182855.37985814636
       }
     }
   },
+  "biases_held_in_outage": false,
   "gate1": {
     "measured": true,
     "length_s": 60,
-    "filter_drift_pct_median": 136.7574068663465,
-    "gnss_available_drift_pct_median": 7.043130517655519,
-    "ratio": 19.417133691265118,
+    "filter_drift_pct_median": 77.16841016876032,
+    "gnss_available_drift_pct_median": 6.265415018964745,
+    "ratio": 12.316568006298025,
     "range_required": [
       3.0,
       5.0
     ],
     "in_range": false,
-    "n_windows_filter": 3,
-    "n_windows_gnss_available": 3
+    "n_windows_filter": 226,
+    "n_windows_gnss_available": 226,
+    "by_mount_class": {
+      "quiet": {
+        "filter_drift_pct_median": 57.21497533719521,
+        "gnss_available_drift_pct_median": 9.126464857902475,
+        "ratio": 6.269127885552924,
+        "in_range": false,
+        "n_windows_filter": 101,
+        "n_windows_gnss_available": 101
+      },
+      "vibrating": {
+        "filter_drift_pct_median": 84.16927083589246,
+        "gnss_available_drift_pct_median": 4.312029435211005,
+        "ratio": 19.519641992372836,
+        "in_range": false,
+        "n_windows_filter": 125,
+        "n_windows_gnss_available": 125
+      }
+    }
   },
-  "trajectories": [],
+  "trajectories": [
+    "S3a"
+  ],
   "dropped_windows": [
+    {
+      "sequence": "S3a",
+      "length_s": 180,
+      "start_idx": 300,
+      "kind": "filter_diverged",
+      "reason": "S3a: filter state left physical bounds at sample 1983 (198.3 s into the 180 s window at 300) -- |v| = 150 m/s (limit 150), p = [ 2991.6061944  -1574.94451009   734.0937191 ]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "S3c",
+      "length_s": 10,
+      "start_idx": 36300,
+      "kind": "zero_distance",
+      "reason": "distance travelled must be positive, got 0.0. A zero-distance outage has no meaningful drift percentage and must be excluded from the sweep, not divided by."
+    },
     {
       "sequence": "Vw12",
       "length_s": 10,
@@ -159,14 +269,381 @@
       "start_idx": 300,
       "kind": "no_truth_coverage",
       "reason": "Vw12: 3 of 61 epoch(s) have no truth sample within 0.05 s; worst is 2.305 s at t = 58730.205 s. The paired 'V-' file does not cover this window at 10 Hz -- drop the window from the protocol rather than interpolating across the gap."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 10,
+      "start_idx": 52600,
+      "kind": "no_truth_coverage",
+      "reason": "Vw2: 1 of 11 epoch(s) have no truth sample within 0.05 s; worst is 0.785 s at t = 42216.685 s. The paired 'V-' file does not cover this window at 10 Hz -- drop the window from the protocol rather than interpolating across the gap."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 30,
+      "start_idx": 29400,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 29603 (2960.3 s into the 30 s window at 29400) -- |v| = 150 m/s (limit 150), p = [-35042.61244908  30730.60423756    447.84840353]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 30,
+      "start_idx": 30600,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 30778 (3077.8 s into the 30 s window at 30600) -- |v| = 151 m/s (limit 150), p = [-36658.47809418  32873.30380105    641.77477388]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 30,
+      "start_idx": 31800,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 32089 (3208.9 s into the 30 s window at 31800) -- |v| = 151 m/s (limit 150), p = [-38010.56585029  37346.74715451    143.40080061]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 30,
+      "start_idx": 35100,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35354 (3535.4 s into the 30 s window at 35100) -- |v| = 150 m/s (limit 150), p = [-44116.29668714  39907.10733311    368.3538622 ]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 30,
+      "start_idx": 35700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35995 (3599.5 s into the 30 s window at 35700) -- |v| = 150 m/s (limit 150), p = [-44156.32542801  43898.57793086    261.85293772]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 28500,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 28951 (2895.1 s into the 60 s window at 28500) -- |v| = 151 m/s (limit 150), p = [-37158.81552086  26275.80929413   1000.26531385]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 29700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 30128 (3012.8 s into the 60 s window at 29700) -- |v| = 150 m/s (limit 150), p = [-34458.95650694  28751.47986371    636.29790347]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 30300,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 30731 (3073.1 s into the 60 s window at 30300) -- |v| = 150 m/s (limit 150), p = [-35682.22119437  32101.30850612    452.42674426]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 35100,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35354 (3535.4 s into the 60 s window at 35100) -- |v| = 150 m/s (limit 150), p = [-44116.29668714  39907.10733311    368.3538622 ]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 35700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35995 (3599.5 s into the 60 s window at 35700) -- |v| = 150 m/s (limit 150), p = [-44156.32542801  43898.57793086    261.85293772]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 38700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 39022 (3902.2 s into the 60 s window at 38700) -- |v| = 150 m/s (limit 150), p = [-51031.77315707  44873.22099725    389.65015834]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 60,
+      "start_idx": 45900,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 46242 (4624.2 s into the 60 s window at 45900) -- |v| = 150 m/s (limit 150), p = [-59284.83483235  59629.64842814    302.47111851]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 30300,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 30731 (3073.1 s into the 120 s window at 30300) -- |v| = 150 m/s (limit 150), p = [-35682.22119437  32101.30850612    452.42674426]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 31500,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 32121 (3212.1 s into the 120 s window at 31500) -- |v| = 150 m/s (limit 150), p = [-37717.19839597  36939.89619342    232.89977016]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 32700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 33337 (3333.7 s into the 120 s window at 32700) -- |v| = 150 m/s (limit 150), p = [-40102.25531442  36933.00170118    385.82011335]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 33900,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35009 (3500.9 s into the 120 s window at 33900) -- |v| = 150 m/s (limit 150), p = [-39323.91742951  35108.70284029    908.98869149]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 35100,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35354 (3535.4 s into the 120 s window at 35100) -- |v| = 150 m/s (limit 150), p = [-44116.29668714  39907.10733311    368.3538622 ]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 38700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 39022 (3902.2 s into the 120 s window at 38700) -- |v| = 150 m/s (limit 150), p = [-51031.77315707  44873.22099725    389.65015834]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 39900,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 41065 (4106.5 s into the 120 s window at 39900) -- |v| = 150 m/s (limit 150), p = [-58955.69405869  50394.66416908    261.76746247]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 120,
+      "start_idx": 45900,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 46242 (4624.2 s into the 120 s window at 45900) -- |v| = 150 m/s (limit 150), p = [-59284.83483235  59629.64842814    302.47111851]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 180,
+      "start_idx": 30900,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 31668 (3166.8 s into the 180 s window at 30900) -- |v| = 150 m/s (limit 150), p = [-36373.77977867  37235.33651241    158.53655892]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 180,
+      "start_idx": 32700,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 33337 (3333.7 s into the 180 s window at 32700) -- |v| = 150 m/s (limit 150), p = [-40102.25531442  36933.00170118    385.82011335]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 180,
+      "start_idx": 34500,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 35464 (3546.4 s into the 180 s window at 34500) -- |v| = 150 m/s (limit 150), p = [-47942.2422151   45412.48121519   3161.57622689]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 180,
+      "start_idx": 38100,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 38880 (3888.0 s into the 180 s window at 38100) -- |v| = 151 m/s (limit 150), p = [-47495.30150744  44139.26012543    182.46894269]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 180,
+      "start_idx": 39900,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 41065 (4106.5 s into the 180 s window at 39900) -- |v| = 150 m/s (limit 150), p = [-58955.69405869  50394.66416908    261.76746247]. Nothing downstream of this sample is a navigation solution."
+    },
+    {
+      "sequence": "Vw2",
+      "length_s": 180,
+      "start_idx": 45300,
+      "kind": "filter_diverged",
+      "reason": "Vw2: filter state left physical bounds at sample 46257 (4625.7 s into the 180 s window at 45300) -- |v| = 150 m/s (limit 150), p = [-58670.04484375  59247.308673      163.33872223]. Nothing downstream of this sample is a navigation solution."
     }
   ],
+  "aided_pass": {
+    "S3a": {
+      "aligned_at_sample": null,
+      "heading_source": "course",
+      "mount_source": "dynamics",
+      "mount_yaw_deg": -40.47786733156585,
+      "mount_spread_deg": 13.86863502805973,
+      "gyro_arw_used": 0.00904045576413002,
+      "accel_vrw_used": 0.16148607364036843,
+      "n_gnss_applied": 201,
+      "n_gnss_rejected": 53,
+      "n_gnss_reanchored": 22,
+      "n_gnss_velocity_applied": 241,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 1372,
+      "n_zaru_applied": 16,
+      "n_zaru_rejected": 1356,
+      "n_nhc": 21756
+    },
+    "S3c": {
+      "aligned_at_sample": 820,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": -168.20446074890464,
+      "mount_spread_deg": 15.153568440878447,
+      "gyro_arw_used": 0.0176326492231441,
+      "accel_vrw_used": 0.18729117841721216,
+      "n_gnss_applied": 278,
+      "n_gnss_rejected": 106,
+      "n_gnss_reanchored": 44,
+      "n_gnss_velocity_applied": 361,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 1524,
+      "n_zaru_applied": 241,
+      "n_zaru_rejected": 1283,
+      "n_nhc": 32388
+    },
+    "Vta11": {
+      "aligned_at_sample": null,
+      "heading_source": "course",
+      "mount_source": "dynamics",
+      "mount_yaw_deg": -53.68137042790019,
+      "mount_spread_deg": 8.453115493986683,
+      "gyro_arw_used": 0.06960839177524242,
+      "accel_vrw_used": 0.6022441063819529,
+      "n_gnss_applied": 2,
+      "n_gnss_rejected": 4,
+      "n_gnss_reanchored": 1,
+      "n_gnss_velocity_applied": 6,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 0,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 0,
+      "n_nhc": 395
+    },
+    "Vta12": {
+      "aligned_at_sample": null,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": -125.2898289878843,
+      "mount_spread_deg": 12.93878145892389,
+      "gyro_arw_used": 0.053547498366768725,
+      "accel_vrw_used": 0.5607316913476799,
+      "n_gnss_applied": 0,
+      "n_gnss_rejected": 0,
+      "n_gnss_reanchored": 0,
+      "n_gnss_velocity_applied": 0,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 0,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 0,
+      "n_nhc": 0
+    },
+    "Vta1a": {
+      "aligned_at_sample": 400,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": 0.0,
+      "mount_spread_deg": 90.0,
+      "gyro_arw_used": 0.009335991137241949,
+      "accel_vrw_used": 0.0867652837716338,
+      "n_gnss_applied": 2447,
+      "n_gnss_rejected": 67,
+      "n_gnss_reanchored": 32,
+      "n_gnss_velocity_applied": 2491,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 2,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 2,
+      "n_nhc": 12700
+    },
+    "Vta1b": {
+      "aligned_at_sample": 849,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": -15.64551540947004,
+      "mount_spread_deg": 11.33858194449409,
+      "gyro_arw_used": 0.1385456603957076,
+      "accel_vrw_used": 1.3049289340058112,
+      "n_gnss_applied": 10,
+      "n_gnss_rejected": 0,
+      "n_gnss_reanchored": 0,
+      "n_gnss_velocity_applied": 10,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 0,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 0,
+      "n_nhc": 91
+    },
+    "Vw12": {
+      "aligned_at_sample": null,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": 48.679150220252154,
+      "mount_spread_deg": 9.634636143009251,
+      "gyro_arw_used": 0.044601139547478415,
+      "accel_vrw_used": 0.7976958367041742,
+      "n_gnss_applied": 0,
+      "n_gnss_rejected": 0,
+      "n_gnss_reanchored": 0,
+      "n_gnss_velocity_applied": 0,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 0,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 0,
+      "n_nhc": 0
+    },
+    "Vw16b": {
+      "aligned_at_sample": null,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": 149.51270150829063,
+      "mount_spread_deg": 9.912094298889874,
+      "gyro_arw_used": 0.055192275736176875,
+      "accel_vrw_used": 0.5887212412584368,
+      "n_gnss_applied": 0,
+      "n_gnss_rejected": 0,
+      "n_gnss_reanchored": 0,
+      "n_gnss_velocity_applied": 0,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 0,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 0,
+      "n_nhc": 0
+    },
+    "Vw2": {
+      "aligned_at_sample": 594,
+      "heading_source": "none",
+      "mount_source": "none",
+      "mount_yaw_deg": 72.53866471686311,
+      "mount_spread_deg": 11.749158913801207,
+      "gyro_arw_used": 0.017740572762686938,
+      "accel_vrw_used": 0.23989106560133566,
+      "n_gnss_applied": 230,
+      "n_gnss_rejected": 329,
+      "n_gnss_reanchored": 156,
+      "n_gnss_velocity_applied": 543,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 739,
+      "n_zaru_applied": 2,
+      "n_zaru_rejected": 737,
+      "n_nhc": 10643
+    },
+    "Vw6": {
+      "aligned_at_sample": null,
+      "heading_source": "none",
+      "mount_source": "dynamics",
+      "mount_yaw_deg": 26.124110436614135,
+      "mount_spread_deg": 9.541620885607065,
+      "gyro_arw_used": 0.0803515767948727,
+      "accel_vrw_used": 0.9210570224322812,
+      "n_gnss_applied": 0,
+      "n_gnss_rejected": 0,
+      "n_gnss_reanchored": 0,
+      "n_gnss_velocity_applied": 0,
+      "n_gnss_velocity_rejected": 0,
+      "n_zupt": 0,
+      "n_zaru_applied": 0,
+      "n_zaru_rejected": 0,
+      "n_nhc": 0
+    }
+  },
   "skipped": [
-    "S3a: S3a: filter state left physical bounds at sample 7667 (766.7 s into this pass) -- |v| = 150 m/s (limit 150), p = [1167.45590888 3055.43883616  836.63040964]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
-    "S3c: S3c: filter state left physical bounds at sample 2883 (288.3 s into this pass) -- |v| = 153 m/s (limit 150), p = [-1555.97700298 -1806.54591186   901.95708338]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
-    "Vta16: Vta16: filter state left physical bounds at sample 4692 (469.2 s into this pass) -- |v| = 150 m/s (limit 150), p = [-1596.09503001  -644.09256699  1012.68734337]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
-    "Vta1a: Vta1a: filter state left physical bounds at sample 2664 (266.4 s into this pass) -- |v| = 152 m/s (limit 150), p = [-1446.52666945 -1326.084285    1631.04691574]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
-    "Vw2: Vw2: filter state left physical bounds at sample 5270 (527.0 s into this pass) -- |v| = 151 m/s (limit 150), p = [ -539.30978265 -2110.34611225  1190.31516018]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution.",
-    "Vw4: Vw4: filter state left physical bounds at sample 7853 (785.3 s into this pass) -- |v| = 151 m/s (limit 150), p = [ 1320.91641775 -1171.352704     629.67233655]. GNSS is not correcting the state (see D-094); nothing downstream of this sample is a navigation solution."
+    "Vta16: Vta16: filter state left physical bounds at sample 7604 (760.4 s into this pass) -- |v| = 151 m/s (limit 150), p = [6983.77203913 1016.15444065 1978.03369923]. Nothing downstream of this sample is a navigation solution.",
+    "Vw4: Vw4: filter state left physical bounds at sample 27275 (2727.5 s into this pass) -- |v| = 150 m/s (limit 150), p = [-8872.64057246 -5883.29821249  1498.59091281]. Nothing downstream of this sample is a navigation solution."
   ]
 }
