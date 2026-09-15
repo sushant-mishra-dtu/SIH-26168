@@ -55,6 +55,15 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon :app:test
 
+      # HANDOVER.md section 9 item 5: upload the debug APK so anyone can sideload a PR build
+      # without an SDK. Mirrors the operator-ui job's "Upload osm APK" step below.
+      - name: Upload logger APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: logger-app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Upload test report
         if: failure()
         uses: actions/upload-artifact@v4
