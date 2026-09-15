@@ -1,0 +1,295 @@
+{
+  "checkpoint": "checkpoints\\speed_head_fp16.pt",
+  "feature_columns": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "gravity_x",
+    "gravity_y",
+    "gravity_z",
+    "gyro_yaw",
+    "gyro_pitch",
+    "gyro_roll"
+  ],
+  "figure": "eval\\figures\\speed_head_calibration.png",
+  "held_out": {
+    "coverage_1sigma": 0.46827837274237444,
+    "coverage_2sigma": 0.7522708797228996,
+    "coverage_3sigma": 0.8645954829816562,
+    "mae_mps": 6.351772304429993,
+    "mean_sigma_mps": 4.79952235188,
+    "n": 28293,
+    "rmse_mps": 8.200169648407817
+  },
+  "held_out_excluded": [],
+  "hyperparameters": [
+    {
+      "decision": "",
+      "name": "input channels",
+      "source": "models.speed_head.N_INPUT_CHANNELS",
+      "value": "accel xyz, gravity xyz, gyro xyz (body frame)"
+    },
+    {
+      "decision": "",
+      "name": "window",
+      "source": "models.speed_head.WINDOW_SAMPLES",
+      "value": "20 samples / about 2 s at 10 Hz"
+    },
+    {
+      "decision": "",
+      "name": "architecture",
+      "source": "models.speed_head",
+      "value": "causal TCN (32, 64, 64), dropout 0.1"
+    },
+    {
+      "decision": "",
+      "name": "variance parameterisation",
+      "source": "models.speed_head",
+      "value": "exp(log variance), floor 1e-4"
+    },
+    {
+      "decision": "",
+      "name": "loss",
+      "source": "models.speed_head.gaussian_nll",
+      "value": "heteroscedastic Gaussian NLL"
+    },
+    {
+      "decision": "",
+      "name": "calibration criterion",
+      "source": "phases.md P-08 / Gate 2",
+      "value": ">=95% within +/-2 sigma"
+    },
+    {
+      "decision": "D-132",
+      "name": "window stride",
+      "source": "OMITTED -- matches P-06 cadence",
+      "value": "10 samples / 1 s"
+    },
+    {
+      "decision": "D-132",
+      "name": "optimizer",
+      "source": "OMITTED -- P-06's stated car-IMU optimizer",
+      "value": "Adamax"
+    },
+    {
+      "decision": "D-132",
+      "name": "learning rate",
+      "source": "OMITTED -- P-06's stated car-IMU rate",
+      "value": "7e-4"
+    },
+    {
+      "decision": "D-132",
+      "name": "batch size",
+      "source": "OMITTED -- P-06's stated car-IMU batch",
+      "value": "128"
+    },
+    {
+      "decision": "D-132",
+      "name": "epoch cap / patience",
+      "source": "OMITTED",
+      "value": "200 / 20, restore best validation NLL"
+    },
+    {
+      "decision": "D-098",
+      "name": "validation split",
+      "source": "D-098",
+      "value": "whole TRAIN families, smallest first to 15%"
+    },
+    {
+      "decision": "D-071",
+      "name": "scaler fitting set",
+      "source": "D-071",
+      "value": "training windows only"
+    },
+    {
+      "decision": "D-132",
+      "name": "reliability bins",
+      "source": "OMITTED",
+      "value": "10 equal-count bins"
+    }
+  ],
+  "leakage_guard": "leakage guard over the 9 columns actually fed to the model:\n    accel_x        allowed, no denylist match\n    accel_y        allowed, no denylist match\n    accel_z        allowed, no denylist match\n    gravity_x      allowed, no denylist match\n    gravity_y      allowed, no denylist match\n    gravity_z      allowed, no denylist match\n    gyro_yaw       allowed, no denylist match\n    gyro_pitch     allowed, no denylist match\n    gyro_roll      allowed, no denylist match\n    denylist = wheel|steer|rpm|engine|brake|clutch|gear|pedal|handbrake|coolant|throttle|torque|odo\n    assert_feature_safe() returned without raising -- no `V-` column reaches the input.",
+  "per_stem": {
+    "S3a": {
+      "coverage_1sigma": 0.30317848410757947,
+      "coverage_2sigma": 0.454360228198859,
+      "coverage_3sigma": 0.5770171149144254,
+      "mae_mps": 6.267203261210115,
+      "mean_sigma_mps": 2.232760834451836,
+      "n": 2454,
+      "rmse_mps": 8.059274418603806
+    },
+    "S3c": {
+      "coverage_1sigma": 0.2290096878363832,
+      "coverage_2sigma": 0.3431108719052745,
+      "coverage_3sigma": 0.4510226049515608,
+      "mae_mps": 8.332795189102846,
+      "mean_sigma_mps": 1.996406169183583,
+      "n": 3716,
+      "rmse_mps": 11.271636658089047
+    },
+    "Vta11": {
+      "coverage_1sigma": 0.6938775510204082,
+      "coverage_2sigma": 0.8367346938775511,
+      "coverage_3sigma": 0.9795918367346939,
+      "mae_mps": 4.262480550882768,
+      "mean_sigma_mps": 4.833186635352768,
+      "n": 49,
+      "rmse_mps": 5.720285040481064
+    },
+    "Vta12": {
+      "coverage_1sigma": 0.6440677966101694,
+      "coverage_2sigma": 0.8305084745762712,
+      "coverage_3sigma": 0.9491525423728814,
+      "mae_mps": 4.610658580973997,
+      "mean_sigma_mps": 5.587926075051276,
+      "n": 59,
+      "rmse_mps": 5.974533406683761
+    },
+    "Vta16": {
+      "coverage_1sigma": 0.5893805309734513,
+      "coverage_2sigma": 0.9433628318584071,
+      "coverage_3sigma": 0.9920353982300885,
+      "mae_mps": 4.685801279473951,
+      "mean_sigma_mps": 5.321829911539883,
+      "n": 1130,
+      "rmse_mps": 5.850371689994835
+    },
+    "Vta1a": {
+      "coverage_1sigma": 0.6300940438871473,
+      "coverage_2sigma": 0.8985109717868338,
+      "coverage_3sigma": 0.9706112852664577,
+      "mae_mps": 4.554552918145299,
+      "mean_sigma_mps": 5.29420335399482,
+      "n": 2552,
+      "rmse_mps": 5.716760801270484
+    },
+    "Vta1b": {
+      "coverage_1sigma": 0.8279569892473119,
+      "coverage_2sigma": 1.0,
+      "coverage_3sigma": 1.0,
+      "mae_mps": 2.973146021045664,
+      "mean_sigma_mps": 5.4904241498340305,
+      "n": 93,
+      "rmse_mps": 3.753267049416073
+    },
+    "Vw12": {
+      "coverage_1sigma": 0.27906976744186046,
+      "coverage_2sigma": 0.7558139534883721,
+      "coverage_3sigma": 0.9418604651162791,
+      "mae_mps": 8.647828612216683,
+      "mean_sigma_mps": 6.3814825054117215,
+      "n": 86,
+      "rmse_mps": 9.017834596473085
+    },
+    "Vw16b": {
+      "coverage_1sigma": 0.7545454545454545,
+      "coverage_2sigma": 0.9636363636363636,
+      "coverage_3sigma": 0.990909090909091,
+      "mae_mps": 3.9030785929072986,
+      "mean_sigma_mps": 5.976574606979912,
+      "n": 110,
+      "rmse_mps": 4.964521496557075
+    },
+    "Vw2": {
+      "coverage_1sigma": 0.4992406985573273,
+      "coverage_2sigma": 0.8333333333333334,
+      "coverage_3sigma": 0.9675398633257403,
+      "mae_mps": 6.177628359978526,
+      "mean_sigma_mps": 5.5947159655751975,
+      "n": 5268,
+      "rmse_mps": 7.496935745375898
+    },
+    "Vw4": {
+      "coverage_1sigma": 0.5093668484704766,
+      "coverage_2sigma": 0.8432534977472137,
+      "coverage_3sigma": 0.961505019366058,
+      "mae_mps": 6.415314642771625,
+      "mean_sigma_mps": 5.605034706185422,
+      "n": 12651,
+      "rmse_mps": 8.105285312797017
+    },
+    "Vw6": {
+      "coverage_1sigma": 0.4,
+      "coverage_2sigma": 0.984,
+      "coverage_3sigma": 0.992,
+      "mae_mps": 6.51039164352417,
+      "mean_sigma_mps": 5.639672188360049,
+      "n": 125,
+      "rmse_mps": 7.477481453087338
+    }
+  },
+  "scope": "P-08 standalone training/calibration only; not fused into InEKF while Gate 1 is unsigned.",
+  "stamp": {
+    "commit": "2edfe60",
+    "numpy": "2.4.3",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10",
+    "seed": 0,
+    "timestamp_utc": "2026-09-15T16:55:03Z"
+  },
+  "target": "absolute_speed",
+  "target_selection": {
+    "absolute_speed_constant_mean_rmse_mps": 7.471550941467285,
+    "absolute_speed_validation_rmse_mps": 5.571682439142922,
+    "selected_target": "absolute_speed"
+  },
+  "train_excluded": [],
+  "training": {
+    "best_epoch": 17,
+    "best_validation_nll": 2.036477565765381,
+    "device": "cuda",
+    "epochs_run": 38,
+    "target": "absolute_speed",
+    "train_stems": [
+      "M",
+      "S1",
+      "S4",
+      "Vw14a",
+      "Vw14b",
+      "Vw14c"
+    ],
+    "train_windows": 16948,
+    "validation": {
+      "coverage_1sigma": 0.6497266001929881,
+      "coverage_2sigma": 0.9556127372145384,
+      "coverage_3sigma": 0.9897073013830814,
+      "mae_mps": 4.280094253182071,
+      "mean_sigma_mps": 5.071134195073685,
+      "n": 3109,
+      "rmse_mps": 5.571682439142922
+    },
+    "validation_constant_mean_rmse_mps": 7.471550941467285,
+    "validation_families": [
+      "S2",
+      "Vta10",
+      "Vta14",
+      "Vta15",
+      "Vta19",
+      "Vta2",
+      "Vta4",
+      "Vw10",
+      "Vw11",
+      "Vw13",
+      "Vw3",
+      "Vw5",
+      "Vw9"
+    ],
+    "validation_stems": [
+      "S2",
+      "Vta2",
+      "Vta4",
+      "Vta10",
+      "Vta14",
+      "Vta15",
+      "Vta19",
+      "Vw3",
+      "Vw5",
+      "Vw9",
+      "Vw10",
+      "Vw11",
+      "Vw13"
+    ],
+    "validation_windows": 3109
+  }
+}
