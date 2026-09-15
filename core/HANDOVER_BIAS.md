@@ -9,6 +9,31 @@ may be working **at the same time** — §0 says how you stay out of each other'
 
 Where this file disagrees with [`../docs/DECISION_LOG.md`](../docs/DECISION_LOG.md), the log wins.
 
+> **Status, 15 Sep 2026 night — done; D-133 is the record.** Code `4389558` (`InEKF.gyro_bias_direct_only`,
+> `eval/run.py::GYRO_BIAS_DIRECT_ONLY`, two tests, the synthetic fixture's road floor), the switch
+> shipped **off** in `403a24a`, artefacts and row in the commit after it, all clean-stamped. The
+> measurement in §1 was widened to the whole TRAIN split and stayed thin: **only S1 has two still
+> stops**, and with the stop mean's own noise removed the walk is ×0.5–2.3 of `gyro_bias_rw` from
+> three pairs. So candidate A had nothing measured to raise to, and raising ×2 anyway made the
+> estimate move *faster* (rejected). Candidate B, tightened to **only ZARU may move `b_g`** (the
+> briefed version, with the position fix still allowed, diverged Vw2's aided pass), made the block
+> consistent on TRAIN (S1 bias-block NEES 27.3 → 2.1 against 3.0; the estimate steps at the model)
+> and converged S3a's bias (0.23 → 0.006 °/s on y) — **and the 60 s drift did not move**: quiet
+> 6.14× → 6.20× (56.0 → 56.6 % on the same 101 windows; both per-stem medians fell; paired +0.09,
+> CI [−5.0, +4.7]); vibrating 19.72× → 19.81× on 127 windows with 14 more Vw2 windows alive and
+> replay divergences 51 → 19. Shipped off by `HANDOVER.md` §3 rule 4 because the quoted number is
+> worse; one constant flips it. §8's questions: (1) ×0.5–2.3, three pairs, one stem, and this
+> dataset cannot do better; (2) yes, the block becomes consistent and ZARU carries weight; (3) no,
+> the speed collapse at 60 s is unchanged (S3a p10 −9.3 m/s against −10.1) with the bias right at
+> entry; (4) the accelerometer bias — the one variant that moved TRAIN S1's drift (62.9 → 48.4 %)
+> also masked the accel-bias rows, and it is the next measurement (`HANDOVER.md` §11 (5)). The
+> honest covariance also exposed the synthetic harness fixture as a silent IMU the stop detector
+> read as a standstill (13 tests); it now carries a road floor. Probes are in the 15 Sep night
+> session's scratchpad (`bias_walk2.py`, `bias_objective.py`, `false_zupt.py`, `compare_sweeps.py`).
+>
+> Nothing below this block needs doing; it is kept as the record of what was asked and what the
+> answer turned out to be.
+
 ---
 
 ## 0. Parallel-work protocol

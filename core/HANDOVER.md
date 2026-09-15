@@ -21,8 +21,8 @@ Verifiable, not remembered:
 |---|---|
 | The Python reference filter is the specification — no C++/Rust port exists (D-022) | `wc -l core/reference/inekf.py` → 1,427 lines; `core/ffi/idr_core.h` is a header with nothing behind it |
 | The harness runs end to end and produces the Gate 1 number | `.venv\Scripts\python -m eval.run --dry-run` plans 12 held-out stems × 5 lengths; a real run takes ~6–7 min |
-| **832 tests pass, 1 skipped** at `dd5e3ff` (823 at `eae873f`, plus four for D-131 and the six parametrised over the `android-ui/` files, now tracked) | `.venv\Scripts\python -m pytest -q` (`--collect-only -q` prints the count) |
-| **The committed number is D-131's**: `eval/figures/summary.json` at `commit dd5e3ff \| seed 0`, clean — 6.14× quiet / 19.72× vibrating / 11.55× pooled at 60 s, on 101 / 113 / 214 windows (D-130's `7e3a8b0` artefacts: 6.27× / 19.5× / 12.3× on 101 / 125 / 226) | `python -c "import json;print(json.load(open('eval/figures/summary.json'))['gate1'])"`; the artefact also says `zaru_sigma_from_window: true` |
+| **834 tests pass, 1 skipped** at `403a24a` (832 at `dd5e3ff`, plus two for D-133) | `.venv\Scripts\python -m pytest -q` (`--collect-only -q` prints the count) |
+| **The committed number is still D-131's, re-stamped at `403a24a` by D-133**: `eval/figures/summary.json` at `commit 403a24a \| seed 0`, clean — 6.14× quiet / 19.72× vibrating / 11.55× pooled at 60 s, on 101 / 113 / 214 windows, window for window what `dd5e3ff` produced (D-133's mechanism ships off; on, at `4389558`, it read 6.20× / 19.81× / 11.82× on 101 / 127 / 228) | `python -c "import json;print(json.load(open('eval/figures/summary.json'))['gate1'])"`; the artefact also says `zaru_sigma_from_window: true` and `gyro_bias_direct_only: false` |
 | D-115's 6.2× was measured on a dirty tree into a scratch dir and **never committed** | DECISION_LOG D-115, last sentence; the outputs are in a session scratchpad (§10) |
 | IO-VNBD is local: 288 synchronised CSVs, 825 MB | `.venv\Scripts\python -m eval.fetch --sync-only` → `already-present=288 failed=0` (SHA-verifies every file, downloads nothing) |
 | `.venv` is Py 3.13.5 with numpy 2.5.3 / pandas / pytest 9.1.1 / ruff; **no torch, no matplotlib** | `.venv\Scripts\python -c "import torch"` fails; `pip install -e ".[plot]"` adds matplotlib |
@@ -45,6 +45,7 @@ closes it; the harness only reports it.
 | D-115, split | **6.2×** quiet-mount (S3a+S3c, 56.7% / 9.1%); **22×** vibrating-mount (ten Vta/Vw stems, 86.8% / 3.9%); **1.95×** at 10 s on the quiet pair | 101 / 104 | same | The split is the number to quote, never the pool (§9). |
 | D-130, 15 Sep | **6.27×** quiet (57.2% / 9.13%); **19.5×** vibrating (84.2% / 4.31%); 12.3× pooled; **1.84×** at 10 s on the quiet pair | 101 / 125 / 226 | `7e3a8b0`, clean — committed in `d3c2464` | Fixes 1–3 below + `gate1.by_mount_class`; Fix 3 shipped **off** after its A/B; Vta16 now skipped (aided pass diverges under the wider accel-bias prior — D-130 has the probe). |
 | D-131, 15 Sep | **6.14×** quiet (56.0% / 9.13%); **19.72×** vibrating (84.0% / 4.26%); 11.55× pooled; **1.81×** at 10 s on the quiet pair | 101 / 113 / 214 | `dd5e3ff`, clean — committed with the row | ZARU's R read from the stop detector's own window instead of the Allan desk figure (`zaru_sigma_from_window`, `update_zaru(sigma=)`). S3a now applies 1,356 of 1,368 ZARUs (16 of 1,372 before) and its bias estimate **does not move**; S3a 42.0 → 42.2%, S3c 69.5 → 72.3% at 60 s; Vw2 loses 12 of 80 windows to replay divergence. A wash on the quoted class, shipped on because the R is the measured one; `ZARU_SIGMA_FROM_WINDOW` flips it. |
+| D-133, 15 Sep | **6.14×** quiet / **19.72×** vibrating / 11.55× pooled, **unchanged** (the mechanism ships off); with it on, `4389558`: **6.20×** quiet (56.6% / 9.13%), **19.81×** vibrating (86.1% / 4.35%), 11.82× pooled, **1.77×** at 10 s on the quiet pair | 101 / 113 / 214 (on: 101 / 127 / 228) | `403a24a`, clean — committed with the row; reproduces `dd5e3ff` window for window | `InEKF.gyro_bias_direct_only`: only ZARU may move `b_g` (the position fix, Doppler velocity, NHC and ZUPT lose their gyro-bias gain rows; `Q` untouched). TRAIN S1 bias-block NEES 27.3 → 2.1 against 3.0; S3a's bias converges (0.23 → 0.006 °/s on y). Both quiet per-stem medians fall (S3a 42.2 → 40.6, S3c 72.3 → 71.0), replay divergences 51 → 19, Vw2 keeps 14 more windows — and the pooled quiet median is 0.58 points worse (paired +0.09, bootstrap CI [−5.0, +4.7]): shipped **off** by §3 rule 4, `GYRO_BIAS_DIRECT_ONLY` flips it. The TRAIN bias walk is ×0.5–2.3 of `gyro_bias_rw` from three pairs on one stem; raising `Q` (×2) made the estimate move faster, rejected. **The remaining quiet-class gap is not the gyro bias.** |
 
 **The gap that is the filter's — re-read after D-131.** D-115 named it bias observability: on S3a
 every 60 s window opens from an aided state whose gyro-bias estimate has walked to 0.2–0.4 °/s,
@@ -57,9 +58,25 @@ block a ZARU at S3a's 1.17 °/s per-sample noise has a gain of 7e-4 per sample: 
 stop move a 0.23 °/s error by 13%. The Doppler velocity and NHC updates push the bias between stops
 through the cross-correlations, and a correctly weighted observation at the next stop cannot undo
 it. **So the remaining quiet-class gap is the gyro-bias block's consistency, not its
-observability.** The next fix is a bias process noise measured in motion on TRAIN, the way
-`in_motion_config` measures the white terms (D-115) — see §11 (4). Inside the window the tilt error
-the wrong bias implies still collapses the speed by 3–17 m/s.
+observability.** D-133 measured that walk and made the block consistent — see the next
+paragraph. Inside the window the tilt error still collapses the speed by 3–17 m/s.
+
+**Re-read after D-133: the gap is not the gyro bias.** The bias walks in a car at ×0.5–2.3 of
+`gyro_bias_rw` (S1, three pairs; no other TRAIN stem has two still stops), so the block was not
+under-modelled — it was being *pushed*: the Doppler velocity, NHC and position updates, unable to
+separate tilt, heading and gyro bias at a 9 s cadence, moved `b_g` through the cross-correlations
+three times faster than it walks, and the block's NEES against the truth-standstill bias on S1
+was 27.3 against 3.0. `InEKF.gyro_bias_direct_only` lets only ZARU move `b_g`: NEES 2.1, the
+estimate steps at the model, and S3a's last-ten-minute |b_g| falls from 0.23 to 0.006 °/s on y.
+**And the 60 s drift does not move** — S3a 42.2 → 40.6 %, S3c 72.3 → 71.0 %, pooled quiet median
+56.0 → 56.6 % (paired +0.09 points, CI [−5.0, +4.7]); the 60 s speed error at 60 s is still
+−9 to −10 m/s in the worst decile with the bias right at entry. Shipped off by §3 rule 4 (the
+quoted number is worse by 0.06×), one constant from on. What is left, with the number that
+says it: the *accelerometer*-bias attribution. The one variant that moved TRAIN S1's drift
+(62.9 → 48.4 % median, p90 548 → 110, 60 s speed error +11.8 → +2.1 m/s) also denied the
+Doppler and NHC updates the accel-bias rows; on the quiet pair it was −1.2 / +1.0 paired with one
+S3c window at +455 — D-130's Vta16 story (horizontal accel-bias blocks absorbing tilt error) on a
+quiet mount. §11 (5) is the brief for it. The 9 s cadence and the mount block are not separated.
 
 **The gap that is not the filter's.** On the ten Vta/Vw stems 95% of the yaw-axis gyro variance is
 vibration folded into 0–5 Hz by 10 Hz sampling with no anti-alias filter (gyro–truth course-rate
@@ -251,9 +268,9 @@ IMPLEMENTATION_PLAN §7, Gate 1, in the order to do them:
 
 | Item | Status 15 Sep | What closes it |
 |---|---|---|
-| Physics-only InEKF within 3–5× of GNSS-available at 60 s, update count beside it | **6.14× quiet / 19.72× vibrating (D-131, `dd5e3ff`, committed)** — not in band; ZARU now applied at 97–99% of detected stops (`aided_pass.n_zaru_applied`, `zaru_sigma_mean_used`) | the bias block's consistency (§2, §11 (4)), then a human reads `summary.json` against §7 and signs or does not |
-| `Q` from the IO-VNBD Allan run | done (D-045, D-120), per-stem floored in motion (D-115); **`gyro_bias_rw` is still the desk figure and the bias block is over-confident 3–7× in a car (D-131)** | a bias process noise measured in motion on TRAIN |
-| SE₂(3) tests 7–11 incl. NEES | green, five cases, means unchanged at `dd5e3ff` (17.419 / 18.593 / 16.620 / 18.672 / 13.568; ERROR_BUDGET §10.2) | re-check after any change to `P0` or `Q` |
+| Physics-only InEKF within 3–5× of GNSS-available at 60 s, update count beside it | **6.14× quiet / 19.72× vibrating (D-131's number, re-stamped at `403a24a` by D-133)** — not in band; ZARU applied at 97–99% of detected stops; the bias block can be made consistent (D-133, `gyro_bias_direct_only`, shipped off) and the number does not move | the accelerometer-bias attribution (§2, §11 (5)), then a human reads `summary.json` against §7 and signs or does not |
+| `Q` from the IO-VNBD Allan run | done (D-045, D-120), per-stem floored in motion (D-115); `gyro_bias_rw` measured in a car on TRAIN at ×0.5–2.3 of the desk figure (D-133: three pairs on one stem; the dataset cannot do better) — the block's over-confidence was mis-attribution by the aiding updates, not the walk | nothing further on `gyro_bias_rw`; `accel_bias_rw` and the horizontal accel-bias blocks are the unmeasured ones |
+| SE₂(3) tests 7–11 incl. NEES | green, five cases, means unchanged at `403a24a` (17.419 / 18.593 / 16.620 / 18.672 / 13.568; ERROR_BUDGET §10.2) | re-check after any change to `P0` or `Q` |
 | Raw-strapdown and GNSS-available baselines | done, in every sweep | — |
 | Onyekpe INS baseline reproduced, gap explained | **not started**: `models/baseline_rnn.py` + `train_baseline_rnn.py` exist, no checkpoint, no torch here, no GPU | someone with a GPU trains it; then a `--with-rnn` fourth entry in `METHODS` |
 | Yaw error instrumented and plotted separately | instrumented (`yaw_rmse_deg`, `yaw_max_deg` in every window row); **no plot — no matplotlib installed, no `eval/plots.py`** | `pip install -e ".[plot]"`, an `eval/plots.py` that reads `summary.json` + `windows.csv` and calls `idr.stamp.stamp_figure` |
@@ -331,3 +348,20 @@ Each hard-codes `sys.path.insert(0, <its own scratchpad>)`; fix that line, do no
    the *true* bias walks at only ×1–2 of `gyro_bias_rw` while the *estimate* moves ×3, so most of
    the estimate's motion is the Doppler and NHC updates blaming `b_g` for tilt and heading error,
    not an under-modelled walk. Raising the process noise alone will not close that.
+   **Answered in D-133.** The walk, widened to the whole TRAIN split, stays ×0.5–2.3 from S1's
+   three pairs (no other stem has two still stops; the stop mean's own noise is the size of the
+   walk). Raising `Q` ×2 made the estimate move *faster* (rejected). Letting only ZARU move `b_g`
+   (`InEKF.gyro_bias_direct_only`) makes the block consistent (S1 NEES 27.3 → 2.1) and converges
+   S3a's bias (0.23 → 0.006 °/s) — and the 60 s drift does not move (paired +0.09 points on the
+   101 quiet windows). Shipped off by §3 rule 4; `GYRO_BIAS_DIRECT_ONLY` flips it.
+5. **Open — the accelerometer bias, the next candidate with a number behind it.** With `b_g`
+   right at entry the 60 s speed still collapses by 9–10 m/s in the worst decile on S3a, so the
+   tilt error is not the gyro's. D-133's wider mask (Doppler and NHC denied the *accel*-bias rows
+   too, ZUPT keeping `b_a`) was the only variant that moved TRAIN S1's drift — 62.9 → 48.4 %
+   median, p90 548 → 110, 60 s speed error +11.8 → +2.1 m/s — and on the quiet pair read −1.2 /
+   +1.0 paired with one S3c window at +455, the Vta16 mechanism (D-130) on a quiet mount. The
+   measurement to make first, the way D-133's `bias_walk2.py` did for `b_g`: `b_a` at TRAIN
+   standstills (vertical, the only component a standstill separates from levelling) against the
+   aided pass's estimate and its block, and the horizontal blocks' walk during the drive; then
+   whether a mask, a per-axis prior, or `accel_bias_rw` is what the measurement supports. Rule 4
+   applies: measure before and after, both sweeps in the row, a worse number ships off.
