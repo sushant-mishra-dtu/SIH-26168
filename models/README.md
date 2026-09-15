@@ -49,4 +49,12 @@ Needs the `ml` extra and the dataset: `pip install -e ".[ml]"` then
 `python -m eval.fetch --sync-only`. `torch` is imported inside the functions that need it, so the
 audit and its tests still run in the CI job that has neither.
 
-**The speed+variance head (P-08) is still untrained** — that is Sprint 2, and Gate 1 comes first.
+**Speed + variance head (P-08): trained and calibrated as a standalone model, not fused.**
+Trained on the nine S- body-frame inertial channels using PyTorch ROCm on AMD Radeon RX 7700 XT
+(commit `2edfe60`, seed 0). `--target auto` selected `absolute_speed` because validation RMSE
+(5.572 m/s) beat the constant training-mean baseline (7.472 m/s). Across 28,293 held-out windows
+(12 stems), ±2σ coverage reached 75.227% (RMSE 8.200 m/s, mean predicted σ 4.800 m/s), falling short
+of Gate 2's 95% criterion due to severe under-coverage on quiet-mount stems (S3a 45.4%, S3c 34.3%
+where mean σ was ~2 m/s against ~8–11 m/s RMSE) while vibrating mounts reached 75.6%–100.0%.
+Exported to `checkpoints/speed_head_fp16.pt` with train-only `Scaler`. Not fused into InEKF
+(`InEKF.update_speed` stays uncalled) while Gate 1 remains unsigned (D-132).
