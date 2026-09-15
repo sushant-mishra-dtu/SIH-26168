@@ -84,6 +84,7 @@ from eval.outages.inject import (
 from eval.splits import (
     LONG_OUTAGE,
     MANDATORY_PLOT_SEQUENCES,
+    QUIET_MOUNT,
     assert_split_disjoint,
     assert_split_is_loadable,
     test_sequences,
@@ -505,9 +506,10 @@ def run_filter(
     ungated -- `velocity_measurement` and `FilterConfig.gate_gnss_velocity` say why each.
 
     Gating is the caller's job, per the filter's own contract: `is_stationary` and `nhc_is_valid`
-    read the raw IMU stream, which is not a property of the state. ZUPT and ZARU are **offered
-    together** at every detected stop (D-004); ZARU may decline at its own χ² gate (D-057), which
-    is counted separately so a run can be read for how often that happens.
+    read the IMU stream (passing `gyro_bias=state.b_g` to `is_stationary`), which is not an
+    intrinsic property of the state. ZUPT and ZARU are **offered together** at every detected
+    stop (D-004); ZARU may decline at its own χ² gate (D-057), which is counted separately so a
+    run can be read for how often that happens.
     """
     cfg = cfg or FilterConfig()
     n = gyro.shape[0]
@@ -638,6 +640,17 @@ GNSS_REJECTIONS_BEFORE_REANCHOR = 3
 ZUPT_VETO_MIN_SPEED_MPS = 1.0
 ZUPT_VETO_NSIGMA = 3.0
 
+#: Whether `replay_window` freezes the bias states for the outage (`InEKF.hold_biases`: bias
+#: process noise zeroed before Van Loan, bias gain rows zeroed for every update but ZARU).
+#: ERROR_BUDGET section 3.2 calls for the snapshot; the A/B did not support it (D-130). From
+#: the same S3a + S3c aided snapshots, every 60 s window, hold on vs off, median / p90 drift-%:
+#: S3a 42.5 / 97.2 vs 42.0 / 95.2 (40 windows); S3c 72.1 / 121.7 vs 69.5 / 121.5 (61); pooled
+#: 56.9 / 119.7 vs 57.2 / 119.5. A wash inside the noise, with off ahead on both per-stem
+#: medians and every p90 -- a mechanism that does not measurably help does not ship on.
+#: The value travels in `summary.json` as `biases_held_in_outage` so an artefact says which
+#: variant produced it; flip it here, never per call.
+HOLD_BIASES_IN_OUTAGE = False
+
 
 def _step_constraints(
     f: InEKF, k: int, gyro: np.ndarray, accel: np.ndarray, cfg: FilterConfig, window: int,
@@ -654,7 +667,9 @@ def _step_constraints(
     """
     lo = max(0, k - window + 1)
     st = f.state
-    if k + 1 >= window and is_stationary(accel[lo : k + 1], gyro[lo : k + 1], cfg):
+    if k + 1 >= window and is_stationary(
+        accel[lo : k + 1], gyro[lo : k + 1], cfg, gyro_bias=st.b_g
+    ):
         # **A steady cruise looks stationary to an IMU.** `is_stationary` reads accelerometer
         # variance and gyro magnitude, and a quiet phone at a constant 3.5 m/s on a smooth road
         # is under both thresholds -- S3a, 2 s in, on the first run this harness made with a
@@ -726,6 +741,7 @@ def replay_window(
     could be applied -- a re-acquisition belongs to the aided pass, not to the outage it closes.
     """
     f = copy.deepcopy(snapshot.filter)
+    f.hold_biases = HOLD_BIASES_IN_OUTAGE
     cfg = f.cfg
     window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
     n_rows = outage.n_samples + 1
@@ -1573,7 +1589,53 @@ def summarise_by_method_and_length(results: list[WindowResult]) -> dict[str, dic
     }
 
 
-def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
+def gate1_by_mount_class(results: list[WindowResult]) -> dict[str, dict[str, object]]:
+    """Gate 1 drift ratio and window counts partitioned by mount class (D-115).
+
+    The in-motion gyro white level on quiet mounts (S3a, S3c) is 1.7-1.9 deg/s vs 4-20 deg/s on
+    every Vta/Vw stem; heading random walk 2.9 deg vs 21-44 deg at 60 s. On vibrating mounts the
+    IMU stream carries un-anti-aliased engine and cabin vibration aliased into 10 Hz, random-walking
+    the heading integral. Gate 1 should be quoted with this split, never pooled (D-115).
+    """
+    windows_60s = [r for r in results if r.length_s == GATE1_LENGTH_S]
+    out: dict[str, dict[str, object]] = {}
+    for mount_class in ("quiet", "vibrating"):
+        class_windows = [
+            r
+            for r in windows_60s
+            if (
+                r.sequence in QUIET_MOUNT
+                if mount_class == "quiet"
+                else r.sequence not in QUIET_MOUNT
+            )
+        ]
+        filter_drifts = [r.metrics.drift_pct for r in class_windows if r.method == "filter"]
+        gnss_drifts = [r.metrics.drift_pct for r in class_windows if r.method == "gnss_available"]
+
+        n_filter = len(filter_drifts)
+        n_gnss = len(gnss_drifts)
+
+        filter_med = float(np.median(filter_drifts)) if n_filter > 0 else None
+        gnss_med = float(np.median(gnss_drifts)) if n_gnss > 0 else None
+
+        ratio = filter_med / gnss_med if filter_med is not None and gnss_med else None
+        in_range = None if ratio is None else GATE1_RATIO_RANGE[0] <= ratio <= GATE1_RATIO_RANGE[1]
+
+        out[mount_class] = {
+            "filter_drift_pct_median": filter_med,
+            "gnss_available_drift_pct_median": gnss_med,
+            "ratio": ratio,
+            "in_range": in_range,
+            "n_windows_filter": n_filter,
+            "n_windows_gnss_available": n_gnss,
+        }
+    return out
+
+
+def gate1_ratio(
+    by_method: dict[str, dict[str, dict]],
+    results: list[WindowResult] | None = None,
+) -> dict[str, object]:
     """The Gate 1 number: physics-only median drift over GNSS-available median drift, at 60 s.
 
     Reported, never judged. The gate is 3-5x and a human closes it against
@@ -1583,12 +1645,17 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
     key = str(GATE1_LENGTH_S)
     have = [m for m in ("filter", "gnss_available") if key in by_method.get(m, {})]
     if len(have) < 2:
-        return {"measured": False, "why": f"no {GATE1_LENGTH_S} s windows for {METHODS[0]} and/or "
-                f"{METHODS[2]}"}
+        out: dict[str, object] = {
+            "measured": False,
+            "why": f"no {GATE1_LENGTH_S} s windows for {METHODS[0]} and/or {METHODS[2]}",
+        }
+        if results is not None:
+            out["by_mount_class"] = gate1_by_mount_class(results)
+        return out
     num = by_method["filter"][key]
     den = by_method["gnss_available"][key]
     ratio = num["drift_pct_median"] / den["drift_pct_median"] if den["drift_pct_median"] else None
-    return {
+    out = {
         "measured": True,
         "length_s": GATE1_LENGTH_S,
         "filter_drift_pct_median": num["drift_pct_median"],
@@ -1601,6 +1668,9 @@ def gate1_ratio(by_method: dict[str, dict[str, dict]]) -> dict[str, object]:
         "n_windows_filter": num["n_sequences"],
         "n_windows_gnss_available": den["n_sequences"],
     }
+    if results is not None:
+        out["by_mount_class"] = gate1_by_mount_class(results)
+    return out
 
 
 def write_artefacts(
@@ -1639,7 +1709,9 @@ def write_artefacts(
             for kind in sorted({d.kind for d in dropped})
         },
         "by_method": by_method,
-        "gate1": gate1_ratio(by_method),
+        # Whether outage windows froze the bias states (`HOLD_BIASES_IN_OUTAGE`, D-130).
+        "biases_held_in_outage": HOLD_BIASES_IN_OUTAGE,
+        "gate1": gate1_ratio(by_method, results=results),
         "trajectories": sorted(replay or {}),
         "dropped_windows": [d.as_row() for d in dropped],
         # The aided pass each stem's windows were replayed from (D-115): alignment, the process

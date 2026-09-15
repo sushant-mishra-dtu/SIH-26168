@@ -197,12 +197,17 @@ def find_stationary_segments(
 ) -> list[StationarySegment]:
     """Find stretches long and clean enough to compute an Allan curve on.
 
-    Stationarity uses the filter's own ZUPT criteria (`core.reference.inekf.is_stationary`:
-    mean per-axis accelerometer variance *and* mean gyro magnitude, both under
-    `FilterConfig`'s thresholds), vectorised over a sliding window. Sharing the definition means
-    the segments we characterise noise on are exactly the segments the filter will ZUPT on --
-    tuning Q on a stricter notion of "stopped" than the runtime one would measure a sensor the
-    filter never sees.
+    Stationarity uses the filter's ZUPT thresholds (`FilterConfig.zupt_*`): mean per-axis
+    accelerometer variance *and* mean gyro magnitude, both under threshold, vectorised over a
+    sliding window. Sharing the thresholds means the segments we characterise noise on are the
+    segments the filter will ZUPT on -- tuning Q on a stricter notion of "stopped" than the
+    runtime one would measure a sensor the filter never sees.
+
+    One deliberate difference from the runtime detector: `is_stationary` now takes the norm of
+    the bias-corrected window *mean* (D-130, Fix 1), while this selection keeps the mean of
+    per-sample norms it was seeded with. An Allan run has no bias estimate to subtract, and the
+    D-120 seeds (`eval/figures/allan_*`) must stay reproducible from this function unchanged;
+    changing the rule here is a re-seed and needs its own DECISION_LOG row.
 
     Two sampling checks on top, both learned from the data rather than assumed. IO-VNBD's `S-`
     files are mostly a clean 10 Hz, but at least one (`S-I`) contains a 285 s recorder pause and a

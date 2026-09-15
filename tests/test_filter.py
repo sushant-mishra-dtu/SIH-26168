@@ -91,6 +91,34 @@ def test_turning_at_constant_speed_is_not_stationary():
 def test_stationary_rejects_malformed_windows():
     with pytest.raises(ValueError, match=r"\(n, 3\)"):
         is_stationary(np.zeros((10,)), np.zeros((10, 3)), CFG)
+    with pytest.raises(ValueError, match=r"\(n, 3\)"):
+        is_stationary(np.zeros((10, 3)), np.zeros((10,)), CFG)
+    with pytest.raises(ValueError, match=r"3-vector"):
+        is_stationary(np.zeros((10, 3)), np.zeros((10, 3)), CFG, gyro_bias=np.zeros(4))
+
+
+def test_still_window_with_constant_offset_requires_bias_compensation():
+    """A still phone with a 1.5 deg/s gyro offset (such as S3a's standstill level) fails the raw
+    gyro norm threshold (0.01 rad/s = 0.573 deg/s) and is detected as stationary only when
+    `gyro_bias` carries the offset."""
+    accel = np.tile([0.0, 0.0, 9.80665], (20, 1)) + RNG.normal(0, 0.01, (20, 3))
+    offset = np.deg2rad([1.5, 0.0, 0.0])  # 1.5 deg/s == 0.0262 rad/s > 0.01 rad/s
+    gyro = np.tile(offset, (20, 1)) + RNG.normal(0, 0.001, (20, 3))
+
+    # Without bias compensation (default None / zeros), raw mean exceeds threshold
+    assert not is_stationary(accel, gyro, CFG)
+
+    # With gyro_bias passed, bias-corrected mean is inside threshold
+    assert is_stationary(accel, gyro, CFG, gyro_bias=offset)
+
+
+def test_zupt_thresholds_pinned_to_measured_values():
+    """Conservative stop thresholds measured against truth speed (D-115, Fix 1)."""
+    assert CFG.zupt_accel_var_thresh == 0.02  # (m/s^2)^2, 12x below rolling p10 on S3a
+    assert CFG.zupt_gyro_norm_thresh == 0.01  # rad/s (~0.57 deg/s), admits stops after bias
+    assert CFG.zupt_window_s == 2.0  # seconds, eliminates high-speed false stops
+
+
 
 
 # ------------------------------------------------------------------------------------------
@@ -243,14 +271,15 @@ def test_p0_gyro_bias_block_is_the_measured_turn_on_bias_not_the_instability():
     assert CFG.gyro_bias_turn_on > 22.0 * (np.pi / 180.0) / 3600.0
 
 
-def test_p0_accel_bias_block_is_the_allan_runs_measured_bias_instability():
-    """docs/ERROR_BUDGET.md section 9.1 (D-045, D-120): 0.25 mg, measured on IO-VNBD's own
-    stationary segments. Still the instability rather than a turn-on figure, and D-115 records
-    why: at a standstill an accelerometer offset is confounded with the levelling derived from
-    the same sensor, so there is no clean measurement of one to put here."""
-    assert _sd(IDX_ACCEL_BIAS) == pytest.approx(ACCEL_BIAS_INSTABILITY_MEASURED)
-    assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(2.48e-3, abs=1e-7)
-    assert _sd(IDX_ACCEL_BIAS)[0] * 1000.0 / 9.80665 == pytest.approx(0.25, abs=5e-3)  # mg
+def test_p0_accel_bias_block_is_the_measured_turn_on_bias_not_the_instability():
+    """`P0` carries the uncertainty of a bias nothing has estimated yet, which is the *turn-on*
+    bias -- measured at 6.2 mg RMS across runs, 8.2 mg largest single run, over the 638 s of
+    TRAIN standstill -- and not the bias *instability* (0.25 mg = 2.45 mm/s^2 since D-120; D-045
+    read 0.34 mg), which is how far an already-estimated bias wanders. Measured as mean(|f|) - g,
+    the one component independent of levelling."""
+    assert _sd(IDX_ACCEL_BIAS) == pytest.approx(CFG.accel_bias_turn_on)
+    assert _sd(IDX_ACCEL_BIAS)[0] == pytest.approx(0.08)
+    assert CFG.accel_bias_turn_on > ACCEL_BIAS_INSTABILITY_MEASURED
 
 
 def test_p0_mount_block_is_the_knock_not_the_requirement():
@@ -500,4 +529,81 @@ def test_right_invariant_prior_is_the_identity_map_at_the_origin_at_rest():
     assert np.array_equal(right_invariant_from_plain(plain, np.zeros(3), np.zeros(3)), plain)
     with pytest.raises(ValueError):
         right_invariant_from_plain(np.eye(4), np.zeros(3), np.zeros(3))
+
+
+# ------------------------------------------------------------------------------------------
+# Bias hold in outages (D-115 §3)
+# ------------------------------------------------------------------------------------------
+
+
+def _outage_filter() -> InEKF:
+    """A filter with hold_biases=True, as replay_window sets it when
+    `eval.run.HOLD_BIASES_IN_OUTAGE` is on (off since D-130; the A/B is in its comment)."""
+    f = _aided_filter()
+    f.hold_biases = True
+    return f
+
+
+def test_hold_biases_freezes_bias_covariance_during_propagation():
+    """With hold_biases=True, the bias blocks of Q_c are zeroed before Van Loan, so the
+    diagonal uncertainty on b_g and b_a cannot grow through propagation alone."""
+    f = _outage_filter()
+    p_bg_before = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS].copy()
+    p_ba_before = f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS].copy()
+    for _ in range(50):
+        f.propagate(np.array([0.0, 0.0, 0.05]), np.array([0.1, 0.0, -9.80]), 0.1)
+    # Bias-block diagonals must not have grown: the STM (Phi) couples attitude into biases
+    # through Q_d, but with Q_c[6:12] zeroed the only contribution is Phi * P * Phi^T, which
+    # cannot grow the bias diagonals above their entry values because Phi's bias-to-bias
+    # sub-block is the identity (random walk model) and the cross-terms shrink it.
+    for ax in range(3):
+        assert f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS][ax, ax] <= p_bg_before[ax, ax] * 1.01
+        assert f.P[IDX_ACCEL_BIAS, IDX_ACCEL_BIAS][ax, ax] <= p_ba_before[ax, ax] * 1.01
+
+
+def test_hold_biases_zeroes_gain_rows_for_non_exempt_updates():
+    """An NHC update (no allow_bias) must not move b_g or b_a when hold_biases is True."""
+    f = _outage_filter()
+    bg_before = f.state.b_g.copy()
+    ba_before = f.state.b_a.copy()
+    # Force a large innovation so any gain leak would be visible.
+    f.state.v = np.array([15.0, 3.0, 0.5])  # sideways + vertical -> NHC fires
+    f.update_nhc()
+    assert np.array_equal(f.state.b_g, bg_before)
+    assert np.array_equal(f.state.b_a, ba_before)
+
+
+def test_zaru_is_exempt_from_bias_hold():
+    """ZARU directly observes b_g, so it must be allowed to update b_g even when hold_biases is
+    True. It must still not touch b_a (no exemption for IDX_ACCEL_BIAS)."""
+    f = _outage_filter()
+    # Set a small but measurable gyro-bias error. The innovation z = gyro - b_g_hat must pass
+    # the chi2 gate, whose acceptance region scales with sqrt(H P H^T + R). Inflate the gyro-
+    # bias covariance so the gate accepts the 0.005 rad/s innovation.
+    f.state.b_g = np.array([0.005, -0.003, 0.004])
+    f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS] = np.eye(3) * 0.01**2  # 0.01 rad/s sigma per axis
+    ba_before = f.state.b_a.copy()
+    bg_before = f.state.b_g.copy()
+    # Feed near-zero gyro as if the vehicle is still.
+    accepted = f.update_zaru(np.array([0.0001, -0.0001, 0.0002]))
+    assert accepted, "ZARU should accept a near-zero gyro measurement with inflated P"
+    # b_g must have moved toward zero (the measurement is near-zero, bias is 0.005).
+    assert not np.array_equal(f.state.b_g, bg_before), "ZARU must update b_g"
+    assert np.linalg.norm(f.state.b_g) < np.linalg.norm(bg_before), "b_g should shrink"
+    # b_a must be untouched.
+    assert np.array_equal(f.state.b_a, ba_before), "b_a must not be moved by ZARU"
+
+
+def test_hold_biases_off_allows_normal_bias_updates():
+    """Sanity check: with hold_biases=False, NHC *can* move biases through cross-correlations."""
+    f = _aided_filter()
+    assert not f.hold_biases
+    f.state.v = np.array([15.0, 3.0, 0.5])
+    bg_before = f.state.b_g.copy()
+    f.update_nhc()
+    # In the aided filter with cross-correlations, the Kalman gain's bias rows are generally
+    # non-zero, so at least one axis should have moved (unless the cross-correlation happens to
+    # be exactly zero, which _aided_filter's 20 propagation steps should prevent).
+    moved = not np.allclose(f.state.b_g, bg_before, atol=1e-15)
+    assert moved, "Without hold_biases, NHC should move b_g through cross-terms"
 

@@ -23,15 +23,19 @@ import pytest
 from core.reference.inekf import FilterConfig, InEKF
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence
 from eval.loaders.truth import TruthTrack, align_to_sequence
+from eval.metrics.core import OutageMetrics
 from eval.outages.inject import Outage
 from eval.run import (
     EPOCH_STRIDE,
     GATE1_LENGTH_S,
+    HOLD_BIASES_IN_OUTAGE,
     METHODS,
     SequenceUnusable,
+    WindowResult,
     assert_uniform_grid,
     evaluate_sequence,
     fix_arrays,
+    gate1_by_mount_class,
     gate1_ratio,
     imu_stream,
     initialise_filter,
@@ -340,6 +344,69 @@ def test_gate_1_reports_that_it_could_not_be_measured_rather_than_a_number():
     assert gate["measured"] is False
 
 
+def test_gate1_by_mount_class_key_set_and_membership():
+    """D-115: Gate 1 ratio partitioned by mount class.
+
+    Quiet mount carries S3a and S3c; vibrating mount carries the remaining LONG_OUTAGE stems
+    (such as Vw4). Verify key set is exactly {'quiet', 'vibrating'} and windows partition correctly.
+    """
+
+    def _synthetic_metric(drift: float) -> OutageMetrics:
+        return OutageMetrics(
+            cte_m=1.0,
+            crse_m=1.0,
+            drift_pct=drift,
+            yaw_rmse_rad=0.01,
+            yaw_max_rad=0.02,
+            distance_m=100.0,
+            duration_s=60.0,
+            n_epochs=60,
+        )
+
+    results = [
+        WindowResult("filter", "S3a", 60, 0, _synthetic_metric(12.0)),
+        WindowResult("gnss_available", "S3a", 60, 0, _synthetic_metric(2.0)),
+        WindowResult("filter", "Vw4", 60, 0, _synthetic_metric(40.0)),
+        WindowResult("gnss_available", "Vw4", 60, 0, _synthetic_metric(4.0)),
+    ]
+
+    by_mount = gate1_by_mount_class(results)
+    assert set(by_mount.keys()) == {"quiet", "vibrating"}
+
+    expected_fields = {
+        "filter_drift_pct_median",
+        "gnss_available_drift_pct_median",
+        "ratio",
+        "in_range",
+        "n_windows_filter",
+        "n_windows_gnss_available",
+    }
+    assert set(by_mount["quiet"].keys()) == expected_fields
+    assert set(by_mount["vibrating"].keys()) == expected_fields
+
+    # S3a lands in quiet
+    quiet = by_mount["quiet"]
+    assert quiet["n_windows_filter"] == 1
+    assert quiet["n_windows_gnss_available"] == 1
+    assert quiet["filter_drift_pct_median"] == pytest.approx(12.0)
+    assert quiet["gnss_available_drift_pct_median"] == pytest.approx(2.0)
+    assert quiet["ratio"] == pytest.approx(6.0)
+
+    # Vw4 lands in vibrating
+    vibrating = by_mount["vibrating"]
+    assert vibrating["n_windows_filter"] == 1
+    assert vibrating["n_windows_gnss_available"] == 1
+    assert vibrating["filter_drift_pct_median"] == pytest.approx(40.0)
+    assert vibrating["gnss_available_drift_pct_median"] == pytest.approx(4.0)
+    assert vibrating["ratio"] == pytest.approx(10.0)
+
+    # Also check gate1_ratio passes it through
+    by_method = summarise_by_method_and_length(results)
+    gate = gate1_ratio(by_method, results=results)
+    assert "by_mount_class" in gate
+    assert gate["by_mount_class"] == by_mount
+
+
 def test_artefacts_carry_the_stamp_inside_the_file_not_in_its_name(tmp_path):
     """H-5. A filename is renamed, copied, and pasted into a slide, and the provenance is lost at
     the first of those."""
@@ -353,6 +420,9 @@ def test_artefacts_carry_the_stamp_inside_the_file_not_in_its_name(tmp_path):
     assert written["crse_convention"] == "sum_abs"
     assert written["n_windows"] == len(results)
     assert summary["gate1"]["measured"] is True
+    # D-130: the artefact says which bias-hold variant produced it, and the value is the
+    # module constant `replay_window` reads -- never a per-call flag.
+    assert written["biases_held_in_outage"] is HOLD_BIASES_IN_OUTAGE
 
     csv_text = (tmp_path / "windows.csv").read_text(encoding="utf-8")
     assert csv_text.startswith(f"# {stamp.caption()}")
