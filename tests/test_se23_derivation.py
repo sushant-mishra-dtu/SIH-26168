@@ -415,6 +415,20 @@ def test_van_loan_phi_matches_expm():
     phi, _ = van_loan(a, _gqg(), 0.1)
     assert np.max(np.abs(phi - expm_series(a * 0.1))) < 1e-12
 
+def test_expm_series_rejects_non_finite_input_instead_of_overflowing():
+    """A diverged filter state can hand expm_series an inf entry. log2(inf) -> inf and
+    int(ceil(inf)) raises OverflowError, which is an unhelpful crash site; a ValueError that
+    names the problem is easier to diagnose than a numpy internals traceback."""
+    m = a_ri(REF_R, REF_V, REF_P).copy()
+    m[0, 0] = np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        expm_series(m)
+
+    m_nan = a_ri(REF_R, REF_V, REF_P).copy()
+    m_nan[1, 2] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        expm_series(m_nan)
+
 
 def test_the_cheap_qd_shortcut_is_measurably_wrong():
     """D-031. The shortcut is not merely inelegant -- at the dt we actually run it misallocates
