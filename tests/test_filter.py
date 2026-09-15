@@ -715,12 +715,66 @@ def test_hold_biases_off_allows_normal_bias_updates():
     """Sanity check: with hold_biases=False, NHC *can* move biases through cross-correlations."""
     f = _aided_filter()
     assert not f.hold_biases
+    assert not f.gyro_bias_direct_only, "the filter's default: every update; D-133 is the harness's"
     f.state.v = np.array([15.0, 3.0, 0.5])
     bg_before = f.state.b_g.copy()
     f.update_nhc()
     # In the aided filter with cross-correlations, the Kalman gain's bias rows are generally
     # non-zero, so at least one axis should have moved (unless the cross-correlation happens to
-    # be exactly zero, which _aided_filter's 20 propagation steps should prevent).
+    # be exactly zero, which _aided_filter's 20 propagation steps should prevent). This is the
+    # mechanism `gyro_bias_direct_only` switches off in the aided pass (D-133): it stays true of
+    # the filter, and the harness's policy is what changes.
     moved = not np.allclose(f.state.b_g, bg_before, atol=1e-15)
     assert moved, "Without hold_biases, NHC should move b_g through cross-terms"
+
+
+# ------------------------------------------------------------------------------------------
+# The gyro bias moves only under its direct observation (D-133)
+# ------------------------------------------------------------------------------------------
+
+
+def test_gyro_bias_direct_only_leaves_b_g_to_zaru_and_q_alone():
+    """D-133. With `gyro_bias_direct_only` the position, Doppler-velocity, NHC and ZUPT updates
+    leave `b_g` and its covariance block exactly where they were -- their gain has no gyro-bias
+    rows -- while `b_a` still moves through the cross-terms (this is not `hold_biases`), the
+    block still grows through `Q` in propagation (also not `hold_biases`), and ZARU, which passes
+    `allow_bias=(IDX_GYRO_BIAS,)`, still corrects it. Measured reason, TRAIN S1 against the
+    truth-standstill bias: bias-block NEES 27.3 with every update allowed, 2.1 with this."""
+    f = _aided_filter()
+    f.gyro_bias_direct_only = True
+    assert not f.hold_biases
+    f.state.v = np.array([15.0, 3.0, 0.5])  # sideways + vertical -> NHC has an innovation
+    bg0 = f.state.b_g.copy()
+    ba0 = f.state.b_a.copy()
+    p_bg0 = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS].copy()
+    p_cross0 = f.P[IDX_GYRO_BIAS, IDX_ATTITUDE].copy()
+
+    f.update_nhc()
+    assert np.array_equal(f.state.b_g, bg0), "NHC may not move b_g"
+    assert np.array_equal(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], p_bg0), "nor its block"
+    assert not np.allclose(f.state.b_a, ba0, atol=1e-15), "b_a still moves: only the gyro rows"
+    assert not np.array_equal(f.P[IDX_GYRO_BIAS, IDX_ATTITUDE], p_cross0), (
+        "the cross-terms are updated: the Joseph form keeps the covariance exact for this gain"
+    )
+    f.update_gnss_velocity(f.state.v[:2] + np.array([2.0, -1.0]), np.eye(2) * 0.25)
+    assert np.array_equal(f.state.b_g, bg0), "the Doppler velocity may not move b_g"
+    assert f.update_gnss(f.state.p + np.array([3.0, -2.0, 0.0]), np.eye(3) * 9.0, gate=False)
+    assert np.array_equal(f.state.b_g, bg0), "the position fix may not move b_g"
+    f.update_zupt()
+    assert np.array_equal(f.state.b_g, bg0), "ZUPT may not move b_g"
+    assert np.array_equal(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], p_bg0)
+
+    for _ in range(50):
+        f.propagate(np.array([0.0, 0.0, 0.05]), np.array([0.1, 0.0, -9.80]), 0.1)
+    p_bg1 = f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS]
+    assert np.all(np.diag(p_bg1) > np.diag(p_bg0)), (
+        "Q is untouched: the block keeps growing at gyro_bias_rw between stops"
+    )
+
+    f.state.b_g = np.array([0.005, -0.003, 0.004])
+    f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS] = np.eye(3) * 0.01**2
+    assert f.update_zaru(np.array([0.0001, -0.0001, 0.0002]))
+    assert np.linalg.norm(f.state.b_g) < np.linalg.norm([0.005, -0.003, 0.004]), (
+        "ZARU observes b_g directly and is the one update that may move it"
+    )
 

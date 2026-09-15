@@ -522,6 +522,7 @@ def run_filter(
     if seq is not None:
         cfg = in_motion_config(cfg, gyro, accel, dt, upto=min(n, WARMUP_S * SAMPLE_RATE_HZ))
     f = InEKF(cfg)
+    f.gyro_bias_direct_only = GYRO_BIAS_DIRECT_ONLY
 
     # **Before the first propagate, not after it.** See `initialise_filter`: starting from
     # R = R_sv = I integrates gravity into the horizontal axes and the run diverges (D-094).
@@ -673,6 +674,23 @@ HOLD_BIASES_IN_OUTAGE = False
 #: per call, and only with a DECISION_LOG row that carries both sweeps.
 ZARU_SIGMA_FROM_WINDOW = True
 
+#: Whether the gyro bias is moved only by the update that observes it directly, ZARU
+#: (`InEKF.gyro_bias_direct_only`, D-133), or by every update through the covariance's
+#: cross-correlations, which is bit-for-bit the pre-D-133 filter. Measured on TRAIN S1 against the
+#: truth-standstill bias at its four still stops: the filter's bias block carried a NEES of 27.3
+#: (3.0 expected; error / sigma 4.1 on the worst axis) with every update allowed, because at a 9 s
+#: fix cadence the Doppler velocity, NHC and position updates blame `b_g` for tilt and heading
+#: error they cannot separate from it -- the estimate stepped 0.030 deg/s per 30 s against the
+#: 0.0097 `gyro_bias_rw` allows and the 0.009-0.02 the bias actually walks between S1's stops.
+#: With only ZARU allowed the NEES is 2.1, the step 0.008-0.015 deg/s per 30 s, and on S3a the
+#: last-ten-minute |b_g| falls from [0.06, 0.23, 0.03] to [0.01, 0.006, 0.014] deg/s. Applied in
+#: the aided pass and in every replayed window alike (`run_filter`, `replay_window`), and it
+#: travels in `summary.json` as `gyro_bias_direct_only` so an artefact says which variant
+#: produced it; flip it here, never per call, and only with a DECISION_LOG row that carries both
+#: sweeps. A stem with no detected stop never estimates `b_g` under this policy; its block grows
+#: at `gyro_bias_rw` and says so.
+GYRO_BIAS_DIRECT_ONLY = True
+
 
 def _step_constraints(
     f: InEKF, k: int, gyro: np.ndarray, accel: np.ndarray, cfg: FilterConfig, window: int,
@@ -778,6 +796,7 @@ def replay_window(
     """
     f = copy.deepcopy(snapshot.filter)
     f.hold_biases = HOLD_BIASES_IN_OUTAGE
+    f.gyro_bias_direct_only = GYRO_BIAS_DIRECT_ONLY
     cfg = f.cfg
     window = max(1, int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ)))
     n_rows = outage.n_samples + 1
@@ -1749,6 +1768,8 @@ def write_artefacts(
         "biases_held_in_outage": HOLD_BIASES_IN_OUTAGE,
         # Whether ZARU was tested against the stop's own gyro noise (D-131) or the desk figure.
         "zaru_sigma_from_window": ZARU_SIGMA_FROM_WINDOW,
+        # Whether b_g moved only under ZARU (`GYRO_BIAS_DIRECT_ONLY`, D-133).
+        "gyro_bias_direct_only": GYRO_BIAS_DIRECT_ONLY,
         "gate1": gate1_ratio(by_method, results=results),
         "trajectories": sorted(replay or {}),
         "dropped_windows": [d.as_row() for d in dropped],
