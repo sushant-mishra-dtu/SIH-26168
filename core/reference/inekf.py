@@ -1126,6 +1126,19 @@ class InEKF:
         #: biases (ZUPT, NHC) cannot perturb them. The P bias blocks therefore stay at their
         #: entry value.
         self.hold_biases: bool = False
+        #: When True, `b_g` moves only under an update that observes it directly -- ZARU, which
+        #: passes `allow_bias=(IDX_GYRO_BIAS,)` -- and every other update's Kalman gain has its
+        #: gyro-bias rows zeroed (D-133). Unlike `hold_biases` nothing is done to `Q`: the block's
+        #: uncertainty keeps growing at `gyro_bias_rw` between stops, its cross-terms keep
+        #: updating, and the next ZARU is weighed against an honest covariance. Why: at a 9 s fix
+        #: cadence the Doppler velocity, NHC and position updates cannot separate tilt, heading
+        #: and gyro bias, and through the cross-correlations they moved `b_g` 2-3x faster than
+        #: the bias walks while the block claimed 0.03 deg/s -- measured on TRAIN S1 against the
+        #: truth-standstill bias, a bias-block NEES of 27.3 against 3.0 expected, and 2.1 with
+        #: this set. The harness sets it from `eval.run.GYRO_BIAS_DIRECT_ONLY`; it is not a
+        #: `FilterConfig` field because it is a policy about which updates are believed, not a
+        #: sensor parameter.
+        self.gyro_bias_direct_only: bool = False
 
     def propagate(self, gyro: np.ndarray, accel: np.ndarray, dt: float) -> None:
         """IMU propagation. Always runs, GNSS or not -- this is the spine.
@@ -1223,6 +1236,11 @@ class InEKF:
                 gain[IDX_GYRO_BIAS, :] = 0.0
             if IDX_ACCEL_BIAS not in allow_bias:
                 gain[IDX_ACCEL_BIAS, :] = 0.0
+        if self.gyro_bias_direct_only and IDX_GYRO_BIAS not in allow_bias:
+            # A zeroed gain row is a legitimate (sub-optimal) linear estimator, and the Joseph
+            # form below gives its exact covariance: the b_g block is left where propagation put
+            # it while its cross-terms with the corrected states are updated (D-133).
+            gain[IDX_GYRO_BIAS, :] = 0.0
         delta = gain @ z
 
         st = self.state

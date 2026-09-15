@@ -28,6 +28,7 @@ from eval.outages.inject import Outage
 from eval.run import (
     EPOCH_STRIDE,
     GATE1_LENGTH_S,
+    GYRO_BIAS_DIRECT_ONLY,
     HOLD_BIASES_IN_OUTAGE,
     METHODS,
     ZARU_SIGMA_FROM_WINDOW,
@@ -86,8 +87,26 @@ def synthetic_drive(
     fix_interval_s: float = 9.0,
     name: str = "SYNTH",
     t_rel_start_s: float = 0.0,
+    road_floor_mps2: float = 0.6,
 ):
     """A level vehicle driving due north at a constant speed, as a `Sequence` + `TruthTrack` pair.
+
+    `road_floor_mps2` is a vertical 3 Hz vibration of that amplitude on the accelerometer, the
+    floor every real `S-` stream carries while moving (S3a: 0.5 m/s^2 per sample, white; Vta1a
+    0.27). Without it the IMU is *silent* at 15 m/s -- zero gyro, zero accelerometer variance --
+    and `is_stationary` reads every sample as a standstill; only the state veto in
+    `_step_constraints` then stands between the filter and a ZUPT of a moving car, and it gave way
+    at 95 s (the filter sat at ~100 % drift on this fixture for its whole life) or, once the
+    gyro-bias block carried an honest covariance (D-133), at 54 s with a 9 degree tilt and a
+    runaway. Mean per-axis variance 0.06 (m/s^2)^2, three times `zupt_accel_var_thresh`, so the
+    detector never fires here, as it never fires on a moving car. Vertical only, phased on the
+    sample index rather than `t_rel`, and zero-mean over every 1 s, so the closed forms this
+    fixture pins (the 176 m strapdown, the late-clock equality) are untouched. A seeded 0.02
+    m/s^2 white floor rides on all three axes with it: `level_and_mount` reads "up" from the
+    accelerometer mean over 299 samples, which leaves a sliver of the vibration in the horizontal
+    plane as a perfect line, and a PCA on a perfect line has a zero second eigenvalue and a zero
+    mount spread, which `P0` rightly refuses. 1 % of the strapdown closed form; identical for
+    every `t_rel_start_s`, so the late-clock equality still holds to 1e-3.
 
     The two carry *different clocks on purpose*, which is the property most worth testing: the
     `S-` side counts milliseconds from the start of the recording and the `V-` side counts seconds
@@ -107,6 +126,9 @@ def synthetic_drive(
     truth = TruthTrack(name=name, t_s=t_tod, lat=lat, lon=lon, source="synthetic (tests)")
 
     accel = np.tile([accel_bias_x, 0.0, -G], (n, 1))
+    accel[:, 2] += road_floor_mps2 * np.sin(2.0 * np.pi * 3.0 * np.arange(n) / SAMPLE_RATE_HZ)
+    if road_floor_mps2 > 0:
+        accel += np.random.default_rng(0).normal(0.0, 0.02, (n, 3))
     gyro = np.zeros((n, 3))
     imu = pd.DataFrame(
         {
@@ -179,8 +201,8 @@ def test_an_excerpt_whose_clock_opens_late_is_graded_against_the_road_it_drove()
     # `start`, because it is the same road either way. The absolute bound is chosen against the
     # failure it has to catch -- addressing the window 1118 s early points it at a stretch of road
     # 16.8 km away, which does not perturb a drift figure, it replaces it. The methods differ
-    # hugely from each other here (the filter has no speed input on this fixture and sits at
-    # ~100 %, the strapdown is exact at ~1e-9 %), so they are compared like for like.
+    # hugely from each other here (the filter has no speed input on this fixture, the strapdown
+    # is exact at ~1e-9 %), so they are compared like for like.
     assert [r.method for r in results] == [r.method for r in at_zero]
     for late, zero in zip(results, at_zero, strict=True):
         assert late.metrics.drift_pct == pytest.approx(zero.metrics.drift_pct, abs=1e-3)
@@ -324,6 +346,52 @@ def test_gnss_is_applied_outside_the_outage_and_never_inside_it():
     assert open_run.n_gnss_applied + open_run.n_gnss_rejected == idx.size
 
 
+def test_the_aided_pass_and_every_replayed_window_read_the_gyro_bias_policy_from_the_module(
+    monkeypatch,
+):
+    """D-133 wiring. `run_filter` sets `InEKF.gyro_bias_direct_only` from
+    `eval.run.GYRO_BIAS_DIRECT_ONLY` on the filter it builds, and `replay_window` sets it again on
+    the copy it dead-reckons from -- the module constant, read at call time, never a per-call
+    flag -- so the aided pass and the windows replayed from it cannot run under different
+    policies, and an artefact's `gyro_bias_direct_only` describes both."""
+    import copy
+
+    import eval.run as run
+
+    seq, truth = synthetic_drive(seconds=200.0)
+    gyro, accel, t_rel = imu_stream(seq)
+    dt = assert_uniform_grid(seq.name, t_rel)
+    idx, ned, sigma = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    n = gyro.shape[0]
+    outage = Outage(sequence=seq.name, start_idx=600, end_idx=700, length_s=10)
+    replayed: list[InEKF] = []
+    real_deepcopy = copy.deepcopy
+
+    def capturing(obj, *a, **kw):
+        out = real_deepcopy(obj, *a, **kw)
+        if isinstance(out, InEKF):
+            replayed.append(out)
+        return out
+
+    for policy in (True, False):
+        monkeypatch.setattr(run, "GYRO_BIAS_DIRECT_ONLY", policy)
+        aided = run.run_filter(
+            gyro, accel, dt, idx, ned, sigma, np.ones(n, dtype=bool), snapshot_at={600}
+        )
+        assert aided.snapshots[600].filter.gyro_bias_direct_only is policy
+
+        replayed.clear()
+        monkeypatch.setattr(copy, "deepcopy", capturing)
+        # The snapshot was taken under `policy`; flip the constant to show the window reads it
+        # afresh rather than inheriting whatever the snapshot carried.
+        monkeypatch.setattr(run, "GYRO_BIAS_DIRECT_ONLY", not policy)
+        run.replay_window(aided.snapshots[600], gyro, accel, dt, outage, name=seq.name)
+        monkeypatch.setattr(copy, "deepcopy", real_deepcopy)
+        assert replayed and replayed[0].gyro_bias_direct_only is (not policy)
+        assert replayed[0].hold_biases is HOLD_BIASES_IN_OUTAGE
+        assert aided.snapshots[600].filter.gyro_bias_direct_only is policy, "snapshot untouched"
+
+
 def test_the_gate_1_ratio_carries_the_window_count_it_rests_on():
     """A ratio quoted without its sample size is the number a judge asks about second."""
     seq, truth = synthetic_drive(seconds=200.0)
@@ -426,6 +494,9 @@ def test_artefacts_carry_the_stamp_inside_the_file_not_in_its_name(tmp_path):
     assert written["biases_held_in_outage"] is HOLD_BIASES_IN_OUTAGE
     assert written["zaru_sigma_from_window"] is ZARU_SIGMA_FROM_WINDOW, (
         "the artefact says which ZARU R produced it (D-131), as it does for the bias hold"
+    )
+    assert written["gyro_bias_direct_only"] is GYRO_BIAS_DIRECT_ONLY, (
+        "and whether b_g moved only under ZARU (D-133)"
     )
 
     csv_text = (tmp_path / "windows.csv").read_text(encoding="utf-8")

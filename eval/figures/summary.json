@@ -1,5 +1,5 @@
 {
-  "stamp": "commit dd5e3ff | seed 0 | 2026-09-15T12:38:32Z",
+  "stamp": "commit 403a24a | seed 0 | 2026-09-15T17:01:20Z",
   "reproducible": true,
   "crse_convention": "sum_abs",
   "n_windows": 6783,
@@ -200,6 +200,7 @@
   },
   "biases_held_in_outage": false,
   "zaru_sigma_from_window": true,
+  "gyro_bias_direct_only": false,
   "gate1": {
     "measured": true,
     "length_s": 60,
