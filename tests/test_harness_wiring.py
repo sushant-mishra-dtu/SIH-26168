@@ -30,6 +30,7 @@ from eval.run import (
     GATE1_LENGTH_S,
     HOLD_BIASES_IN_OUTAGE,
     METHODS,
+    ZARU_SIGMA_FROM_WINDOW,
     SequenceUnusable,
     WindowResult,
     assert_uniform_grid,
@@ -423,6 +424,9 @@ def test_artefacts_carry_the_stamp_inside_the_file_not_in_its_name(tmp_path):
     # D-130: the artefact says which bias-hold variant produced it, and the value is the
     # module constant `replay_window` reads -- never a per-call flag.
     assert written["biases_held_in_outage"] is HOLD_BIASES_IN_OUTAGE
+    assert written["zaru_sigma_from_window"] is ZARU_SIGMA_FROM_WINDOW, (
+        "the artefact says which ZARU R produced it (D-131), as it does for the bias hold"
+    )
 
     csv_text = (tmp_path / "windows.csv").read_text(encoding="utf-8")
     assert csv_text.startswith(f"# {stamp.caption()}")
@@ -729,9 +733,38 @@ def test_in_motion_config_raises_q_to_the_stream_and_never_lowers_it():
     loud = in_motion_config(cfg, loud_gyro, loud_accel, dt, upto=300)
     assert loud.gyro_arw == pytest.approx(np.deg2rad(12.0) * np.sqrt(0.1), rel=0.15)
     assert loud.accel_vrw == pytest.approx(2.3 * np.sqrt(0.1), rel=0.15)
-    assert loud.zaru_sigma == cfg.zaru_sigma, "ZARU's R is the standstill figure and stays"
+    assert loud.zaru_sigma == cfg.zaru_sigma, (
+        "ZARU's R is a standstill figure and never the in-motion level: the config value is the "
+        "Allan floor, and `_step_constraints` reads the stop's own level above it (D-131)"
+    )
     assert cfg.gyro_arw == FilterConfig().gyro_arw, "the input config is not modified"
     assert in_motion_config(cfg, loud_gyro, loud_accel, dt, upto=3) is cfg, "too short: unchanged"
+
+
+def test_step_constraints_tests_zaru_against_the_stops_own_gyro_level():
+    """D-131 wiring. At a detected stop the harness reads ZARU's sigma from the detector's own
+    window (`zaru_sigma_from_window`) and passes it to `update_zaru`; the config value is only
+    the floor. On a synthetic standstill carrying 1 deg/s of idle vibration per axis -- S3a's
+    level -- the desk figure refused 98.8 % of the offered ZARUs (D-130, 1,356 of 1,372); the
+    window figure accepts them, and the sigma the pass used is reported next to the counts."""
+    from eval.run import _mean_zaru_sigma, _step_constraints
+
+    rng = np.random.default_rng(7)
+    n = 300
+    level = np.deg2rad(1.0)
+    gyro = np.deg2rad([0.1, -0.05, 0.15]) + rng.normal(0.0, level, (n, 3))
+    accel = np.array([0.0, 0.0, -G]) + rng.normal(0.0, 0.03, (n, 3))  # var 9e-4 << 0.02
+    cfg = FilterConfig()
+    f = InEKF(cfg)
+    window = int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ))
+    counts: dict[str, float] = dict(zupt=0, zaru_ok=0, zaru_no=0, nhc=0)
+    for k in range(n):
+        _step_constraints(f, k, gyro, accel, cfg, window, counts)
+    offered = counts["zaru_ok"] + counts["zaru_no"]
+    assert counts["zupt"] == offered > 100, "ZUPT and ZARU are offered together (D-004)"
+    assert counts["zaru_ok"] / offered > 0.95, f"{counts['zaru_no']} of {offered} refused"
+    assert _mean_zaru_sigma(counts) == pytest.approx(level, rel=0.2)
+    assert np.isnan(_mean_zaru_sigma(dict(zaru_ok=0, zaru_no=0))), "no stop: NaN, not 0"
 
 
 def test_the_doppler_velocity_is_along_and_across_the_course():

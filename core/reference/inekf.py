@@ -316,6 +316,16 @@ class FilterConfig:
     # (D-056). Derived here rather than typed, so it cannot drift away from `gyro_arw`; the
     # relationship is pinned by a test. The 1.0e-3 it replaced predated the Allan run; D-045's
     # 1.2997e-3 was 1.9x this, read off segments that still held the stop's settle (D-120).
+    #
+    # **This is the floor, not the figure the harness tests against (D-131).** The Allan run
+    # was a phone on a desk; the same phone at rest in a car carries 0.3-1.4 deg/s of idle
+    # vibration per sample (TRAIN S1: innovation std [0.72, 0.38, 0.60] deg/s per axis at the
+    # 3,066 samples the stop detector fired on), 10-35x this in sigma, and against R = (0.039
+    # deg/s)^2 the chi-squared gate refused 1,356 of S3a's 1,372 offered ZARUs (D-130). The
+    # caller reads the stop's own level from the detector window (`zaru_sigma_from_window`) and
+    # passes it to `update_zaru(gyro, sigma=)`; this value is what that reading is floored at,
+    # and what `update_zaru` uses when no sigma is passed (the NEES scenario, whose simulated
+    # sensor *is* the Allan sensor).
     zaru_sigma: float = GYRO_ARW_MEASURED * _SQRT_IMU_RATE_HZ  # rad/s == 6.894e-4 at 10 Hz
 
     #: `S-` stream sample rate. Measured, not nominal: D-047 confirmed median dt = 100.0 ms from
@@ -1009,6 +1019,33 @@ def is_stationary(
     return accel_var < cfg.zupt_accel_var_thresh and gyro_norm < cfg.zupt_gyro_norm_thresh
 
 
+def zaru_sigma_from_window(gyro_window: np.ndarray, cfg: FilterConfig) -> np.ndarray:
+    """Per-axis ZARU measurement sigma, read from the stop detector's own window (D-131).
+
+    At a standstill the window is bias plus white noise, so its per-axis sample standard
+    deviation (ddof = 1) is the noise ZARU's innovation `z = w~ - b_g_hat` carries -- the stop's
+    own figure, read causally from the same 2 s `is_stationary` fired on, never a constant.
+    Floored at `cfg.zaru_sigma`, the Allan run's desk figure: a stream cannot be quieter than
+    its sensor, and a quantised gyro that repeats a value at rest would otherwise report zero.
+
+    Why not a constant, measured on TRAIN against the paired `V-` truth (D-131): the level a
+    phone shows at rest in a car is 0.3-1.4 deg/s per axis and it is not one number. Over
+    every >= 5 s truth stop the worst-axis white level reads 0.77 deg/s on S1, 5.1 on S4, 5.6
+    on M and 30 on S2 -- on M and S2 the phone is not still at its truth stops at all and the
+    detector fires on 0 % of them -- while at the samples the detector *does* fire on it reads
+    0.70 on S1 and 0.70 on S4. A window of 20 samples estimates its own sigma to about 16 %:
+    on S1 the window figure is [0.70, 0.35, 0.59] deg/s per axis against an innovation std of
+    [0.72, 0.38, 0.60] at the same 3,066 samples, and the gate then accepts 99.4 % of them
+    (0.5 % under the desk figure). Why not the in-motion level `in_motion_config` reads on the
+    warm-up: it is 1.52 deg/s on S1 and 2.04 on S4, 2-3x the standstill level -- a different
+    physical quantity, and R four to nine times too wide in variance.
+    """
+    w = np.asarray(gyro_window, dtype=float)
+    if w.ndim != 2 or w.shape[1] != 3 or w.shape[0] < 2:
+        raise ValueError(f"expected an (n >= 2, 3) gyro window, got {w.shape}")
+    return np.maximum(np.std(w, axis=0, ddof=1), float(cfg.zaru_sigma))
+
+
 def nhc_is_valid(
     speed_mps: float, yaw_rate: float, lateral_accel: float, cfg: FilterConfig
 ) -> bool:
@@ -1341,7 +1378,9 @@ class InEKF:
             np.eye(3) * self.cfg.zupt_sigma**2,
         )
 
-    def update_zaru(self, gyro: np.ndarray) -> bool:
+    def update_zaru(
+        self, gyro: np.ndarray, sigma: np.ndarray | float | None = None
+    ) -> bool:
         """Zero-angular-rate update, chi-squared gated. Returns whether it was applied.
 
         Observes gyro bias -- the dominant error term. Offered at *every* detected stop; the
@@ -1352,6 +1391,25 @@ class InEKF:
         expands to `-db_g` and gives `H_zaru = [0, 0, 0, -I, 0, 0]`. A **direct** observation of
         `b_g` -- no coupling, no integration, no waiting. Compare section 7.1, where yaw is only
         reachable through a second-order path; this is why ZARU matters more for yaw than NHC.
+
+        **`sigma` is the gyro white noise at *this* stop, per axis** (D-131): the caller reads it
+        from the detector's own window with `zaru_sigma_from_window` and passes it here, so
+        `R = diag(sigma^2)`. It is floored at `cfg.zaru_sigma`, the Allan run's desk figure,
+        which is also what runs when nothing is passed -- the NEES scenario, whose simulated
+        sensor is that sensor. Why the desk figure alone was wrong, measured on the real
+        stream: at rest in a car the same phone carries 0.3-1.4 deg/s of idle vibration per
+        sample (S3a's aided pass: per-axis std [0.33, 1.31, 1.39] deg/s at its truth stops),
+        so against R = (0.039 deg/s)^2 the innovation's chi-squared distance sat in the
+        hundreds and the gate refused **1,356 of the 1,372 stops the detector found on S3a**
+        (241 of 1,524 on S3c, 2 of 739 on Vw2 -- D-130); the bias the whole budget rests on was
+        detected and still not observed. With the window's own figure the gate accepts 99.4 % of
+        the 3,066 detector-positive standstill samples on TRAIN S1 (0.5 % before), and the
+        pull-away samples it now admits -- the trailing window's lag after the truth says
+        moving, 0.2-2.7 deg/s, 61 samples over 23 stops -- shift the admitted mean by
+        <= 0.008 deg/s against the standstill bias, inside ERROR_BUDGET section 3.2's operating
+        row. D-057's synthetic 2.9 deg/s pull-away sample is still refused at S1's level (0.7
+        deg/s: chi-squared 15.5) and is admitted at S3a's (1.4 deg/s: 4.1); on the real stems no
+        run-out sample reached 2.9 deg/s.
 
         **The gate is the fix for D-053** (superseded by D-057), and it is not defensive
         programming -- it was measured. `is_stationary` averages over a 0.5 s window, so at the
@@ -1381,10 +1439,20 @@ class InEKF:
         gyro = np.asarray(gyro, dtype=float).ravel()
         if gyro.shape != (3,):
             raise ValueError(f"expected a 3-vector gyro sample, got {gyro.shape}")
+        floor = float(self.cfg.zaru_sigma)
+        if sigma is None:
+            sig = np.full(3, floor)
+        else:
+            sig = np.asarray(sigma, dtype=float).ravel()
+            if sig.shape == (1,):
+                sig = np.full(3, sig[0])
+            if sig.shape != (3,) or not np.isfinite(sig).all():
+                raise ValueError(f"expected a finite scalar or 3-vector ZARU sigma, got {sigma!r}")
+            sig = np.maximum(sig, floor)
         h = np.zeros((3, ERROR_STATE_DIM))
         h[:, IDX_GYRO_BIAS] = -np.eye(3)
         z = gyro - self.state.b_g
-        r = np.eye(3) * self.cfg.zaru_sigma**2
+        r = np.diag(sig**2)
         if not chi2_gate(z, h @ self.P @ h.T + r, self.cfg.chi2_gate_3dof):
             return False
         self._apply_update(z, h, r, allow_bias=(IDX_GYRO_BIAS,))

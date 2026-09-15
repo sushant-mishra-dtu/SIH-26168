@@ -31,6 +31,7 @@ from core.reference.inekf import (
     nhc_is_valid,
     right_invariant_from_plain,
     skew,
+    zaru_sigma_from_window,
 )
 
 CFG = FilterConfig()
@@ -346,9 +347,99 @@ def test_zaru_at_a_false_stop_is_rejected_and_changes_nothing():
 
 def test_zaru_sigma_is_derived_from_the_allan_run_not_typed():
     """`zaru_sigma` is the gyro white noise per sample, so it is `gyro_arw * sqrt(rate)` and not a
-    free parameter. Derived in `FilterConfig` so the two cannot drift apart (D-056)."""
+    free parameter. Derived in `FilterConfig` so the two cannot drift apart (D-056). Since D-131
+    it is the *floor* under the stop's own level (`zaru_sigma_from_window`), and what
+    `update_zaru` uses when no sigma is passed; the identity and the value are unchanged."""
     assert CFG.zaru_sigma == pytest.approx(CFG.gyro_arw * np.sqrt(CFG.imu_rate_hz), rel=1e-12)
     assert CFG.zaru_sigma == pytest.approx(6.894e-4, abs=1e-6)
+
+
+def test_zaru_sigma_from_window_is_the_stops_own_noise_floored_at_the_allan_figure():
+    """D-131. At a standstill the detector's window is bias plus white noise, so its per-axis
+    sample std is the noise ZARU's innovation carries. Measured on TRAIN S1 at the 3,066
+    detector-positive standstill samples: innovation std [0.72, 0.38, 0.60] deg/s per axis, the
+    window estimate [0.70, 0.35, 0.59]. The Allan desk figure is the floor, so a quantised gyro
+    that repeats a value at rest reports the sensor's noise rather than zero."""
+    rng = np.random.default_rng(11)
+    sigma = np.deg2rad([0.7, 0.35, 0.6])
+    bias = np.deg2rad([0.05, -0.06, 0.16])
+    window = bias + rng.normal(0.0, 1.0, (4000, 3)) * sigma
+    assert zaru_sigma_from_window(window, CFG) == pytest.approx(sigma, rel=0.05)
+    assert zaru_sigma_from_window(window[:20], CFG) == pytest.approx(sigma, rel=0.5)
+    still = np.tile(bias, (20, 1))
+    assert zaru_sigma_from_window(still, CFG) == pytest.approx(np.full(3, CFG.zaru_sigma))
+    for bad in (np.zeros((1, 3)), np.zeros((20, 2)), np.zeros(20)):
+        with pytest.raises(ValueError, match="gyro window"):
+            zaru_sigma_from_window(bad, CFG)
+
+
+def test_zaru_against_the_stops_own_level_admits_the_idle_vibration_the_desk_figure_refused():
+    """The counter D-131 fixes: S3a's aided pass offered 1,372 stops and the gate refused 1,356,
+    because a ~1 deg/s idle-vibration sample was tested against R = (0.039 deg/s)^2 (D-130).
+    The same sample against the window's own sigma is inside the gate. The sigma is floored at
+    the desk figure, a scalar is accepted, and a malformed one is refused loudly.
+
+    D-057's synthetic pull-away sample (0.05 rad/s of yaw at the first moving step) is still
+    refused at TRAIN S1's level, 0.7 deg/s (chi-squared 15.5 against 11.345); at S3a's 1.4 deg/s
+    it would pass (4.1). On the real stems no run-out sample reached 2.9 deg/s -- they measure
+    0.2-2.7 deg/s and cost <= 0.008 deg/s of admitted mean on S1 -- so the gate is kept and the
+    row records what it admits.
+    """
+    rng = np.random.default_rng(3)
+    level = np.deg2rad([0.33, 1.3, 1.4])  # S3a's standstill level, a diagnostic figure
+    window = rng.normal(0.0, 1.0, (20, 3)) * level
+    idle = np.deg2rad([0.2, -1.1, 1.2])  # one idle sample, |z| = 1.6 deg/s
+    assert InEKF().update_zaru(idle) is False, "the desk figure refuses idle vibration"
+    f = InEKF()
+    assert f.update_zaru(idle, sigma=zaru_sigma_from_window(window, CFG)) is True
+    assert not np.array_equal(f.state.b_g, np.zeros(3)), "an applied ZARU moves b_g"
+    assert InEKF().update_zaru(idle, sigma=np.deg2rad(1.4)) is True, "a scalar sigma is accepted"
+
+    # the floor: a sigma below the desk figure is raised to it, so it changes nothing
+    f_floor, f_default = InEKF(), InEKF()
+    tiny = np.array([2.0e-4, -1.0e-4, 3.0e-4])
+    assert f_floor.update_zaru(tiny, sigma=np.full(3, 1e-9)) is True
+    assert f_default.update_zaru(tiny) is True
+    assert np.array_equal(f_floor.state.b_g, f_default.state.b_g)
+    assert np.array_equal(f_floor.P, f_default.P)
+
+    pull_away = np.array([0.0, 0.0, 0.05])
+    assert InEKF().update_zaru(pull_away, sigma=np.deg2rad(0.7)) is False
+    assert InEKF().update_zaru(pull_away, sigma=np.deg2rad(1.4)) is True
+
+    for bad in (np.zeros(2), np.array([np.nan, 1.0, 1.0]), np.zeros((3, 3)) + 1.0):
+        with pytest.raises(ValueError, match="ZARU sigma"):
+            InEKF().update_zaru(idle, sigma=bad)
+
+
+def test_zaru_with_the_windows_own_sigma_is_consistent_on_a_vibrating_standstill():
+    """The consistency argument for D-131, on the population it is for: a standstill whose gyro
+    carries 1 / 0.4 / 0.7 deg/s of idle vibration per axis and a bias of 0.1-0.2 deg/s. ZARU at
+    every step with `sigma` read from the trailing 2 s window, as `_step_constraints` does, must
+    (a) accept at the gate's own rate rather than refuse 98.8 % as the desk figure did, (b) drive
+    `b_g` to the truth, and (c) leave the bias block's covariance describing its own error:
+    a 3-dof NEES near 3, with the per-axis error inside 3 sigma."""
+    rng = np.random.default_rng(21)
+    level = np.deg2rad([1.0, 0.4, 0.7])
+    truth = np.deg2rad([0.15, -0.1, 0.2])
+    n = 600
+    gyro = truth + rng.normal(0.0, 1.0, (n, 3)) * level
+    window = int(round(CFG.zupt_window_s * CFG.imu_rate_hz))
+    f = InEKF()
+    applied = refused = 0
+    for k in range(window - 1, n):
+        sigma = zaru_sigma_from_window(gyro[k - window + 1 : k + 1], CFG)
+        if f.update_zaru(gyro[k], sigma=sigma):
+            applied += 1
+        else:
+            refused += 1
+    assert refused / (applied + refused) < 0.03, f"{refused} of {applied + refused} refused"
+    err = f.state.b_g - truth
+    sig = np.sqrt(np.diag(f.P)[IDX_GYRO_BIAS])
+    assert np.all(np.abs(err) < 3.0 * sig), f"error {err} outside 3 sigma {sig}"
+    nees = float(err @ np.linalg.solve(f.P[IDX_GYRO_BIAS, IDX_GYRO_BIAS], err))
+    assert nees < 11.345, f"bias-block NEES {nees:.2f} is over-confident"
+    assert np.all(sig < np.deg2rad(0.1)), f"b_g not pinned by 580 ZARUs: sigma {np.rad2deg(sig)}"
 
 
 def test_zupt_is_deliberately_not_gated():

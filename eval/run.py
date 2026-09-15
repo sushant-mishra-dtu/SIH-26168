@@ -50,6 +50,7 @@ from core.reference.inekf import (
     nhc_is_valid,
     pca_mount_yaw,
     right_invariant_from_plain,
+    zaru_sigma_from_window,
 )
 from eval.baselines import (
     MIN_HEADING_DISPLACEMENT_M,
@@ -448,6 +449,10 @@ class FilterRun:
     #: warmup -- so a number can be read next to the stem it came from.
     gyro_arw_used: float = float("nan")
     accel_vrw_used: float = float("nan")
+    #: The ZARU measurement sigma the pass tested against, worst axis, averaged over every
+    #: offered ZARU (applied or refused): `zaru_sigma_from_window` on the detector's own window
+    #: (D-131), in rad/s. NaN when no stop was detected. Read it next to `n_zaru_rejected`.
+    zaru_sigma_mean_used: float = float("nan")
 
     def aided_pass_summary(self) -> dict[str, object]:
         """What the aided pass did, for `summary.json`: how it aligned, what it was fed, and
@@ -461,6 +466,7 @@ class FilterRun:
             "mount_spread_deg": None if init is None else float(np.degrees(init.mount_spread_rad)),
             "gyro_arw_used": self.gyro_arw_used,
             "accel_vrw_used": self.accel_vrw_used,
+            "zaru_sigma_mean_used": self.zaru_sigma_mean_used,
             "n_gnss_applied": self.n_gnss_applied,
             "n_gnss_rejected": self.n_gnss_rejected,
             "n_gnss_reanchored": self.n_gnss_reanchored,
@@ -608,7 +614,14 @@ def run_filter(
         n_gnss_reanchored=counts["reanchor"],
         gyro_arw_used=cfg.gyro_arw,
         accel_vrw_used=cfg.accel_vrw,
+        zaru_sigma_mean_used=_mean_zaru_sigma(counts),
     )
+
+
+def _mean_zaru_sigma(counts: dict[str, float]) -> float:
+    """Worst-axis ZARU sigma averaged over every ZARU `_step_constraints` offered, or NaN."""
+    offered = counts["zaru_ok"] + counts["zaru_no"]
+    return float(counts.get("zaru_sigma_sum", 0.0) / offered) if offered else float("nan")
 
 
 def _check_physical(f: InEKF, k: int, name: str, where: str) -> None:
@@ -651,10 +664,19 @@ ZUPT_VETO_NSIGMA = 3.0
 #: variant produced it; flip it here, never per call.
 HOLD_BIASES_IN_OUTAGE = False
 
+#: Whether ZARU is tested against the stop's own gyro noise (`zaru_sigma_from_window` on the
+#: detector window, D-131) or against the Allan desk figure `FilterConfig.zaru_sigma` alone,
+#: which is bit-for-bit the pre-D-131 filter. The window figure is the measured one -- the desk
+#: figure is 10-35x too small at rest in a car and refused 1,356 of S3a's 1,372 offered ZARUs
+#: (D-130) -- and it is what the mechanism ships with. Travels in `summary.json` as
+#: `zaru_sigma_from_window` so an artefact says which variant produced it; flip it here, never
+#: per call, and only with a DECISION_LOG row that carries both sweeps.
+ZARU_SIGMA_FROM_WINDOW = True
+
 
 def _step_constraints(
     f: InEKF, k: int, gyro: np.ndarray, accel: np.ndarray, cfg: FilterConfig, window: int,
-    counts: dict[str, int],
+    counts: dict[str, float],
 ) -> None:
     """ZUPT+ZARU at a detected stop, else NHC where it is valid -- the same step for the aided
     pass and for every window replayed from it, so the two cannot drift apart.
@@ -664,6 +686,14 @@ def _step_constraints(
     acceleration on its own y axis -- so the gate used to read braking as cornering and
     cornering as nothing on every stem whose mount is not near zero (D-115). `R_sv` takes both
     into the vehicle frame first.
+
+    **ZARU is tested against the stop's own gyro noise, not the desk figure** (D-131). The
+    detector window that just fired is bias plus white noise, so its per-axis sample std is
+    ZARU's measurement sigma (`zaru_sigma_from_window`, floored at `cfg.zaru_sigma`). Against
+    the Allan run's 0.039 deg/s the gate refused 1,356 of S3a's 1,372 offered ZARUs (D-130);
+    at rest in a car this phone carries 0.3-1.4 deg/s per sample. The sigma is read here, on the
+    stream, and never from a held-out stem: the same rule as `in_motion_config`. Its worst-axis
+    mean over the pass travels in `summary.json` as `zaru_sigma_mean_used`.
     """
     lo = max(0, k - window + 1)
     st = f.state
@@ -688,7 +718,13 @@ def _step_constraints(
             return
         f.update_zupt()
         counts["zupt"] += 1
-        if f.update_zaru(gyro[k]):
+        sigma = (
+            zaru_sigma_from_window(gyro[lo : k + 1], cfg)
+            if ZARU_SIGMA_FROM_WINDOW
+            else np.full(3, float(cfg.zaru_sigma))
+        )
+        counts["zaru_sigma_sum"] = counts.get("zaru_sigma_sum", 0.0) + float(np.max(sigma))
+        if f.update_zaru(gyro[k], sigma=sigma):
             counts["zaru_ok"] += 1
         else:
             counts["zaru_no"] += 1
@@ -1711,6 +1747,8 @@ def write_artefacts(
         "by_method": by_method,
         # Whether outage windows froze the bias states (`HOLD_BIASES_IN_OUTAGE`, D-130).
         "biases_held_in_outage": HOLD_BIASES_IN_OUTAGE,
+        # Whether ZARU was tested against the stop's own gyro noise (D-131) or the desk figure.
+        "zaru_sigma_from_window": ZARU_SIGMA_FROM_WINDOW,
         "gate1": gate1_ratio(by_method, results=results),
         "trajectories": sorted(replay or {}),
         "dropped_windows": [d.as_row() for d in dropped],
