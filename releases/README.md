@@ -11,7 +11,7 @@ What changed between builds is [CHANGELOG.md](../CHANGELOG.md); why it changed i
 
 | Flavour | File | Version | Built from | Description |
 |---|---|---|---|---|
-| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | v0.1.5 (`versionCode` 5) | `4f182b6` on `main`, 15 Sep 2026, built on the dev box | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, the error covariance ellipse (D-125), the course-over-ground heading and duration-based ZUPT fixes from the 14 Sep road test (D-127), gyro null-offset estimation, a working anti-lockout rule and a slewed tunnel exit (D-128), destination search anywhere in India (Photon, Nominatim fallback), recent destinations, category pills, reverse-geocoded dropped pins, the HAL-seeded gyro bias with the reviewed bearing fallback (D-129), and — new in this build — search results as numbered pins on the map, an offline banner that means offline (a zero-match query says "No places found"), and a Reset Origin button that is disabled and dimmed until recording starts. |
+| **OSM (Offline Basemap)** | [`app-osm-debug.apk`](app-osm-debug.apk) (16.4 MiB) | v1.0.0 (`versionCode` 6) | `main`, 15 Sep 2026, built on the dev box & GitHub CI | Standalone build using bundled OSMDroid offline raster tiles. Requires no API keys. Includes the navigation UI, the autonomous tunnel state machine (D-126), the turn guidance banner, the error covariance ellipse (D-125), the course-over-ground heading and duration-based ZUPT fixes from the 14 Sep road test (D-127), gyro null-offset estimation, a working anti-lockout rule and a slewed tunnel exit (D-128), destination search anywhere in India (Photon, Nominatim fallback), recent destinations, category pills, reverse-geocoded dropped pins, the HAL-seeded gyro bias with the reviewed bearing fallback (D-129), search results as numbered pins on the map, an offline banner that means offline, and a Reset Origin button. New in v1.0.0: the dynamic exponential ETA pace model (`EtaPaceModel`) preventing 30 Hz flicker and ETA spikes, live route tracking in `SensorForegroundService`, and automated GitHub Actions release packaging. |
 
 The `mapbox` flavour is **not** published: it needs a Mapbox downloads token to build and a public
 token to run (D-122), and neither is checked in. Build it locally per
@@ -35,21 +35,16 @@ is copied here.
 
 ### GitHub Releases
 Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml), which
-attaches the committed `app-osm-debug.apk` to a GitHub Release named after the tag — the stable
-link to hand to judges or teammates who should not be browsing the repo. Note that it publishes
-the file *in this folder* at the tagged commit, not a fresh build, so copy the APK in and update
-the table above before tagging:
+builds and attaches both `app-osm-debug.apk` and `logger-app-debug.apk` to a GitHub Release named after
+the tag — the stable link to hand to judges or teammates who should not be browsing the repo:
 
 ```bash
-git tag v0.1.5 && git push origin v0.1.5
+git tag v1.0.0 && git push origin v1.0.0
 ```
-
-Copy the APK in **before** tagging, or the release will carry the previous build under the new
-version's name.
 
 ### Installation
 Debug builds are signed with whichever debug keystore assembled them — v0.1.3 came from a CI runner,
-v0.1.4 and v0.1.5 from the dev box — and Android refuses an upgrade across signing keys. If the install fails
+v0.1.4, v0.1.5, and v1.0.0 from the dev box / CI runner — and Android refuses an upgrade across signing keys. If the install fails
 with "App not installed" or a signature error, uninstall the previous build first.
 
 1. Tap the download link on your phone.

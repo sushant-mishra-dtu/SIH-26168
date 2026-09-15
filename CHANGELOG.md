@@ -14,6 +14,42 @@ can be traced back to a commit.
 
 ---
 
+## v1.0.0 — 15 Sep 2026 (`versionCode` 6)
+
+**Milestone 1.0.0: Dynamic ETA Pace Model, Live Route Tracking, and Automated CI Release Pipeline.**
+This release advances the Intelligent Dead Reckoning Android suite to v1.0.0, integrating an
+exponential-average pace model for stable ETA prediction, live route tracking in the foreground
+service, robust course tracking with gyro null-offset compensation, and an automated GitHub Actions
+release workflow that compiles both the Operator Demo UI and Forensic Sensor Logger APKs directly
+on GitHub runners.
+
+### Added
+
+- **Dynamic ETA Pace Model (`EtaPaceModel`).** The filter's instantaneous 30 Hz speed wobbles and
+  drops to zero at every red light, which previously caused the headline ETA to wildly oscillate
+  (e.g., flipping between 13 min and 52 min in demo runs). `EtaPaceModel` maintains a slow exponential
+  average of speed while moving ($\tau = 45\text{s}$), seeded from the route's planned duration.
+  Standing still holds the last pace instead of blowing up the ETA, and walking routes settle to an
+  honest walking pace.
+- **Live Route Tracking in `SensorForegroundService`.** Progress along the active route is continuously
+  projected onto the route polyline with step-by-step maneuver countdowns, dynamic speed-adjusted ETA,
+  and arrival detection forwarded straight to `TelemetryStore` and the UI `ArrivalCard`.
+- **Automated GitHub Release Pipeline.** The release workflow (`.github/workflows/release.yml`) now
+  sets up Java 17 and the Android SDK to assemble both `app-osm-debug.apk` (`osm` flavour) and
+  `logger-app-debug.apk` directly on GitHub Actions runners, guaranteeing reproducible binaries
+  attached to every release.
+
+### Verified & Hardened
+
+- **Heading & Gyro Bias Stabilization:** Gyro rate projected strictly onto the world vertical
+  $-(\mathbf{\omega} \cdot \mathbf{u})$, stationary ZARU null-offset estimation, anti-lockout forced
+  acceptance with reconvergence slew (D-127, D-128, D-129).
+- **Autonomous Tunnel State Machine:** Gated entry and exit across C/N0, lux, barometer, and innovation
+  verdicts without manual overrides (D-126).
+- **Offline & Hybrid Map Canvas:** Resilient OSMDroid raster basemap with pan/zoom and course-up locking (D-117).
+
+---
+
 ## v0.1.5 — 15 Sep 2026 (`versionCode` 5)
 
 **Search that says what it means, and a Reset Origin button that says when it works.** Two

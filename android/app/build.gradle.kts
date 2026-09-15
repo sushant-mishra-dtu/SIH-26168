@@ -15,8 +15,8 @@ android {
         // Nothing below 26 can run this logger correctly, so nothing below 26 may install it.
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-logger"
+        versionCode = 2
+        versionName = "1.0.0-logger"
     }
 
     buildTypes {

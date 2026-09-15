@@ -32,8 +32,8 @@ android {
         // `versionCode` is the install-ordering integer Android compares on an upgrade; it is
         // independent of `versionName` and increments once per published APK. `versionName` is
         // what the release tag and CHANGELOG.md name.
-        versionCode = 5
-        versionName = "0.1.5"
+        versionCode = 6
+        versionName = "1.0.0"
     }
 
     // Two map engines, one screen (D-121). `osm` is the OSMDroid canvas of D-117 and needs no
