@@ -415,6 +415,7 @@ def test_van_loan_phi_matches_expm():
     phi, _ = van_loan(a, _gqg(), 0.1)
     assert np.max(np.abs(phi - expm_series(a * 0.1))) < 1e-12
 
+
 def test_expm_series_rejects_non_finite_input_instead_of_overflowing():
     """A diverged filter state can hand expm_series an inf entry. log2(inf) -> inf and
     int(ceil(inf)) raises OverflowError, which is an unhelpful crash site; a ValueError that

@@ -55,6 +55,10 @@ android/**/.gradle/
 android/**/.kotlin/
 android/**/local.properties
 android/**/build/
+android-ui/**/.gradle/
+android-ui/**/.kotlin/
+android-ui/**/local.properties
+android-ui/**/build/
 *.apk
 !releases/*.apk
 *.aab
