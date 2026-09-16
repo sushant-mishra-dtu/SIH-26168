@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 620" width="1280" height="620"
+     role="img" aria-label="Land-and-expand ladder in four rungs: free evaluation harness, SDK licence for one fleet, platform embed, then OEM automotive edge licence.">
+  <defs>
+    <marker id="ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/>
+    </marker>
+    <style>.f { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; }</style>
+  </defs>
+
+  <!-- delete the next line for a transparent background -->
+  <rect x="0" y="0" width="1280" height="620" fill="#0d1117"/>
+
+  <text class="f" x="60" y="48" font-size="24" font-weight="700" fill="#e6edf3">Land and expand &#8212; each rung is earned with evidence, not a sales cycle</text>
+
+  <!-- ascent arrow -->
+  <path d="M100,470 L1090,222" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="7 6" opacity="0.55" marker-end="url(#ga)"/>
+
+  <!-- axis -->
+  <line x1="80" y1="545" x2="1230" y2="545" stroke="#30363d" stroke-width="1.5"/>
+  <text class="f" x="34" y="330" font-size="12.5" fill="#6e7681" letter-spacing="1.4" transform="rotate(-90 34 330)" text-anchor="middle">CONTRACT VALUE</text>
+  <text class="f" x="1230" y="574" font-size="12.5" fill="#6e7681" letter-spacing="1.4" text-anchor="end">TIME &#183; TRUST EARNED &#8594;</text>
+
+  <!-- rung 1 -->
+  <rect x="80" y="432" width="272" height="113" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text class="f" x="104" y="462" font-size="12.5" font-weight="700" fill="#22d3ee" letter-spacing="1.2">01 &#183; EVALUATE</text>
+  <text class="f" x="104" y="489" font-size="15" font-weight="700" fill="#e6edf3">Free harness + replay viewer</text>
+  <text class="f" x="104" y="512" font-size="12.5" fill="#8b949e">They run it on their own drives</text>
+  <text class="f" x="104" y="533" font-size="12.5" fill="#6e7681">No contract &#183; buys credibility</text>
+
+  <!-- rung 2 -->
+  <rect x="370" y="372" width="272" height="173" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text class="f" x="394" y="402" font-size="12.5" font-weight="700" fill="#22d3ee" letter-spacing="1.2">02 &#183; LICENCE</text>
+  <text class="f" x="394" y="429" font-size="15" font-weight="700" fill="#e6edf3">SDK for one fleet</text>
+  <text class="f" x="394" y="452" font-size="12.5" fill="#8b949e">Per vehicle, per month</text>
+  <text class="f" x="394" y="473" font-size="12.5" fill="#8b949e">Integrates behind their app</text>
+  <text class="f" x="394" y="533" font-size="12.5" fill="#f59e0b">First recurring revenue</text>
+
+  <!-- rung 3 -->
+  <rect x="660" y="312" width="272" height="233" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text class="f" x="684" y="342" font-size="12.5" font-weight="700" fill="#22d3ee" letter-spacing="1.2">03 &#183; EMBED</text>
+  <text class="f" x="684" y="369" font-size="15" font-weight="700" fill="#e6edf3">Platform integration</text>
+  <text class="f" x="684" y="392" font-size="12.5" fill="#8b949e">FMS and ride-hailing vendors</text>
+  <text class="f" x="684" y="413" font-size="12.5" fill="#8b949e">resell it inside their stack</text>
+  <text class="f" x="684" y="533" font-size="12.5" fill="#f59e0b">Volume without headcount</text>
+
+  <!-- rung 4 -->
+  <rect x="950" y="252" width="280" height="293" rx="10" fill="#1c1710" stroke="#f59e0b" stroke-width="2"/>
+  <text class="f" x="974" y="282" font-size="12.5" font-weight="700" fill="#f59e0b" letter-spacing="1.2">04 &#183; OEM</text>
+  <text class="f" x="974" y="309" font-size="15" font-weight="700" fill="#e6edf3">Automotive edge licence</text>
+  <text class="f" x="974" y="332" font-size="12.5" fill="#8b949e">200 Hz build, per-unit royalty</text>
+  <text class="f" x="974" y="353" font-size="12.5" fill="#8b949e">ADAS fallback + infotainment</text>
+  <text class="f" x="974" y="533" font-size="12.5" fill="#f59e0b">Margin at scale</text>
+</svg>

@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 500" width="1400" height="500"
+     role="img" aria-label="Two deployment paths compared: a five-step hardware retrofit repeated for every vehicle, against a single over-the-air software update.">
+  <defs>
+    <marker id="hg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e7681"/>
+    </marker>
+    <marker id="hc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <style>.f { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; }</style>
+  </defs>
+
+  <!-- delete the next line for a transparent background -->
+  <rect x="0" y="0" width="1400" height="500" fill="#0d1117"/>
+
+  <text class="f" x="60" y="48" font-size="24" font-weight="700" fill="#e6edf3">Two ways to reach the same vehicle</text>
+
+  <!-- ===== lane 1 : hardware ===== -->
+  <text class="f" x="60" y="140" font-size="13.5" font-weight="700" fill="#6e7681" letter-spacing="1.2">HARDWARE</text>
+  <text class="f" x="60" y="160" font-size="13.5" font-weight="700" fill="#6e7681" letter-spacing="1.2">RETROFIT</text>
+
+  <g fill="#12161c" stroke="#30363d" stroke-width="1.5">
+    <rect x="250" y="106" width="196" height="84" rx="10"/>
+    <rect x="474" y="106" width="196" height="84" rx="10"/>
+    <rect x="698" y="106" width="196" height="84" rx="10"/>
+    <rect x="922" y="106" width="196" height="84" rx="10"/>
+    <rect x="1146" y="106" width="196" height="84" rx="10"/>
+  </g>
+  <g class="f" font-size="13.5" fill="#8b949e" text-anchor="middle">
+    <text x="348" y="143">Procure</text><text x="348" y="164">automotive IMU</text>
+    <text x="572" y="143">Ship unit</text><text x="572" y="164">to depot</text>
+    <text x="796" y="143">Fitment &#8212;</text><text x="796" y="164">vehicle off-road</text>
+    <text x="1020" y="143">Per-vehicle</text><text x="1020" y="164">calibration</text>
+    <text x="1244" y="143">Warranty, RMA,</text><text x="1244" y="164">spares, forever</text>
+  </g>
+  <g stroke="#6e7681" stroke-width="1.8" marker-end="url(#hg)">
+    <line x1="446" y1="148" x2="468" y2="148"/>
+    <line x1="670" y1="148" x2="692" y2="148"/>
+    <line x1="894" y1="148" x2="916" y2="148"/>
+    <line x1="1118" y1="148" x2="1140" y2="148"/>
+  </g>
+  <text class="f" x="1342" y="216" font-size="13" fill="#6e7681" text-anchor="end">&#215; every vehicle, for the life of the fleet</text>
+
+  <line x1="60" y1="262" x2="1342" y2="262" stroke="#21262d" stroke-width="1"/>
+
+  <!-- ===== lane 2 : software ===== -->
+  <text class="f" x="60" y="342" font-size="13.5" font-weight="700" fill="#22d3ee" letter-spacing="1.2">IDR &#8212;</text>
+  <text class="f" x="60" y="362" font-size="13.5" font-weight="700" fill="#22d3ee" letter-spacing="1.2">SOFTWARE ONLY</text>
+
+  <rect x="250" y="308" width="764" height="84" rx="10" fill="#101a1d" stroke="#22d3ee" stroke-width="2"/>
+  <text class="f" x="632" y="345" font-size="17" font-weight="700" fill="#22d3ee" text-anchor="middle">One over-the-air app update</text>
+  <text class="f" x="632" y="370" font-size="13" fill="#8b949e" text-anchor="middle">no bill of materials &#183; no inventory &#183; no fitment centre &#183; no RMA &#183; no vehicle downtime</text>
+
+  <line x1="1014" y1="350" x2="1140" y2="350" stroke="#22d3ee" stroke-width="2" marker-end="url(#hc)"/>
+
+  <rect x="1146" y="308" width="196" height="84" rx="10" fill="#101a1d" stroke="#22d3ee" stroke-width="1.5"/>
+  <text class="f" x="1244" y="345" font-size="13.5" font-weight="700" fill="#e6edf3" text-anchor="middle">Live across</text>
+  <text class="f" x="1244" y="366" font-size="13.5" font-weight="700" fill="#e6edf3" text-anchor="middle">the whole fleet</text>
+
+  <text class="f" x="60" y="452" font-size="14.5" fill="#8b949e">Same outcome on the map. One path has a bill of materials; the other has a download link.</text>
+</svg>

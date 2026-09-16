@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 300" width="1600" height="300"
+     role="img" aria-label="Integration flow: smartphone sensors feed one portable C or Rust core, which feeds OEM, fleet and ride-hailing platforms. No hardware is added.">
+  <defs>
+    <marker id="pc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <style>
+      .f { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; }
+    </style>
+  </defs>
+
+  <!-- delete the next line for a transparent background -->
+  <rect x="0" y="0" width="1600" height="300" fill="#0d1117"/>
+
+  <text class="f" x="60" y="46" font-size="24" font-weight="700" fill="#e6edf3">Integration flow &#8212; software only, nothing bolted to the vehicle</text>
+
+  <!-- ============ card 1 : sensors ============ -->
+  <rect x="60" y="80" width="420" height="150" rx="14" fill="#161b22" stroke="#22d3ee" stroke-width="1.5"/>
+  <g stroke="#22d3ee" stroke-width="2" fill="none">
+    <rect x="104" y="126" width="34" height="58" rx="6"/>
+    <line x1="114" y1="136" x2="128" y2="136"/>
+  </g>
+  <circle cx="121" cy="174" r="2.6" fill="#22d3ee"/>
+  <text class="f" x="176" y="133" font-size="16.5" font-weight="700" fill="#22d3ee" letter-spacing="0.8">SMARTPHONE SENSORS</text>
+  <text class="f" x="176" y="161" font-size="13.5" fill="#8b949e">IMU &#183; GNSS &#183; barometer, ~10 Hz</text>
+  <text class="f" x="176" y="187" font-size="13.5" fill="#8b949e">Commodity handset. No retrofit.</text>
+
+  <line x1="480" y1="155" x2="578" y2="155" stroke="#22d3ee" stroke-width="2" marker-end="url(#pc)"/>
+
+  <!-- ============ card 2 : the core ============ -->
+  <rect x="590" y="80" width="420" height="150" rx="14" fill="#1c1710" stroke="#f59e0b" stroke-width="2"/>
+  <g stroke="#f59e0b" stroke-width="2" fill="none">
+    <rect x="634" y="139" width="34" height="34" rx="4"/>
+    <rect x="643" y="148" width="16" height="16" rx="2"/>
+    <g stroke-linecap="round">
+      <line x1="628" y1="147" x2="634" y2="147"/><line x1="628" y1="156" x2="634" y2="156"/><line x1="628" y1="165" x2="634" y2="165"/>
+      <line x1="668" y1="147" x2="674" y2="147"/><line x1="668" y1="156" x2="674" y2="156"/><line x1="668" y1="165" x2="674" y2="165"/>
+      <line x1="643" y1="133" x2="643" y2="139"/><line x1="651" y1="133" x2="651" y2="139"/><line x1="659" y1="133" x2="659" y2="139"/>
+      <line x1="643" y1="173" x2="643" y2="179"/><line x1="651" y1="173" x2="651" y2="179"/><line x1="659" y1="173" x2="659" y2="179"/>
+    </g>
+  </g>
+  <text class="f" x="706" y="133" font-size="16.5" font-weight="700" fill="#f59e0b" letter-spacing="0.8">idr_core &#8212; C++ / RUST</text>
+  <text class="f" x="706" y="161" font-size="13.5" fill="#c9d1d9">InEKF on SE&#8322;(3) + learned heads</text>
+  <text class="f" x="706" y="187" font-size="13.5" fill="#8b949e">Frozen ABI, contract-tested</text>
+
+  <line x1="1010" y1="155" x2="1108" y2="155" stroke="#22d3ee" stroke-width="2" marker-end="url(#pc)"/>
+
+  <!-- ============ card 3 : platforms ============ -->
+  <rect x="1120" y="80" width="420" height="150" rx="14" fill="#161b22" stroke="#22d3ee" stroke-width="1.5"/>
+  <g fill="#22d3ee">
+    <rect x="1164" y="163" width="12" height="21" rx="2" opacity="0.45"/>
+    <rect x="1181" y="151" width="12" height="33" rx="2" opacity="0.7"/>
+    <rect x="1198" y="139" width="12" height="45" rx="2"/>
+  </g>
+  <text class="f" x="1236" y="133" font-size="16.5" font-weight="700" fill="#22d3ee" letter-spacing="0.8">OEM &#183; FLEET &#183; RIDE-HAILING</text>
+  <text class="f" x="1236" y="161" font-size="13.5" fill="#8b949e">Android JNI &#183; automotive edge</text>
+  <text class="f" x="1236" y="187" font-size="13.5" fill="#8b949e">10 Hz pose + uncertainty ellipse</text>
+
+  <text class="f" x="60" y="272" font-size="14.5" fill="#8b949e">Deployment is a download, not a fitment &#8212; the same library serves a phone at 10 Hz and a FOG IMU at 200 Hz.</text>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 640" width="1240" height="640"
+     role="img" aria-label="One filter core behind one frozen C ABI, built twice: an Android JNI target at 10 Hz and an automotive edge target at 200 Hz.">
+  <defs>
+    <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="cc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <style>.f { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; }</style>
+  </defs>
+
+  <!-- delete the next line for a transparent background -->
+  <rect x="0" y="0" width="1240" height="640" fill="#0d1117"/>
+
+  <text class="f" x="60" y="48" font-size="24" font-weight="700" fill="#e6edf3">One core, two build targets</text>
+  <text class="f" x="60" y="76" font-size="14" fill="#8b949e">The header is the contract &#8212; core/ffi/idr_core.h, held to it by tests/test_ffi_contract.py</text>
+
+  <!-- implementation -->
+  <rect x="370" y="112" width="500" height="86" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text class="f" x="620" y="147" font-size="17" font-weight="700" fill="#e6edf3" text-anchor="middle">Filter core &#8212; Invariant EKF on SE&#8322;(3)</text>
+  <text class="f" x="620" y="174" font-size="13" fill="#8b949e" text-anchor="middle">NHC &#183; ZUPT &#183; ZARU &#183; &#967;&#178; GNSS gate &#183; learned speed head</text>
+
+  <line x1="620" y1="198" x2="620" y2="226" stroke="#f59e0b" stroke-width="2" marker-end="url(#ca)"/>
+
+  <!-- the ABI -->
+  <rect x="330" y="234" width="580" height="94" rx="12" fill="#1c1710" stroke="#f59e0b" stroke-width="2.5"/>
+  <text class="f" x="620" y="271" font-size="19" font-weight="700" fill="#f59e0b" text-anchor="middle">core/ffi/idr_core.h &#8212; frozen ABI</text>
+  <text class="f" x="620" y="297" font-size="13" fill="#c9d1d9" text-anchor="middle">opaque handle &#183; caller-owned buffers &#183; 18-state error covariance exposed</text>
+  <text class="f" x="620" y="317" font-size="12.5" fill="#8b949e" text-anchor="middle">no hidden allocation, no language runtime crossing the boundary</text>
+
+  <!-- fan-out -->
+  <path d="M620,328 L620,362 L330,362 L330,398" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#cc)"/>
+  <path d="M620,328 L620,362 L910,362 L910,398" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#cc)"/>
+
+  <!-- target: android -->
+  <rect x="110" y="400" width="440" height="152" rx="12" fill="#161b22" stroke="#22d3ee" stroke-width="1.5"/>
+  <text class="f" x="140" y="438" font-size="16" font-weight="700" fill="#22d3ee" letter-spacing="0.8">ANDROID &#183; JNI</text>
+  <text class="f" x="140" y="468" font-size="13.5" fill="#c9d1d9">Phone IMU, ~10 Hz</text>
+  <text class="f" x="140" y="493" font-size="13.5" fill="#8b949e">Consumer nav &#183; ride-hailing &#183; fleet apps</text>
+  <text class="f" x="140" y="518" font-size="13.5" fill="#8b949e">Ships as an app update</text>
+
+  <!-- target: edge -->
+  <rect x="690" y="400" width="440" height="152" rx="12" fill="#161b22" stroke="#22d3ee" stroke-width="1.5"/>
+  <text class="f" x="720" y="438" font-size="16" font-weight="700" fill="#22d3ee" letter-spacing="0.8">AUTOMOTIVE EDGE</text>
+  <text class="f" x="720" y="468" font-size="13.5" fill="#c9d1d9">FOG / MEMS IMU, 200 Hz</text>
+  <text class="f" x="720" y="493" font-size="13.5" fill="#8b949e">OEM infotainment &#183; ADAS fallback layer</text>
+  <text class="f" x="720" y="518" font-size="13.5" fill="#8b949e">Ships as a linked library</text>
+
+  <text class="f" x="620" y="600" font-size="14.5" fill="#8b949e" text-anchor="middle">Same source, same tests, same error budget. Only the build target and the IMU rate change.</text>
+</svg>
