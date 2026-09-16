@@ -68,6 +68,11 @@ class MainActivity : AppCompatActivity() {
         startButton = findViewById(R.id.start)
         stopButton = findViewById(R.id.stop)
 
+        val openReplayButton: Button = findViewById(R.id.btn_open_replay)
+        openReplayButton.setOnClickListener {
+            startActivity(Intent(this, org.idr26168.logger.replay.ReplayActivity::class.java))
+        }
+
         startButton.setOnClickListener { requestPermissionsThenStart() }
         stopButton.setOnClickListener {
             startService(Intent(this, LoggerService::class.java).setAction(LoggerService.ACTION_STOP))

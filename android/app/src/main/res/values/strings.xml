@@ -5,4 +5,5 @@
     <string name="channel_description">Shown while a drive is being recorded. Required: Android delivers no sensor events to a backgrounded app.</string>
     <string name="start">Start recording</string>
     <string name="stop">Stop recording</string>
+    <string name="open_replay_viewer">View Trajectory Replay Demo</string>
 </resources>
