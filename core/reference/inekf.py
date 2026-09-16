@@ -128,6 +128,11 @@ def expm_series(m: np.ndarray, terms: int = 30) -> np.ndarray:
     block on an install. This is the one linear-algebra primitive numpy does not ship.
     """
     nrm = float(np.max(np.abs(m)))
+    if not np.isfinite(nrm):
+        raise ValueError(
+            f"expm_series received a matrix with non-finite entries (max |element| = {nrm}). "
+            "This usually means the filter state has diverged."
+        )
     squarings = int(np.ceil(np.log2(nrm / 0.5))) if nrm > 0.5 else 0
     a = m / (2.0**squarings)
     out = term = np.eye(m.shape[0])
