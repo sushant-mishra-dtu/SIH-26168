@@ -8,22 +8,32 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sih.idr.demo.backend.NavigationMode
 import com.sih.idr.demo.backend.SensorForegroundService
-import com.sih.idr.demo.backend.TelemetryState
 import com.sih.idr.demo.backend.TelemetryStore
-import com.sih.idr.demo.backend.TrackPoint
+import com.sih.idr.demo.ui.LocalIsDarkTheme
 import com.sih.idr.demo.ui.NavigatorTheme
+import com.sih.idr.demo.ui.components.MapStack
 import com.sih.idr.demo.ui.screens.NavigationScreen
 
 class MainActivity : ComponentActivity() {
 
-    private val requiredPermissions = buildList {
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
-        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+    /**
+     * The permissions recording cannot run without. Only location is in this set: the foreground
+     * service starts and the sensors deliver whether or not the notification is allowed, and
+     * `HIGH_SAMPLING_RATE_SENSORS` is install-time on every API level that has it.
+     */
+    private val requiredPermissions = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+
+    /** Everything we ask for in one dialog; a refusal here degrades, it does not block. */
+    private val requestedPermissions = buildList {
+        addAll(requiredPermissions)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -35,8 +45,11 @@ class MainActivity : ComponentActivity() {
     // Permission launcher
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        permissionsGranted = results.values.all { it }
+    ) { _ ->
+        permissionsGranted = hasRequiredPermissions()
+        if (permissionsGranted) {
+            seedLocationIfPossible()
+        }
     }
 
     private var permissionsGranted by mutableStateOf(false)
@@ -46,37 +59,66 @@ class MainActivity : ComponentActivity() {
         // Edge-to-edge
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        // Whatever the map flavour needs done once per activity (D-121). `osm` does nothing here;
+        // `mapbox` configures the Navigation SDK with our location provider and sensors off.
+        MapStack.onActivityCreated(this)
+
         // Check permissions on launch
-        permissionsGranted = hasAllPermissions()
+        permissionsGranted = hasRequiredPermissions()
+        if (permissionsGranted) {
+            seedLocationIfPossible()
+        }
 
         setContent {
-            NavigatorTheme {
-                // Collect live telemetry or fall back to preview data
-                val liveTelemetry by TelemetryStore.state.collectAsStateWithLifecycle()
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            var isDarkTheme by remember { mutableStateOf(systemDark) }
+            var courseUpMode by remember { mutableStateOf(false) }
 
-                // Use live data if service is running, otherwise show preview
-                val telemetry = if (liveTelemetry.running) liveTelemetry else PREVIEW_TELEMETRY
+            // The one source of telemetry there is. Before the service starts this is a
+            // default-constructed TelemetryState -- zeros, INITIALIZING, an empty path -- and
+            // that empty state is what the screen shows. D-080: a surface with no data shows
+            // that it has no data. It does not stand in a plausible-looking drive, because a
+            // plausible-looking drive is indistinguishable from a real one in a photograph.
+            val telemetry by TelemetryStore.state.collectAsStateWithLifecycle()
 
-                var isRecording by remember { mutableStateOf(false) }
-                var permsGranted by remember { mutableStateOf(permissionsGranted) }
-
-                // Sync permission state
-                LaunchedEffect(permissionsGranted) {
-                    permsGranted = permissionsGranted
+            NavigatorTheme(darkTheme = isDarkTheme, tunnelMode = telemetry.tunnelModeActive) {
+                // Status-bar icons follow the palette actually on screen: the style sheet cannot
+                // know whether the user has toggled the theme or the tunnel palette has taken over.
+                val view = LocalView.current
+                val paletteIsDark = LocalIsDarkTheme.current
+                SideEffect {
+                    val controller = WindowCompat.getInsetsController(window, view)
+                    controller.isAppearanceLightStatusBars = !paletteIsDark
+                    controller.isAppearanceLightNavigationBars = !paletteIsDark
                 }
 
-                // If service is running, sync recording state
-                LaunchedEffect(liveTelemetry.running) {
-                    if (liveTelemetry.running) isRecording = true
+                // `isRecording` flips on the tap so the button answers immediately; the service
+                // then confirms (or, if it was killed, denies) through `telemetry.running`.
+                var isRecording by remember { mutableStateOf(telemetry.running) }
+                LaunchedEffect(telemetry.running) {
+                    isRecording = telemetry.running
                 }
 
                 NavigationScreen(
                     telemetry = telemetry,
                     isRecording = isRecording,
-                    permissionsGranted = permsGranted,
+                    permissionsGranted = permissionsGranted,
+                    darkTheme = isDarkTheme,
+                    onToggleTheme = { isDarkTheme = !isDarkTheme },
+                    courseUpMode = courseUpMode,
+                    onToggleCourseUp = { courseUpMode = !courseUpMode },
+                    onToggleTunnelMode = {
+                        SensorForegroundService.toggleTunnelMode()
+                    },
+                    onSetTunnelOverride = { mode ->
+                        SensorForegroundService.setTunnelOverride(mode)
+                    },
+                    onResetOrigin = {
+                        SensorForegroundService.resetOrigin()
+                    },
                     onStartStop = {
-                        if (!permsGranted) {
-                            permissionLauncher.launch(requiredPermissions)
+                        if (!permissionsGranted) {
+                            permissionLauncher.launch(requestedPermissions)
                             return@NavigationScreen
                         }
 
@@ -101,46 +143,49 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun hasAllPermissions(): Boolean = requiredPermissions.all {
+    private fun hasRequiredPermissions(): Boolean = requiredPermissions.all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
 
+    private fun seedLocationIfPossible() {
+        if (hasRequiredPermissions()) {
+            val lm = getSystemService(LOCATION_SERVICE) as? android.location.LocationManager ?: return
+            val lastFused = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try { lm.getLastKnownLocation(android.location.LocationManager.FUSED_PROVIDER) } catch (e: Exception) { null }
+            } else null
+            val lastGps = try { lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
+            val lastNet = try { lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
+            val loc = lastFused ?: lastGps ?: lastNet
+            if (loc != null) {
+                TelemetryStore.update {
+                    if (!it.running) {
+                        it.copy(
+                            latitude = loc.latitude,
+                            longitude = loc.longitude,
+                            originLat = loc.latitude,
+                            originLon = loc.longitude
+                        )
+                    } else it
+                }
+            }
+        }
+    }
+
     companion object {
-        /**
-         * Static preview telemetry for UI-only mode: shows what the app looks like
-         * without needing sensor permissions, a physical device, or the backend running.
-         * This is what Android Studio previews and emulator runs display.
-         */
-        val PREVIEW_TELEMETRY = TelemetryState(
-            running = false,
-            mode = NavigationMode.INS,
-            speedMps = 13.8f,
-            yawRad = 0.24f,
-            positionNorthM = 164.2f,
-            positionEastM = -38.6f,
-            uncertaintyM = 18f,
-            sampleRateHz = 200f,
-            timestampJitterMs = 0.8f,
-            satellites = 0,
-            accelAvailable = true,
-            gyroAvailable = true,
-            gnssAvailable = false,
-            path = listOf(
-                TrackPoint(-82f, -120f),
-                TrackPoint(-64f, -98f),
-                TrackPoint(-54f, -78f),
-                TrackPoint(-40f, -60f),
-                TrackPoint(-22f, -42f),
-                TrackPoint(-4f, -28f),
-                TrackPoint(18f, -18f),
-                TrackPoint(38f, -10f),
-                TrackPoint(58f, -4f),
-                TrackPoint(78f, -8f),
-                TrackPoint(104f, -16f),
-                TrackPoint(128f, -24f),
-                TrackPoint(148f, -32f),
-                TrackPoint(164.2f, -38.6f)
-            )
-        )
+        // --- what is deliberately NOT here ------------------------------------------------
+        // A `PREVIEW_TELEMETRY` constant used to live here and was rendered whenever the service
+        // was not running -- which is what the app shows on launch, in Android Studio, and on a
+        // phone with no permissions granted. It carried speed 13.8 m/s, uncertainty 18 m, a
+        // fourteen-point track, `sampleRateHz = 200f` and `timestampJitterMs = 0.8f`.
+        //
+        // The last two are the reason this is a decision and not a cleanup. Achieved sample rate
+        // and timestamp jitter per device are exactly the numbers HANDOVER.md section 1 says have
+        // never been measured on any phone in this project, and 200 Hz is the FOG configuration
+        // that D-081 requires captioned as *not demonstrated*. An unmeasured claim rendered in
+        // the same typeface as a measured one is the failure D-080 exists to prevent, and a
+        // screenshot of it is indistinguishable from evidence.
+        //
+        // The empty state is the honest preview. If a design needs reviewing without a device,
+        // review it empty, or load a real recording through the replay view in `android/`.
     }
 }

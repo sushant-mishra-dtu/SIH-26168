@@ -378,22 +378,28 @@ columns are selected from the header before the body is read, and whose return t
 not a `Sequence`, so it has no `features()` and cannot reach a model.
 
 Measured sensor characterisation, from IO-VNBD's own stationary segments **[measured,
-`eval/figures/allan_*.csv`, commit `ef10dcc`, seed 26168]**:
+`eval/figures/allan_*.csv`, commit `4e0c9ac`, seed 26168]**:
 
 | Parameter | Measured | Worst axis |
 |---|---|---|
-| Angular random walk | **1.41 °/√hr** (`gyro_arw = 4.11e-4` rad/s/√Hz) | `gyro_pitch`, S-T2 |
-| Velocity random walk | **0.45 m/s/√hr** | `accel_z`, S-T7 |
-| Gyro bias instability | **42 °/hr** at τ ≈ 45 s | `gyro_yaw`, S-T7 |
-| Accel bias instability | **0.34 mg** at τ ≈ 20 s | `accel_x`, S-T7 |
+| Angular random walk | **0.75 °/√hr** (`gyro_arw = 2.18e-4` rad/s/√Hz) | `gyro_roll`, S-T2 |
+| Velocity random walk | **0.24 m/s/√hr** | `accel_x`, S-T2 |
+| Gyro bias instability | **22 °/hr** at τ ≈ 32 s | `gyro_roll`, S-T2 |
+| Accel bias instability | **0.25 mg** at τ ≈ 48 s | `accel_x`, S-T2 |
+
+D-045 read 1.41 °/√hr, 0.45 m/s/√hr, 42 °/hr and 0.34 mg from the same two stops; every figure
+was about 2× pessimistic because the segment finder kept the second of settle and pull-away at
+each end of a stop, and ARW is read at τ = 0.2–2 s (D-120).
 
 Four limits, stated because they change how far these can be pushed. There is **no >20 min
 stationary segment** in the `S-` stream — [DATASETS.md](DATASETS.md) claimed one and the claim did
-not survive being checked; the longest is 507 s, so τ_max is ~51 s and bias instability is an
+not survive being checked; the longest is 484 s, so τ_max is ~48 s and bias instability is an
 **upper bound** with the curve still descending. The two bias driving noises are **derived** from a
-Gauss–Markov model, not measured, and are labelled as derived everywhere. **VRW rests on a single
-axis**: five of six accelerometer fits failed a −½ slope check, because a parked car genuinely
-accelerates at low frequency. And these are **bench-quiet** numbers — a car idling with an occupant
+Gauss–Markov model, not measured, and are labelled as derived everywhere. **The white-band gate
+decides which axes count**: three of six gyro fits are flatter than −½ over τ = 0.2–2 s and are
+refused — at this floor the 10 Hz gyro's short-τ behaviour on those axes is not a random walk —
+and one accelerometer fit is, because a parked car genuinely accelerates at low frequency. And
+these are **bench-quiet** numbers — a car idling with an occupant
 returns an apparent ARW ~6× larger, which measures the cabin, not the gyroscope.
 
 ### 11.2 The protocol
@@ -521,17 +527,25 @@ demonstrated pipeline**, and no figure or caption implies otherwise.
 | Speed + variance head, adaptive `R_NHC` | Architecture written and tested; **not trained** — blocked by Gate 1 (H-4). |
 | The Onyekpe baseline reproduction | Nine of its eighteen hyperparameters are ours, not the papers' (§14). Not trained. |
 
-**Three open items that are gaps rather than deferrals**, stated here because a limitation we state
+**One open item that is a gap rather than a deferral**, stated here because a limitation we state
 costs a fraction of what one a judge finds costs:
 
-1. **The mount-disturbance detector cannot see a 5° knock at 10 Hz** (§7, D-075). Its threshold
-   corresponds to a 17.2° knock. Not tuned around; it needs a real measurement.
-2. **The IO-VNBD accelerometer sign convention is unconfirmed** (D-059). SE₂(3) test 2 ("stationary
-   60 s → drift < 1 mm") is a self-consistency check of our own mechanisation until someone reads a
-   stationary segment and reports the mean specific-force vector. Half an hour on a machine with the
-   files, and skipping it invalidates a Gate 1 result.
-3. **Gate 0 is not closed.** CRSE is pinned, but the split re-pick after D-044 and the GNSS cadence
-   consequences are open, and [EVALUATION.md](EVALUATION.md) is still marked DRAFT.
+1. **The mount-disturbance detector cannot see a 5° knock at 10 Hz** (§7, D-075). The reference InEKF
+   threshold (`mount_disturbance_gyro_thresh = 3.0` rad/s) corresponds to a 17.2° knock under 10 Hz sampling.
+   In the on-device operator UI (`CourseTracker`), a knock that *tilts* the handset is seen by the
+   rotation-matrix gravity-vector tilt rate (`acos(dot)/dt > 0.44` rad/s, `TILT_DISTURBANCE_RAD_PER_SEC`):
+   a 5° tilt inside one 100 ms sample is 0.87 rad/s. A knock that only yaws the phone about the vertical
+   does not move that vector and is caught only by the 3.5 rad/s raw-rate rule, so the blind spot is
+   narrowed on the device, not closed. The offline filter detector remains un-tuned around to avoid
+   fitting without cradle hardware recordings.
+
+**Closed items previously listed as open:**
+- **The IO-VNBD accelerometer sign convention (R-8 / D-059) is CLOSED by D-085**: measured on real
+  stationary segments `S-T2[31422:36490]` (norm 9.7561 m/s²) and `S-T7[47809:52285]` (norm 9.8781 m/s²).
+  Confirmed specific force with gravity included, `GRAVITY` channel points UP, and `R_sv @ accel` has
+  `z ≈ -9.8` matching `-GRAVITY_NED` in `core/reference/inekf.py:191`. SE₂(3) test 2 is confirmed.
+- **Gate 0 being open is CLOSED**: the split was re-picked against measured truth pairing (D-092) and
+  [EVALUATION.md](EVALUATION.md) was frozen on 03 Sep 2026 (D-103).
 
 **Where our numbers are worse than published ones, the reason is the sensor grade and the permitted
 inputs, and we say so rather than letting the comparison stand.** §14.

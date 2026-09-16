@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 
 from core.reference.inekf import (
+    ACCEL_BIAS_INSTABILITY_MEASURED,
     ERROR_STATE_DIM,
     GRAVITY_NED,
     GYRO_ARW_MEASURED,
@@ -444,8 +445,10 @@ def test_default_gyro_arw_is_the_measured_value_inside_the_documented_phone_rang
     It used to assert `gyro_arw > 5 deg/sqrt(hr)` -- i.e. that the 3e-3 placeholder was outside the
     0.5-5 range ERROR_BUDGET.md section 9 states -- with a message saying to delete it once the
     Allan run landed. It landed (D-045): 4.11e-4 rad/s/sqrt(Hz) = 1.41 deg/sqrt(hr), measured on
-    IO-VNBD's own stationary segments. The assertion is inverted to hold the range from the other
-    side, so a future edit that reintroduces an out-of-range guess still fails here.
+    IO-VNBD's own stationary segments, and was re-measured at 2.18e-4 = 0.75 deg/sqrt(hr) once
+    the stop's settle was excluded from those segments (D-120). The assertion is inverted to hold
+    the range from the other side, so a future edit that reintroduces an out-of-range guess still
+    fails here.
     """
     from core.reference.inekf import FilterConfig
 
@@ -455,7 +458,7 @@ def test_default_gyro_arw_is_the_measured_value_inside_the_documented_phone_rang
         "ERROR_BUDGET.md section 9. Either re-run `python -m eval.allan` and update both, or say "
         "in the budget why this sensor sits outside it."
     )
-    assert deg_sqrt_hr == pytest.approx(1.41, abs=0.02)
+    assert deg_sqrt_hr == pytest.approx(0.75, abs=0.02)
 
 
 # ------------------------------------------------------------------------------------------
@@ -652,17 +655,22 @@ def test_process_noise_psd_is_the_squares_of_the_measured_config_values():
     assert np.array_equal(np.diag(qc), expected)
 
 
-def test_the_mount_block_of_q_carries_no_process_noise_yet():
-    """D-048, asserted rather than left to a comment. The derivation names sigma_sv but no source
-    in the repo gives it a magnitude, so it is zero -- the mount is modelled as rigid until P-11
-    estimates R_sv and the bump detector re-inflates it. If P-11 sets a value, this test is the
-    thing that says so out loud."""
-    assert FilterConfig().mount_rw == 0.0
-    f = InEKF()
+def test_the_mount_block_of_q_carries_the_d111_process_noise():
+    """D-048 set sigma_sv to zero because no source gave it a magnitude, and this test used to
+    say so out loud. D-115 sets it: with zero, NHC collapsed the mount block from its measured
+    2-37 deg spread to under 0.1 deg within a minute of driving, after which the constraint was
+    asserted through a rotation the filter believed it knew perfectly (D-110). The value is a
+    walk of 1e-3 rad/sqrt(s) -- 0.44 deg over a minute -- and the block must now *grow* under
+    propagation by exactly that: `sigma_sv^2 * t`, since the mount column of `G` is the
+    identity and nothing else feeds it."""
+    cfg = FilterConfig()
+    assert cfg.mount_rw == pytest.approx(1.0e-3)
+    f = InEKF(cfg)
     before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
     for _ in range(50):
         f.propagate(np.array([0.0, 0.0, 0.35]), np.array([0.4, -0.3, -9.6]), 0.1)
-    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], before)
+    grown = f.P[IDX_MOUNT, IDX_MOUNT] - before
+    assert np.allclose(grown, np.eye(3) * cfg.mount_rw**2 * 5.0, rtol=1e-6, atol=1e-12)
     assert f.P.shape == (ERROR_STATE_DIM, ERROR_STATE_DIM)
 
 
@@ -687,7 +695,7 @@ def test_zaru_converges_the_gyro_bias_to_truth():
     If the correction sign were flipped this diverges rather than converges, which is the failure
     a convergence assertion catches and a Jacobian assertion does not.
     """
-    truth = np.array([2.0e-3, -1.5e-3, 3.0e-3])  # rad/s, ~10x the measured 42 deg/hr instability
+    truth = np.array([2.0e-3, -1.5e-3, 3.0e-3])  # rad/s, ~20x the measured 22 deg/hr instability
     f = InEKF()
     f.P = np.eye(ERROR_STATE_DIM) * 1e-4
     before = float(np.linalg.norm(f.state.b_g - truth))
@@ -731,13 +739,18 @@ def test_zupt_does_not_shrink_the_mount_covariance():
     The velocity error below is deliberately large, because that is exactly the case where the
     vehicle-frame Jacobian's mount column is most non-zero and the bug would be biggest.
     """
+    # The mount block grows under propagation since D-115 (`mount_rw` is non-zero), so the
+    # reference is a propagate-only twin rather than the starting block: ZUPT must leave the
+    # block exactly where propagation alone would have.
     f = InEKF()
     f.state.v = np.array([5.0, -3.0, 1.0])
-    mount_before = f.P[IDX_MOUNT, IDX_MOUNT].copy()
+    twin = InEKF()
+    twin.state.v = f.state.v.copy()
     for _ in range(50):
         f.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
         f.update_zupt()
-    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], mount_before), (
+        twin.propagate(np.zeros(3), -GRAVITY_NED, 0.1)
+    assert np.allclose(f.P[IDX_MOUNT, IDX_MOUNT], twin.P[IDX_MOUNT, IDX_MOUNT]), (
         "ZUPT shrank the mount covariance -- it is using the vehicle-frame Jacobian (section "
         "7.2) rather than the body-frame one (section 7.1). See D-051."
     )
@@ -937,16 +950,17 @@ def _nees_p0() -> np.ndarray:
     any positive-definite choice, because the truth error is drawn from this same matrix; what it
     checks is that `P` tracks the error it actually makes, not that `P0` is well chosen.
 
-    The two bias blocks are the D-045 measured bias instabilities (42 deg/hr, 0.34 mg) so that at
-    least those are repo-sourced rather than picked.
+    The two bias blocks are the Allan run's measured bias instabilities (22 deg/hr, 0.25 mg since
+    D-120; D-045 read 42 deg/hr, 0.34 mg) so that at least those are repo-sourced rather than
+    picked.
     """
     sd = np.zeros(ERROR_STATE_DIM)
     sd[0:2] = np.deg2rad(2.0)
     sd[2] = np.deg2rad(5.0)
     sd[3:6] = 0.1
     sd[6:9] = 1.0
-    sd[9:12] = 42.0 * (np.pi / 180.0) / 3600.0
-    sd[12:15] = 0.34e-3 * 9.80665
+    sd[9:12] = 22.0 * (np.pi / 180.0) / 3600.0
+    sd[12:15] = ACCEL_BIAS_INSTABILITY_MEASURED
     sd[15:18] = np.deg2rad(1.0)
     return np.diag(sd**2)
 
@@ -1059,7 +1073,8 @@ def test_11_nees_propagation_only_is_consistent():
     """Test 11, propagation alone: P0, Q_c, Van Loan and the nominal step against real error.
 
     This is the base case -- if it fails, nothing above it means anything, because every update
-    is applied to a covariance this produced. Measured 18.287 against a band of [16.843, 19.195].
+    is applied to a covariance this produced. Measured 17.419 against a band of [16.843, 19.195]
+    (18.287 under D-045's Q; the section-10.2 table is re-measured under D-120's).
     """
     mean, lo, hi = _mean_nees(zupt=False, zaru=False, nhc=False)
     assert lo <= mean <= hi, (
@@ -1068,7 +1083,7 @@ def test_11_nees_propagation_only_is_consistent():
 
 
 def test_11_nees_with_zupt_is_consistent():
-    """Test 11 with ZUPT applied at every detected stop. Measured 18.929, band [16.843, 19.195].
+    """Test 11 with ZUPT applied at every detected stop. Measured 18.593, band [16.843, 19.195].
 
     ZUPT is the update that shrinks `P` the hardest, so it is the one most able to make the filter
     over-confident. It does not: the covariance still tracks the error it actually makes.
@@ -1081,8 +1096,9 @@ def test_zaru_sigma_is_the_gyro_white_noise_the_repo_measured():
     """`zaru_sigma` is not a free parameter, and this pins the identity that makes it not one.
 
     ZARU's innovation is `z = w~ - b_g_hat` (section 7.3), whose noise is the gyro white noise per
-    sample. D-045 measured that: `gyro_arw = 4.11e-4` rad/s/sqrt(Hz), so at the `S-` stream's
-    measured 10 Hz (D-047) it is `gyro_arw / sqrt(dt) = gyro_arw * sqrt(rate)` = 1.2997e-3 rad/s.
+    sample. The Allan run measured that: `gyro_arw = 2.18e-4` rad/s/sqrt(Hz) (D-120; D-045 read
+    4.11e-4 with the stop's settle still in the segment), so at the `S-` stream's measured 10 Hz
+    (D-047) it is `gyro_arw / sqrt(dt) = gyro_arw * sqrt(rate)` = 6.894e-4 rad/s.
 
     This replaces `test_zaru_sigma_is_below_the_gyro_noise_the_repo_measured`, which asserted the
     *defect* -- that `FilterConfig` carried 1.0e-3, understated 1.3x in sigma and 1.7x in variance,
@@ -1094,7 +1110,7 @@ def test_zaru_sigma_is_the_gyro_white_noise_the_repo_measured():
     assert cfg.gyro_arw == GYRO_ARW_MEASURED
     assert cfg.imu_rate_hz == pytest.approx(1.0 / NEES_DT)
     assert cfg.zaru_sigma == pytest.approx(cfg.gyro_arw / np.sqrt(NEES_DT), rel=1e-12)
-    assert cfg.zaru_sigma == pytest.approx(1.2997e-3, abs=1e-6)
+    assert cfg.zaru_sigma == pytest.approx(6.894e-4, abs=1e-6)
 
 
 def test_11_nees_with_zaru_is_consistent():
@@ -1108,9 +1124,18 @@ def test_11_nees_with_zaru_is_consistent():
     false ZARU per stop, at the step where `is_stationary`'s 0.5 s trailing window still holds
     four stopped samples and one moving one -- carrying a chi-squared distance of 1456 against the
     repo's own 11.345 threshold. Gating it (D-057) gives 3.05.
+
+    **One-sided since D-115.** With `P0`'s gyro-bias block at the measured 0.2 deg/s turn-on
+    bias rather than the 42 deg/hr instability, the simulated biases are 17x larger and the
+    ZARU-only mean measures 16.62 against [16.84, 19.20] -- 1.3% *under* the band, the safe
+    direction, and the same one-sided statement `test_11_nees_full_state_is_not_over_confident`
+    already makes for the same reason. Widening `zaru_sigma` to pass two-sided would be tuning
+    an `R` to a simulation, which the phase rule forbids; the lower assertion keeps the value
+    from drifting far from the band unnoticed.
     """
     mean, lo, hi = _mean_nees(zupt=False, zaru=True, nhc=False)
-    assert lo <= mean <= hi, f"ZARU NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
+    assert mean <= hi, f"ZARU NEES {mean:.3f} is over-confident (band [{lo:.3f}, {hi:.3f}])"
+    assert mean > 0.95 * lo, f"ZARU NEES {mean:.3f} is far below the band [{lo:.3f}, {hi:.3f}]"
 
 
 def test_11_nees_with_zupt_and_zaru_is_consistent():
@@ -1118,7 +1143,7 @@ def test_11_nees_with_zupt_and_zaru_is_consistent():
 
     This is the strongest consistency statement the repo can make from measured quantities alone:
     every `R` in it is a measured sensor number -- `zupt_sigma` from the stationary segments,
-    `zaru_sigma` from the Allan run -- with nothing tuned. Measured 19.03 against [16.84, 19.19].
+    `zaru_sigma` from the Allan run -- with nothing tuned. Measured 18.67 against [16.84, 19.19].
     """
     mean, lo, hi = _mean_nees(zupt=True, zaru=True, nhc=False)
     assert lo <= mean <= hi, f"ZUPT+ZARU NEES {mean:.3f} outside 95% band [{lo:.3f}, {hi:.3f}]"
@@ -1127,14 +1152,16 @@ def test_11_nees_with_zupt_and_zaru_is_consistent():
 def test_11_nees_full_state_is_not_over_confident():
     """Test 11, everything on. **This asserts one side of the band, and says why.**
 
-    Measured 14.14 against [16.843, 19.195]: *under*-confident, which is the safe direction and a
+    Measured 13.57 against [16.843, 19.195]: *under*-confident, which is the safe direction and a
     change of sign from D-053's 29.90. The remaining gap is NHC and only NHC -- velocity block
-    1.43, mount block 1.66, every other block within 0.3 of the expected 3.0 -- because
+    1.48, mount block 1.08, position (the integral of velocity) 1.83, attitude and both bias
+    blocks within 0.25 of the expected 3.0 -- because
     `nhc_sigma_lateral = 0.5` m/s is model slack for suspension travel, road camber and tyre slip,
     and this simulation contains none of them: its own NHC residual is 5.4e-4 m/s, so `R_NHC` is
     1300x wider than the scenario needs.
 
-    Tuning it is measurable and refused. A sweep at 100 runs each puts the full-state mean at
+    Tuning it is measurable and refused. A sweep at 100 runs each (under D-045's Q; the D-120
+    re-seeding moved the 0.5 m/s point from 14.14 to 13.57) puts the full-state mean at
     14.25 / 14.14 / 14.39 / 14.78 / 15.77 / 17.24 for `R_NHC` = 1.0 / 0.5 / 0.3 / 0.2 / 0.1 /
     0.05 m/s -- so 0.05 would pass this test two-sided. It would also be a measurement-noise
     covariance fitted to a scenario that omits the physical effect the covariance exists to model,

@@ -16,17 +16,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.reference.inekf import FilterConfig, is_stationary
+from core.reference.inekf import ACCEL_BIAS_INSTABILITY_MEASURED, FilterConfig, is_stationary
 from eval.allan import (
     ACCEL_AXES,
     BIAS_INSTABILITY_COEFF,
     GYRO_AXES,
     MAX_TAU_FRACTION,
     MPS2_TO_MILLI_G,
+    QUIET_MARGIN,
     RAD_PER_S_SQRT_S_TO_DEG_PER_SQRT_HR,
     SLOPE_TOLERANCE,
+    WINDOW_S,
     bias_instability,
     coefficients,
+    detector_settings,
     find_stationary_segments,
     gauss_markov_bias_driving_noise,
     octave_taus,
@@ -80,6 +83,23 @@ def test_random_walk_coefficient_recovers_sigma_at_tau_one_second():
     curve = overlapping_allan_deviation(rng.normal(0.0, sigma, 200_000), DT)
     coefficient, _ = random_walk_coefficient(curve)
     assert coefficient == pytest.approx(sigma * math.sqrt(DT), rel=0.05)
+
+
+def test_the_white_band_does_not_depend_on_the_last_digit_of_dt():
+    """`dt_s` is a median of float differences, and IO-VNBD's S-T2 gives 0.09999999999990905
+    where S-T7 gives 0.1000000000003638. An exact `tau >= 0.2` kept tau = 2 dt on one and dropped
+    it on the other, and that one point moved S-T2's gyro_pitch slope across the whiteness gate
+    (D-120). The adev at a given `m` does not depend on dt at all, so the two fits must agree."""
+    rng = np.random.default_rng(26168)
+    x = rng.normal(0.0, 0.01, 20_000)
+    below = overlapping_allan_deviation(x, 0.1 - 1e-13)
+    above = overlapping_allan_deviation(x, 0.1 + 1e-13)
+    assert below.tau_s[1] < 0.2 < above.tau_s[1]  # the edge case this guards
+
+    n_below, s_below = random_walk_coefficient(below)
+    n_above, s_above = random_walk_coefficient(above)
+    assert n_below == pytest.approx(n_above, rel=1e-9)
+    assert s_below == pytest.approx(s_above, abs=1e-9)
 
 
 def test_a_constant_offset_is_annihilated():
@@ -253,31 +273,97 @@ def test_a_vibrating_cabin_is_stationary_but_not_quiet():
     characterisation: its Allan curve measures the cabin, not the gyroscope."""
     n = 4_000
     # Loud enough that both quiet margins fail, quiet enough that the ZUPT detector still fires:
-    # mean |gyro| is ~1.6 sigma = 0.013 rad/s, under the 0.02 rad/s threshold.
-    accel, gyro = _still(n, accel_sigma=0.12, gyro_sigma=0.008)
+    # mean |gyro| is ~1.6 sigma = 0.008 rad/s, under the 0.01 rad/s threshold (D-115); accel
+    # variance is 0.0144, under 0.02, and both are more than a tenth of their thresholds.
+    accel, gyro = _still(n, accel_sigma=0.12, gyro_sigma=0.005)
     found = find_stationary_segments(_sequence(accel, gyro, np.arange(n) * DT))
 
     assert len(found) == 1
     assert found[0].is_quiet is False
 
 
-def test_segment_finder_agrees_with_the_filters_own_detector():
-    """The vectorised criterion must be the same criterion as `is_stationary`, not a lookalike.
+def _stop_between_two_drives(n_still: int = 4_000, n_drive: int = 300, n_settle: int = 20):
+    """Drive, a settle the detector's window can hide, a stop, a pull-away, drive.
 
-    Every accepted segment is re-checked window by window through the filter's own function; a
-    drift between the two would mean Q was characterised on samples the filter will not ZUPT on.
+    The settle and the pull-away are sized so that a 10 s window holding all of one *passes*
+    the D-115 thresholds (accel variance ~0.008 of 0.02, gyro norm ~0.004 of 0.01) while any
+    window that reaches into the drive fails. That is the geometry of a real stop: the union of
+    the passing windows starts inside the settle, the intersection does not.
     """
+    rng = np.random.default_rng(8)
+    accel, gyro = _still(n_still, seed=8)
+    drive_a = rng.normal(0.0, 1.5, (n_drive, 3))
+    drive_a[:, 2] += 9.80665
+    drive_g = rng.normal(0.0, 0.3, (n_drive, 3))
+    settle_a = rng.normal(0.0, 0.2, (n_settle, 3))
+    settle_a[:, 2] += 9.80665
+    settle_g = rng.normal(0.0, 0.02, (n_settle, 3))
+    a = np.vstack([drive_a, settle_a, accel, settle_a[::-1], drive_a])
+    g = np.vstack([drive_g, settle_g, gyro, settle_g[::-1], drive_g])
+    still = (n_drive + n_settle, n_drive + n_settle + n_still)
+    return a, g, still
+
+
+def test_a_sample_is_kept_only_if_every_window_containing_it_passes():
+    """The settle a 10 s mean lets through is exactly what set D-045's seeds: the first and last
+    second of IO-VNBD's two usable segments carried 10-74x the interior gyro RMS, and ARW is read
+    at tau = 0.2-2 s (D-120). So the segment is the samples *every* covering window passes on,
+    not the samples *some* covering window passes on."""
     cfg = FilterConfig()
+    accel, gyro, (still_lo, still_hi) = _stop_between_two_drives()
+    n = accel.shape[0]
+    seq = _sequence(accel, gyro, np.arange(n) * DT)
+    window = int(WINDOW_S * SAMPLE_RATE_HZ)
+
+    found = find_stationary_segments(seq, cfg=cfg, min_duration_s=120.0)
+    assert len(found) == 1
+    seg = found[0]
+
+    def passes(i: int) -> bool:
+        return is_stationary(accel[i : i + window], gyro[i : i + window], cfg)
+
+    def every_window_passes(j: int) -> bool:
+        return all(passes(i) for i in range(max(0, j - window + 1), min(j, n - window) + 1))
+
+    # Nothing from the settle or the pull-away is inside the segment...
+    assert still_lo <= seg.start and seg.stop <= still_hi
+    # ...and the rule is exactly "every window containing the sample passes": true of the first
+    # and last kept samples, false of the samples just outside them.
+    assert every_window_passes(seg.start) and every_window_passes(seg.stop - 1)
+    assert not every_window_passes(seg.start - 1)
+    assert not every_window_passes(seg.stop)
+    # The union rule would have kept the settle: some window containing its last sample passes.
+    assert any(passes(i) for i in range(still_lo - window, still_lo))
+
+
+def test_a_run_at_the_records_own_edge_is_not_eroded_there():
+    """No window before the first sample failed, so nothing bounds the run on that side. A desk
+    session whose logger starts on a still phone (D-119) keeps its first ten seconds."""
     n = 4_000
     accel, gyro = _still(n)
     seq = _sequence(accel, gyro, np.arange(n) * DT)
+    found = find_stationary_segments(seq, min_duration_s=120.0)
+    assert len(found) == 1
+    assert (found[0].start, found[0].stop) == (0, n)
 
-    found = find_stationary_segments(seq, min_duration_s=120.0, window_s=10.0)
+
+def test_segment_finder_agrees_with_the_filters_own_detector():
+    """The vectorised criterion must be the same criterion as `is_stationary`, not a lookalike.
+
+    Every window that contains a kept sample is re-checked through the filter's own function; a
+    drift between the two would mean Q was characterised on samples the filter will not ZUPT on.
+    """
+    cfg = FilterConfig()
+    accel, gyro, _ = _stop_between_two_drives()
+    n = accel.shape[0]
+    seq = _sequence(accel, gyro, np.arange(n) * DT)
+
+    found = find_stationary_segments(seq, cfg=cfg, min_duration_s=120.0, window_s=WINDOW_S)
     assert found
 
-    window = int(10.0 * SAMPLE_RATE_HZ)
+    window = int(WINDOW_S * SAMPLE_RATE_HZ)
     seg = found[0]
-    for start in range(seg.start, seg.stop - window, window):
+    for start in range(seg.start - window + 1, seg.stop - window + 1):
         assert is_stationary(accel[start : start + window], gyro[start : start + window], cfg)
 
 
@@ -385,6 +471,36 @@ def test_filter_config_matches_the_measured_summary():
         ("accel_bias_rw", "accel_bias_rw_mps3_sqrt_hz"),
     ):
         assert getattr(cfg, attribute) == pytest.approx(measured[key], rel=5e-3), attribute
+
+
+@pytest.mark.skipif(not SUMMARY.exists(), reason="run `python -m eval.allan` to generate it")
+def test_p0_accel_bias_block_matches_the_measured_summary():
+    """`initial_covariance` carries the accel bias instability by name; it is the same number."""
+    measured = json.loads(SUMMARY.read_text(encoding="utf-8"))["summary"]
+    assert ACCEL_BIAS_INSTABILITY_MEASURED == pytest.approx(
+        measured["accel_bias_instability_mps2"], rel=5e-3
+    )
+
+
+@pytest.mark.skipif(not SUMMARY.exists(), reason="run `python -m eval.allan` to generate it")
+def test_the_committed_artefacts_were_made_under_the_current_detector():
+    """The summary records the stationarity rule its segments were found under, and it must be
+    the rule `FilterConfig` carries *now*.
+
+    D-115 tightened the ZUPT thresholds for a reason of its own and the committed Allan artefacts
+    went stale for sixteen days without a test noticing: the seeds test compared `FilterConfig`
+    with the summary, and both were old together. The thresholds decide where a stop's edges
+    fall, and the edges are where the seeds came from (D-120). A retune now fails here, and the
+    message says what to do.
+    """
+    recorded = json.loads(SUMMARY.read_text(encoding="utf-8"))["detector"]
+    current = detector_settings(FilterConfig(), min_duration_s=recorded["min_duration_s"])
+    assert recorded == current, (
+        "eval/figures/allan_* were found under a different stationarity rule than FilterConfig "
+        "now carries; regenerate them at a clean commit and re-seed FilterConfig from the result"
+    )
+    assert recorded["quiet_margin"] == QUIET_MARGIN
+    assert recorded["window_s"] == WINDOW_S
 
 
 @pytest.mark.skipif(not SUMMARY.exists(), reason="run `python -m eval.allan` to generate it")

@@ -46,17 +46,9 @@
         <activity
             android:name=".replay.ReplayActivity"
             android:exported="true"
-            android:label="IDR Trajectory Replay"
-            android:screenOrientation="portrait">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/json" />
-                <data android:scheme="content" />
-                <data android:scheme="file" />
-            </intent-filter>
-        </activity>
+            android:label="Trajectory Replay"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait" />
 
         <service
             android:name=".LoggerService"

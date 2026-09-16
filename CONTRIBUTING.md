@@ -30,11 +30,18 @@ Agree those contracts in writing **before** either side writes code against them
 ## Branches and commits
 
 - Default branch: `main`. It stays green.
-- Branch names: `<seat>/<short-topic>` — `s/inekf-propagation`, `d/outage-harness`, `m/speed-head`.
+- **Since 14 Sep 2026 all work lands on `main`.** The seat-branch rule below was the screening-era
+  convention; the last seat branch, `a/mapbox-scaffold`, was merged in PR #20 and deleted. If you
+  do open a branch for something you cannot land in one green push, name it `<seat>/<short-topic>`
+  as before, keep it short, and delete it once merged — a branch that outlives its PR is a second
+  copy of `main` that nobody is testing.
 - Commit messages: imperative subject line, and **say why in the body when the why is not obvious**.
-- Never commit to `main` directly once CI exists.
+- Pull before you push, and run `pytest -q` first: CI runs on every push to `main`, so a red push
+  is visible to everyone immediately, and the fix is a second commit, not a force-push.
 - Never commit dataset bytes, model checkpoints, or OSM extracts. `.gitignore` blocks the common
-  cases; it will not save you from `git add -f`.
+  cases; it will not save you from `git add -f`. The one binary that *is* committed on purpose is
+  `releases/app-osm-debug.apk` — when you replace it, update the **Built from** commit in
+  [releases/README.md](releases/README.md) in the same commit.
 
 ```mermaid
 gitGraph
@@ -55,6 +62,13 @@ gitGraph
     commit id: "V- truth path"
     checkout main
     merge d/gps-cadence tag: "b856046 · 1 Sep"
+    branch a/mapbox-scaffold
+    checkout a/mapbox-scaffold
+    commit id: "mapbox flavour + tunnel FSM"
+    commit id: "osm APK"
+    checkout main
+    merge a/mapbox-scaffold tag: "PR #20 · 14 Sep · last seat branch"
+    commit id: "main only from here"
 ```
 
 ---

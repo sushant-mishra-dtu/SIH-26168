@@ -1,31 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  ============================================================================================
-  THE RULE (D-039, D-042, D-079, D-080):
-      THIS SCREEN CONTAINS NO PHYSICS AND NO SIMULATION.
-
-  If it can display it, eval/run.py produced it. There is no second path, no generator, and no
-  fallback that invents data when a file is missing - a missing file shows an empty state and
-  says so.
-
-  Drift-% and yaw error are read verbatim from the artefact, never computed here.
-  ============================================================================================
--->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
     android:background="#0D1117"
-    android:orientation="vertical">
+    android:fillViewport="true">
 
-    <!-- Top App Bar / Header -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#161B22"
-        android:gravity="center_vertical"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="16dp">
 
+        <!-- Header -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -36,401 +23,221 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="IDR 26168 · Replay"
+                android:text="IDR 26168 · replay"
                 android:textColor="#E6EDF3"
-                android:textSize="17sp"
+                android:textSize="18sp"
                 android:textStyle="bold" />
 
-            <Spinner
-                android:id="@+id/sequence_spinner"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-
             <Button
-                android:id="@+id/btn_load_json"
-                style="@style/Widget.AppCompat.Button.Borderless"
+                android:id="@+id/load_json"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="#21262D"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:text="Load JSON…"
-                android:textAllCaps="false"
-                android:textColor="#E6EDF3"
-                android:textSize="12sp" />
+                android:text="Load JSON..." />
         </LinearLayout>
 
         <TextView
-            android:id="@+id/replay_stamp"
+            android:id="@+id/stamp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:fontFamily="monospace"
             android:text="no artefact loaded"
             android:textColor="#8B949E"
-            android:textSize="11sp" />
-    </LinearLayout>
+            android:textSize="12sp" />
 
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent">
-
-        <!-- Empty State View -->
+        <!-- Empty State -->
         <LinearLayout
             android:id="@+id/empty_state"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:gravity="center"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="40dp"
+            android:background="#161B22"
             android:orientation="vertical"
-            android:padding="32dp">
+            android:padding="24dp">
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="No harness output loaded."
                 android:textColor="#E6EDF3"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:gravity="center"
-                android:lineSpacingExtra="4dp"
-                android:text="This screen renders eval/figures/trajectory_&lt;sequence&gt;.json produced by python -m eval.run.\n\nIt contains no physics and no simulator: until a run has produced an artefact there is nothing to display."
+                android:text="This screen renders idr-trajectory/1 records written by eval/run.py. It contains no physics and no simulation — select a trajectory JSON file using the button above to render it."
                 android:textColor="#8B949E"
-                android:textSize="13sp" />
-
-            <Button
-                android:id="@+id/btn_empty_load"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:backgroundTint="#21262D"
-                android:text="Open Trajectory File"
-                android:textColor="#E6EDF3" />
+                android:textSize="14sp" />
         </LinearLayout>
 
-        <!-- Main Content ScrollView -->
-        <ScrollView
+        <!-- Main Replay Content -->
+        <LinearLayout
             android:id="@+id/replay_content"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:fillViewport="true"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
             android:visibility="gone">
 
+            <!-- Trajectory Map Panel -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:background="#161B22"
                 android:orientation="vertical"
                 android:padding="12dp">
 
-                <!-- 1. Trajectory Map Card -->
-                <LinearLayout
+                <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:background="#161B22"
-                    android:orientation="vertical"
-                    android:padding="12dp">
+                    android:text="Trajectory · local NED, metres"
+                    android:textColor="#8B949E"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
 
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:letterSpacing="0.08"
-                        android:text="TRAJECTORY · LOCAL NED, METRES"
-                        android:textAllCaps="true"
-                        android:textColor="#8B949E"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
+                <org.idr26168.logger.replay.TrajectoryMapView
+                    android:id="@+id/map_view"
+                    android:layout_width="match_parent"
+                    android:layout_height="320dp"
+                    android:layout_marginTop="8dp" />
 
-                    <org.idr26168.logger.replay.TrajectoryMapView
-                        android:id="@+id/trajectory_map"
-                        android:layout_width="match_parent"
-                        android:layout_height="300dp"
-                        android:layout_marginTop="8dp" />
-
-                    <!-- Legend -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:orientation="vertical">
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="— ground truth (V- VBOX, 10 Hz)"
-                                android:textColor="#E6EDF3"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="— ours — InEKF"
-                                android:textColor="#2F81F7"
-                                android:textSize="11sp" />
-                        </LinearLayout>
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:orientation="horizontal">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="— naive strapdown baseline"
-                                android:textColor="#F85149"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="— GNSS available"
-                                android:textColor="#D29922"
-                                android:textSize="11sp" />
-                        </LinearLayout>
-                    </LinearLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="Dashed ellipse: the filter's own 1σ position covariance at the scrubbed epoch. It grows through the outage because nothing is correcting it, and collapses at the first accepted fix after it."
-                        android:textColor="#8B949E"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
-                <!-- 2. Readout Panel Card ("At this epoch") -->
-                <LinearLayout
+                <!-- Legend -->
+                <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="#161B22"
-                    android:orientation="vertical"
-                    android:padding="12dp">
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="monospace"
+                    android:text="— Truth (white)   — Filter InEKF (blue)\n— Strapdown (red)   — GNSS (amber)"
+                    android:textColor="#E6EDF3"
+                    android:textSize="11sp" />
 
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:letterSpacing="0.08"
-                        android:text="AT THIS EPOCH"
-                        android:textAllCaps="true"
-                        android:textColor="#8B949E"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
-
-                    <!-- Grid of metrics -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:orientation="horizontal">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="t into outage"
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:id="@+id/readout_t"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:fontFamily="monospace"
-                                android:text="—"
-                                android:textColor="#E6EDF3"
-                                android:textSize="18sp"
-                                android:textStyle="bold" />
-                        </LinearLayout>
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="drift, % of dist"
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:id="@+id/readout_drift"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:fontFamily="monospace"
-                                android:text="—"
-                                android:textColor="#2F81F7"
-                                android:textSize="18sp"
-                                android:textStyle="bold" />
-                        </LinearLayout>
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="yaw error, deg"
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:id="@+id/readout_yaw"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:fontFamily="monospace"
-                                android:text="—"
-                                android:textColor="#D29922"
-                                android:textSize="18sp"
-                                android:textStyle="bold" />
-                        </LinearLayout>
-                    </LinearLayout>
-
-                    <TableLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:stretchColumns="1">
-
-                        <TableRow android:layout_marginBottom="2dp">
-                            <TextView android:text="position σ north, m: " android:textColor="#8B949E" android:textSize="11sp" />
-                            <TextView android:id="@+id/readout_sn" android:fontFamily="monospace" android:gravity="end" android:textColor="#E6EDF3" android:textSize="11sp" />
-                        </TableRow>
-
-                        <TableRow android:layout_marginBottom="2dp">
-                            <TextView android:text="position σ east, m: " android:textColor="#8B949E" android:textSize="11sp" />
-                            <TextView android:id="@+id/readout_se" android:fontFamily="monospace" android:gravity="end" android:textColor="#E6EDF3" android:textSize="11sp" />
-                        </TableRow>
-
-                        <TableRow android:layout_marginBottom="2dp">
-                            <TextView android:text="truth distance, m: " android:textColor="#8B949E" android:textSize="11sp" />
-                            <TextView android:id="@+id/readout_dist" android:fontFamily="monospace" android:gravity="end" android:textColor="#E6EDF3" android:textSize="11sp" />
-                        </TableRow>
-
-                        <TableRow android:layout_marginBottom="2dp">
-                            <TextView android:text="outage length, s: " android:textColor="#8B949E" android:textSize="11sp" />
-                            <TextView android:id="@+id/readout_len" android:fontFamily="monospace" android:gravity="end" android:textColor="#E6EDF3" android:textSize="11sp" />
-                        </TableRow>
-
-                        <TableRow>
-                            <TextView android:text="sequence: " android:textColor="#8B949E" android:textSize="11sp" />
-                            <TextView android:id="@+id/readout_seq" android:fontFamily="monospace" android:gravity="end" android:textColor="#E6EDF3" android:textSize="11sp" />
-                        </TableRow>
-                    </TableLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="Drift-% and yaw error are read from the artefact, not computed here."
-                        android:textColor="#8B949E"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
-                <!-- 3. Scrubber Card -->
-                <LinearLayout
+                <TextView
+                    android:id="@+id/ellipse_caption"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="#161B22"
-                    android:orientation="vertical"
-                    android:padding="12dp">
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:letterSpacing="0.08"
-                        android:text="SCRUBBER"
-                        android:textAllCaps="true"
-                        android:textColor="#8B949E"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
-
-                    <SeekBar
-                        android:id="@+id/epoch_scrubber"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:max="0"
-                        android:progress="0" />
-
-                    <org.idr26168.logger.replay.TrajectorySeriesView
-                        android:id="@+id/trajectory_series"
-                        android:layout_width="match_parent"
-                        android:layout_height="120dp"
-                        android:layout_marginTop="4dp" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="Drift-% (blue) and |yaw error| in degrees (amber) per 1 s epoch."
-                        android:textColor="#8B949E"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
-                <!-- 4. Sensor Traces Card -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="#161B22"
-                    android:orientation="vertical"
-                    android:padding="12dp">
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:letterSpacing="0.08"
-                        android:text="SENSOR TRACES"
-                        android:textAllCaps="true"
-                        android:textColor="#8B949E"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
-
-                    <org.idr26168.logger.replay.TrajectoryImuView
-                        android:id="@+id/trajectory_imu"
-                        android:layout_width="match_parent"
-                        android:layout_height="140dp"
-                        android:layout_marginTop="8dp" />
-
-                    <TextView
-                        android:id="@+id/imu_caption"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="S- smartphone stream at 10 Hz. Accelerometer m/s² (solid), gyroscope rad/s (dashed). This is the phone rate; the 200 Hz FOG configuration is not demonstrated on this dataset."
-                        android:textColor="#8B949E"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
+                    android:layout_marginTop="6dp"
+                    android:text="Dashed ellipse: the filter's own 1σ position covariance at the scrubbed epoch. It grows through the outage because nothing is correcting it, and collapses at the first accepted fix after it."
+                    android:textColor="#8B949E"
+                    android:textSize="11sp" />
             </LinearLayout>
-        </ScrollView>
-    </FrameLayout>
-</LinearLayout>
+
+            <!-- Readout Panel -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="#161B22"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="At this epoch"
+                    android:textColor="#8B949E"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/r_t"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:fontFamily="monospace"
+                    android:textColor="#E6EDF3"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/r_metrics"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:fontFamily="monospace"
+                    android:textColor="#E6EDF3"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Drift-% and yaw error are read from the artefact, not computed here."
+                    android:textColor="#8B949E"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- Scrubber Panel -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="#161B22"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Scrubber"
+                    android:textColor="#8B949E"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <SeekBar
+                    android:id="@+id/scrubber"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" />
+
+                <org.idr26168.logger.replay.SeriesView
+                    android:id="@+id/series_view"
+                    android:layout_width="match_parent"
+                    android:layout_height="120dp"
+                    android:layout_marginTop="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Drift-% (blue) and |yaw error| in degrees (amber) per 1 s epoch."
+                    android:textColor="#8B949E"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- Sensor Traces Panel -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="#161B22"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Sensor traces"
+                    android:textColor="#8B949E"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <org.idr26168.logger.replay.SensorTraceView
+                    android:id="@+id/sensor_view"
+                    android:layout_width="match_parent"
+                    android:layout_height="140dp"
+                    android:layout_marginTop="8dp" />
+
+                <TextView
+                    android:id="@+id/sensor_caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:textColor="#8B949E"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

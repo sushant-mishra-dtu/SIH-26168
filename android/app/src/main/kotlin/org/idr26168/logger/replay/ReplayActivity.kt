@@ -1,66 +1,53 @@
 package org.idr26168.logger.replay
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.SeekBar
-import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import org.idr26168.logger.R
-import java.io.InputStream
 import java.util.Locale
 
 /**
- * Activity presenting the offline trajectory replay view.
+ * Trajectory Replay Activity rendering `idr-trajectory/1` records produced by `eval/run.py`.
  *
- * Implements the demo UI required by `android/HANDOVER.md` §3a and `android/README.md`.
- *
- * CRITICAL ARCHITECTURAL CONSTRAINTS:
- * - D-039 / D-080: This screen contains NO simulation and NO network.
- * - D-079: Drift-% and yaw error are read from the record, NEVER computed here.
- * - D-081: The sensor caption identifies the S- smartphone stream at 10 Hz and disclaims
- *   that the 200 Hz FOG configuration is not demonstrated on this dataset.
+ * **CRITICAL RULES (D-079, D-080, D-081):**
+ * 1. NO physics and NO simulation. Reads `driftPct` and `yawErrorDeg` directly from the record.
+ * 2. NO fallback that invents data when a file is missing. An empty state is shown when unloaded.
+ * 3. Schema validation: refuses any record with an unrecognised schema string.
+ * 4. Caption discipline (D-081): explicit statement that 200 Hz FOG configuration is not demonstrated.
  */
 class ReplayActivity : AppCompatActivity() {
 
-    private val records = LinkedHashMap<String, TrajectoryRecord>()
-    private var current: TrajectoryRecord? = null
+    private lateinit var stampText: TextView
+    private lateinit var emptyStateView: View
+    private lateinit var replayContentView: View
+    private lateinit var loadButton: Button
 
-    // UI elements
-    private lateinit var stampView: TextView
-    private lateinit var emptyState: View
-    private lateinit var replayContent: View
-    private lateinit var sequenceSpinner: Spinner
-    private lateinit var btnLoadJson: Button
-    private lateinit var btnEmptyLoad: Button
+    private lateinit var mapView: TrajectoryMapView
+    private lateinit var seriesView: SeriesView
+    private lateinit var sensorView: SensorTraceView
 
-    private lateinit var trajectoryMap: TrajectoryMapView
-    private lateinit var trajectorySeries: TrajectorySeriesView
-    private lateinit var trajectoryImu: TrajectoryImuView
-    private lateinit var epochScrubber: SeekBar
+    private lateinit var scrubber: SeekBar
+    private lateinit var readOutT: TextView
+    private lateinit var readOutMetrics: TextView
+    private lateinit var sensorCaption: TextView
 
-    private lateinit var readoutT: TextView
-    private lateinit var readoutDrift: TextView
-    private lateinit var readoutYaw: TextView
-    private lateinit var readoutSn: TextView
-    private lateinit var readoutSe: TextView
-    private lateinit var readoutDist: TextView
-    private lateinit var readoutLen: TextView
-    private lateinit var readoutSeq: TextView
-    private lateinit var imuCaption: TextView
+    private var currentRecord: TrajectoryRecord? = null
 
-    private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) {
-            for (uri in uris) {
-                loadFromUri(uri)
+    private val openDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val uri: Uri? = result.data?.data
+            if (uri != null) {
+                loadTrajectoryFromUri(uri)
             }
         }
     }
@@ -69,150 +56,113 @@ class ReplayActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_replay)
 
-        stampView = findViewById(R.id.replay_stamp)
-        emptyState = findViewById(R.id.empty_state)
-        replayContent = findViewById(R.id.replay_content)
-        sequenceSpinner = findViewById(R.id.sequence_spinner)
-        btnLoadJson = findViewById(R.id.btn_load_json)
-        btnEmptyLoad = findViewById(R.id.btn_empty_load)
+        stampText = findViewById(R.id.stamp)
+        emptyStateView = findViewById(R.id.empty_state)
+        replayContentView = findViewById(R.id.replay_content)
+        loadButton = findViewById(R.id.load_json)
 
-        trajectoryMap = findViewById(R.id.trajectory_map)
-        trajectorySeries = findViewById(R.id.trajectory_series)
-        trajectoryImu = findViewById(R.id.trajectory_imu)
-        epochScrubber = findViewById(R.id.epoch_scrubber)
+        mapView = findViewById(R.id.map_view)
+        seriesView = findViewById(R.id.series_view)
+        sensorView = findViewById(R.id.sensor_view)
 
-        readoutT = findViewById(R.id.readout_t)
-        readoutDrift = findViewById(R.id.readout_drift)
-        readoutYaw = findViewById(R.id.readout_yaw)
-        readoutSn = findViewById(R.id.readout_sn)
-        readoutSe = findViewById(R.id.readout_se)
-        readoutDist = findViewById(R.id.readout_dist)
-        readoutLen = findViewById(R.id.readout_len)
-        readoutSeq = findViewById(R.id.readout_seq)
-        imuCaption = findViewById(R.id.imu_caption)
+        scrubber = findViewById(R.id.scrubber)
+        readOutT = findViewById(R.id.r_t)
+        readOutMetrics = findViewById(R.id.r_metrics)
+        sensorCaption = findViewById(R.id.sensor_caption)
 
-        btnLoadJson.setOnClickListener { openFilePicker() }
-        btnEmptyLoad.setOnClickListener { openFilePicker() }
-
-        epochScrubber.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                renderEpoch(progress)
+        loadButton.setOnClickListener {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
             }
+            openDocumentLauncher.launch(intent)
+        }
+
+        scrubber.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                updateEpoch(progress)
+            }
+
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        sequenceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val seq = parent?.getItemAtPosition(position) as? String ?: return
-                selectRecord(seq)
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        // Handle intent if opened via file manager
-        intent?.data?.let { uri ->
-            loadFromUri(uri)
-        }
+        // Check if an intent passed a trajectory URI directly
+        intent?.data?.let { uri -> loadTrajectoryFromUri(uri) }
     }
 
-    private fun openFilePicker() {
-        filePickerLauncher.launch(arrayOf("application/json", "*/*"))
-    }
-
-    private fun loadFromUri(uri: Uri) {
-        val label = uri.lastPathSegment ?: "file"
+    private fun loadTrajectoryFromUri(uri: Uri) {
         try {
-            val content = contentResolver.openInputStream(uri)?.use { stream: InputStream ->
-                stream.bufferedReader().readText()
-            } ?: throw IllegalStateException("Could not read file $label")
+            val jsonText = contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader(Charsets.UTF_8).readText()
+            } ?: throw IllegalArgumentException("Unable to read content from file.")
 
-            val record = TrajectoryParser.parse(content, label)
-            accept(record)
+            val record = TrajectoryRecord.fromJson(jsonText)
+            displayRecord(record)
         } catch (e: Exception) {
             AlertDialog.Builder(this)
                 .setTitle("Invalid Trajectory Record")
-                .setMessage(e.message ?: "Failed to parse trajectory JSON")
+                .setMessage(e.message ?: "Failed to parse JSON file.")
                 .setPositiveButton("OK", null)
                 .show()
         }
     }
 
-    fun accept(record: TrajectoryRecord) {
-        records[record.sequence] = record
-        updateSpinner()
-        selectRecord(record.sequence)
-    }
+    fun displayRecord(record: TrajectoryRecord) {
+        currentRecord = record
+        emptyStateView.visibility = View.GONE
+        replayContentView.visibility = View.VISIBLE
 
-    private fun updateSpinner() {
-        if (records.size > 1) {
-            val names = records.keys.toList().sorted()
-            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
-            sequenceSpinner.adapter = adapter
-            sequenceSpinner.visibility = View.VISIBLE
-        } else {
-            sequenceSpinner.visibility = View.GONE
-        }
-    }
+        val dirtyNote = if (!record.reproducible) "  — NOT REPRODUCIBLE" else ""
+        stampText.text = "${record.stamp}$dirtyNote"
 
-    private fun selectRecord(sequence: String) {
-        val r = records[sequence] ?: return
-        current = r
+        val maxEpoch = (record.epochS.size - 1).coerceAtLeast(0)
+        scrubber.max = maxEpoch
+        scrubber.progress = maxEpoch
 
-        emptyState.visibility = View.GONE
-        replayContent.visibility = View.VISIBLE
-
-        val dirtyNote = if (!r.reproducible) " — NOT REPRODUCIBLE" else ""
-        stampView.text = "${r.stamp}$dirtyNote"
-        if (!r.reproducible) {
-            stampView.setTextColor(android.graphics.Color.parseColor("#F85149"))
-        } else {
-            stampView.setTextColor(android.graphics.Color.parseColor("#8B949E"))
-        }
-
-        readoutSeq.text = r.sequence
-        readoutLen.text = "${r.lengthS}"
-        readoutDist.text = String.format(Locale.US, "%.1f", r.distanceM)
-
-        imuCaption.text = String.format(
+        // Caption discipline (D-081)
+        sensorCaption.text = String.format(
             Locale.US,
             "%s smartphone stream at %d Hz — %d samples over %d s. " +
-            "Accelerometer m/s² (solid), gyroscope rad/s (dashed). This is the phone rate; " +
-            "the 200 Hz FOG configuration is not demonstrated on this dataset.",
-            r.stream, r.imuRateHz, r.accelMps2.size, r.lengthS,
+                "Accelerometer m/s² (solid), gyroscope rad/s (dashed). This is the phone rate; " +
+                "the 200 Hz FOG configuration is not demonstrated on this dataset.",
+            record.stream,
+            record.imuRateHz,
+            record.accelMps2.size,
+            record.lengthS,
         )
 
-        val n = r.epochS.size
-        epochScrubber.max = (n - 1).coerceAtLeast(0)
-        // Match replay.html: open at the final scrubbed epoch
-        epochScrubber.progress = (n - 1).coerceAtLeast(0)
-        renderEpoch((n - 1).coerceAtLeast(0))
+        updateEpoch(maxEpoch)
     }
 
-    private fun renderEpoch(k: Int) {
-        val r = current ?: return
-        val clampedK = k.coerceIn(0, r.epochS.size - 1)
+    private fun updateEpoch(k: Int) {
+        val r = currentRecord ?: return
+        val validK = k.coerceIn(0, (r.epochS.size - 1).coerceAtLeast(0))
 
-        val tSec = if (clampedK < r.epochS.size) r.epochS[clampedK] else clampedK
-        readoutT.text = "$tSec s"
+        val epochSec = if (validK < r.epochS.size) r.epochS[validK] else validK
+        val driftPct = if (validK < r.driftPct.size) r.driftPct[validK] else 0.0
+        val yawErrDeg = if (validK < r.yawErrorDeg.size) r.yawErrorDeg[validK] else 0.0
+        val sig = if (validK < r.positionSigmaM.size) r.positionSigmaM[validK] else doubleArrayOf(0.0, 0.0)
 
-        val drift = if (clampedK < r.driftPct.size) r.driftPct[clampedK] else 0.0
-        readoutDrift.text = String.format(Locale.US, "%.2f %%", drift)
+        readOutT.text = String.format(Locale.US, "t into outage: %d s", epochSec)
 
-        val yawErr = if (clampedK < r.yawErrorDeg.size) r.yawErrorDeg[clampedK] else 0.0
-        readoutYaw.text = String.format(Locale.US, "%.2f°", yawErr)
+        readOutMetrics.text = String.format(
+            Locale.US,
+            "drift, %% of distance: %.2f %%\n" +
+                "yaw error: %.2f°\n" +
+                "position σ north: %.2f m, east: %.2f m\n" +
+                "truth distance: %.1f m   outage length: %d s   sequence: %s",
+            driftPct,
+            yawErrDeg,
+            sig[0],
+            sig[1],
+            r.distanceM,
+            r.lengthS,
+            r.sequence,
+        )
 
-        if (clampedK < r.positionSigmaM.size) {
-            val sig = r.positionSigmaM[clampedK]
-            readoutSn.text = String.format(Locale.US, "%.2f", sig.sigmaNorth)
-            readoutSe.text = String.format(Locale.US, "%.2f", sig.sigmaEast)
-        } else {
-            readoutSn.text = "—"
-            readoutSe.text = "—"
-        }
-
-        trajectoryMap.bind(r, clampedK)
-        trajectorySeries.bind(r, clampedK)
-        trajectoryImu.bind(r, clampedK)
+        mapView.setRecord(r, validK)
+        seriesView.setRecord(r, validK)
+        sensorView.setRecord(r, validK)
     }
 }

@@ -71,7 +71,7 @@ object Records {
             sb.append(',')
             fix.altitudeM?.let { appendFixedNoComma(sb, it, DP_METRES) }
             sb.append(',')
-            fix.speedKmh?.let { appendFixedNoComma(sb, it, DP_METRES) }
+            fix.speedMps?.let { appendFixedNoComma(sb, it, DP_METRES) }
             sb.append(',')
             fix.accuracyM?.let { appendFixedNoComma(sb, it, DP_METRES) }
             sb.append(',')

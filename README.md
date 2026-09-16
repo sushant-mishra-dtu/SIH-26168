@@ -3,21 +3,27 @@
 Smart India Hackathon 2026 · Problem Statement **26168** · AI-based intelligent dead reckoning.
 
 > **Grade metric:** position drift under **10% of distance travelled**
-> **Screening submission:** **Tue 8 Sep 2026**
-> **Status:** 1 Sep. CI green, 421 tests. The filter, both Gate 1 baselines, the wired harness,
-> `R_sv` in-filter, the FFI definition and the replay renderer are all in.
-> **Filter consistency is fixed** — full-state NEES went 29.90 (over-confident) → 14.14
-> (under-confident, the safe direction), and D-053's diagnosis was wrong: the cause was one false
-> ZARU per stop, not the noise correlation (D-057).
-> **Gate 0 is not closed** — the protocol is still DRAFT: CRSE is pinned (D-054), the split re-pick
-> and the GNSS cadence are open.
-> **Gate 1 is not measured, and no number stands in for it.** The IO-VNBD CSVs are Git-LFS objects
-> this environment cannot fetch (D-059), so the harness exits at "dataset not found". What is
-> established is that the wiring is correct, on a synthetic drive whose answers are known
-> independently (D-069). Under H-4 no learned component goes in until Gate 1 closes, so P-08/P-09/
-> P-10 have not been started.
+> **Screening submission:** **Tue 8 Sep 2026** (past — see [docs/SUBMISSION_AUDIT.md](docs/SUBMISSION_AUDIT.md))
+> **Status:** 14 Sep 2026. CI green, 728 Python tests plus JUnit on both Android roots.
+> **The demo app is installable.** `releases/app-osm-debug.apk` is the `osm` flavour of the
+> operator UI (`android-ui/`), built from `main`; download link and install steps in
+> [releases/README.md](releases/README.md). The committed APK is **v0.1.5**, matching the source —
+> what changed is [CHANGELOG.md](CHANGELOG.md). It carries the navigation screen, the autonomous
+> tunnel state machine (D-126), turn guidance and the covariance ellipse (D-125). A `mapbox`
+> flavour exists behind two tokens that are not checked in (D-121, D-122) and is not published.
+> **Gate 1 is measured and does not close.** The sweep runs end to end on IO-VNBD (D-110); at 60 s
+> the pooled ratio against the GNSS-available baseline is **11.8×** on 205 windows (D-115) against
+> the required 3–5×, with the remaining gap split between the recordings (yaw-axis vibration
+> aliased at 10 Hz) and the filter. D-115 names the next fix. Under H-4 no learned component goes
+> in until it closes, so P-08/P-09/P-10 have not been started.
+> **The hardware baseline is measured** on the team Samsung Galaxy A55 5G: 125 Hz achieved, 8.1 ms
+> Δt jitter, and an Allan run on our own phone recorded next to IO-VNBD's, not in place of it
+> (D-116, D-119, D-120).
+> **Branching:** everything lands on `main` from here. The last seat branch, `a/mapbox-scaffold`,
+> was merged in PR #20 and deleted on 14 Sep.
 > **Plan of record:** [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) *(27 Aug — supersedes
-> the sprint calendars in AGENTS.md and SPRINT_BOARD.md)*
+> the sprint calendars in AGENTS.md and SPRINT_BOARD.md)*; the Android list is
+> [android/HANDOVER.md](android/HANDOVER.md) §9.
 
 ---
 
@@ -145,10 +151,12 @@ gantt
 **Gate 1 is a hard stop.** No network goes on top of a filter that has not cleared physics-only.
 If it fails, diagnose in order: timestamps → NHC gating → process noise → ZUPT thresholds.
 
-At 13 days the cut list bites early. Realistically **in scope**: harness, leakage audit,
-physics-only InEKF, speed+variance head, eval sweep, write-up. Realistically **deferred to
-post-screening**: online HMM map matching, the Android app, car-park mode, comma2k19 pretraining,
-and the C++/Rust port. See [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md).
+At 13 days the cut list bit early. What was **in scope** for screening: harness, leakage audit,
+physics-only InEKF, eval sweep, write-up. What was **deferred past screening**: the speed head
+(blocked on Gate 1), online HMM map matching, car-park mode, comma2k19 pretraining, and the
+C++/Rust port. The Android logger and demo app were on that deferred list too and have since
+landed (D-116, D-121..D-126). See [docs/SPRINT_BOARD.md](docs/SPRINT_BOARD.md) for the calendar as
+it was written.
 
 ---
 
@@ -184,6 +192,21 @@ against, so this is a Gate 0 blocker rather than a diagnostic:
 python -m eval.cadence --data-root data
 ```
 
+### Try the demo app on a phone
+
+No Android toolchain needed — the pre-built `osm` flavour is committed at
+[releases/app-osm-debug.apk](releases/app-osm-debug.apk); open
+[releases/README.md](releases/README.md) on the phone for the direct link and install steps. Every
+push to `main` also uploads a fresh build as the `app-osm-debug` artifact of the
+[Android workflow](.github/workflows/android.yml). To build it yourself:
+
+```bash
+cd android-ui && ./gradlew :app:assembleOsmDebug :app:testOsmDebugUnitTest
+```
+
+Nothing the app shows is a submission number — [android-ui/README.md](android-ui/README.md)
+explains what it is and is not.
+
 ---
 
 ## What is built and what is not
@@ -203,12 +226,13 @@ python -m eval.cadence --data-root data
 | Speed pseudo-measurement | `NotImplementedError` — Sprint 2 | S+M |
 | Speed head, Onyekpe baseline | architecture defined, untrained | M |
 | Baselines — naive strapdown, GNSS-available | **working**, against closed-form cases | P |
-| Harness wired end to end (`eval/run.py`) | **working**, proven on a synthetic drive; **no Gate 1 number** — the dataset is not fetchable here (D-069) | D |
+| Harness wired end to end (`eval/run.py`) | **working** on IO-VNBD; **Gate 1 measured, not closed** — 11.8× pooled at 60 s against 3–5× required (D-110, D-115) | D |
 | `R_sv` — PCA initialiser, in-filter estimate, knock re-inflation | **working**; the bump *detector* cannot see a 5° knock at 10 Hz (D-075) | S |
 | `core/ffi/idr_core.h` | **defined**, not implemented (D-043). Hotspot measured: the 36×36 expm, 50% of `propagate` | S |
 | Replay renderer | **working**, empty state until a run produces artefacts | A |
-| OSM graph, HMM matcher | not started | P |
-| Android logger, demo UI | not started | A |
+| OSM graph, HMM matcher | designed and sized (D-034..D-037, D-041); no code — see [maps/README.md](maps/README.md) | P |
+| Android foreground logger (`android/`) | **working, on the phone** — installed on the team A55, 125 Hz measured (D-116); CSV schema pinned to the harness loader; replay view renders a real `eval/run.py` record | A |
+| Android operator UI (`android-ui/`) | **working, APK published** — OSM map, navigation screen, tunnel FSM (D-126), covariance ellipse (D-125); `mapbox` flavour scaffolded behind tokens (D-121); estimator is the on-device placeholder, not the InEKF (D-118) | A |
 
 The `NotImplementedError` placeholders are deliberate: a stub returning `None` would let the
 harness produce plausible all-zero trajectories and report them as results.
@@ -235,7 +259,9 @@ idr-26168/
 │   ├── replay/          one self-contained HTML page over the harness's own output
 │   └── figures/         every plot regenerated by one command
 ├── maps/              OSM → CSR graph, HMM matcher                      [seat P]
-├── android/           foreground logger + demo UI                       [seat A]
+├── android/           foreground logger + replay view (one Gradle root) [seat A]
+├── android-ui/        operator UI — second Gradle root, osm + mapbox flavours [seat A]
+├── releases/          the pre-built osm APK and how to install it
 ├── data/              gitignored; manifest with checksums is committed
 ├── docs/              method, error budget, decision log, protocol
 └── tests/             the leakage audit is its own CI gate
@@ -259,6 +285,10 @@ idr-26168/
 | — | [docs/DECISION_LOG.md](docs/DECISION_LOG.md) | Append-only. Every non-obvious choice and its reason. |
 | — | [docs/METHOD.md](docs/METHOD.md) | **The write-up.** First full pass, 1 Sep. §0 tags every number with its provenance; §12 (Results) is deliberately empty and says why. |
 | — | [docs/SUBMISSION_AUDIT.md](docs/SUBMISSION_AUDIT.md) | The pre-submission checklist, with evidence per line and the gaps named as gaps. |
+| — | [android/HANDOVER.md](android/HANDOVER.md) | **The Android list.** §9 is the remaining seat-A work in order; §1 is what is verifiable on the phone today. |
+| — | [docs/UI_UX_NAVIGATION_PLAN.md](docs/UI_UX_NAVIGATION_PLAN.md) | The navigation UI plan; §7 is the Mapbox SDK review and the rules R1–R7 the `mapbox` flavour is held to. |
+| — | [docs/TUNNEL_MODE_AND_NAVIGATION_UPGRADES.md](docs/TUNNEL_MODE_AND_NAVIGATION_UPGRADES.md) | The tunnel state machine and the on-screen stages; implemented as `TunnelFsm.kt` (D-126). |
+| — | [releases/README.md](releases/README.md) | The published APK, which commit built it, and how to install it. |
 
 ---
 

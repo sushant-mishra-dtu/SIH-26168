@@ -1,0 +1,70 @@
+name: Publish GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish-release:
+    name: Build & Publish Release with APKs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+
+      - name: Build Operator Demo APK (osm flavour)
+        working-directory: android-ui
+        run: ./gradlew --no-daemon :app:assembleOsmDebug
+
+      - name: Build Sensor Logger APK
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p dist
+          cp android-ui/app/build/outputs/apk/osm/debug/*.apk dist/app-osm-debug.apk
+          cp android/app/build/outputs/apk/debug/*.apk dist/logger-app-debug.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/app-osm-debug.apk
+            dist/logger-app-debug.apk
+          name: ${{ github.ref_name }} — Intelligent Dead Reckoning Android Suite
+          body: |
+            ## Intelligent Dead Reckoning (IDR) — Release ${{ github.ref_name }}
+
+            ### Highlights & Core Features
+            - **Live Navigation & Demo Operator UI (`app-osm-debug.apk`):**
+              - **Offline & Hybrid Mapping:** Standalone OSMDroid raster basemap (100% offline-capable, no API keys required).
+              - **EtaPaceModel:** Dynamic smoothed pace model ($\tau = 45\text{s}$) preventing speedometer jitter and stabilizing ETA during walking, stops, and highway transitions.
+              - **Autonomous Tunnel Mode FSM:** Seamless multi-sensor trigger state machine (C/N0, lux, barometer, innovation gate rejections) without manual toggles.
+              - **Robust Heading & CourseTracker:** World-vertical gyro projection $\omega_v = -(\mathbf{\omega} \cdot \mathbf{u})$, stationary ZARU null-offset estimation, and decay-slewed reacquisition.
+              - **Error Covariance Ellipse:** Real-time lateral-dominant 1-$\sigma$ position uncertainty representation directly from filter covariance.
+              - **Pan-India Destination Search:** Prefix autocomplete via Photon/Nominatim with offline Delhi landmark presets.
+            - **Forensic Sensor Logger (`logger-app-debug.apk`):**
+              - High-rate 100/125 Hz calibrated + uncalibrated IMU sensing with zero timestamp jitter.
+              - Strict allowlisted 10 Hz canonical CSV stream for benchmark evaluation against ground truth.
+
+            ### Built Binaries
+            - `app-osm-debug.apk` — Operator UI & Dead Reckoning Navigation Demo
+            - `logger-app-debug.apk` — Uncalibrated Sensor Logger for Dataset Collection
+          draft: false
+          prerelease: false

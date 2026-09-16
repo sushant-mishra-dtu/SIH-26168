@@ -27,12 +27,11 @@ from types import MappingProxyType
 #: these sequences are unusable for us at any outage length.
 #:
 #: They were in the protocol drafted from the paper (EVALUATION.md section 3), which is written
-#: against the vehicle stream. Removing them shrank the long-outage set from 9 sequences to 3 and
-#: the mandatory plot set from 4 to 2.
+#: against the vehicle stream. Removing them originally shrank the long-outage set from 9 sequences
+#: to 3 and the mandatory plot set from 4 to 2.
 #:
-#: TODO(seat D): re-pick replacements from the stems that do have an "S-" file, then update
-#: EVALUATION.md section 3 and log the new split in DECISION_LOG.md. Until that happens the
-#: long-outage numbers rest on three sequences and should be reported as such.
+#: D-092 executed the re-pick of replacements from measured synchronised stems with an "S-" file,
+#: expanding LONG_OUTAGE to 7 sequences (459 60 s windows); see `LONG_OUTAGE` below.
 UNAVAILABLE_S_STREAM: frozenset[str] = frozenset(
     {
         "St1",
@@ -93,6 +92,17 @@ LONG_OUTAGE: tuple[str, ...] = (
     "Vw2",
     "Vw4",
 )
+
+#: Stems recorded on a quiet mount (D-115).
+#:
+#: Measured in-motion gyro white level 1.7-1.9 deg/s on S3a/S3c vs 4-20 deg/s on every Vta/Vw stem;
+#: heading random walk 2.9 vs 21-44 deg at 60 s. On the vibrating mounts the IMU stream carries
+#: un-anti-aliased engine and cabin vibration aliased into 10 Hz, random-walking the heading
+#: integral.
+#:
+#: Everything in `LONG_OUTAGE` not in `QUIET_MOUNT` is the vibrating class; do not add a second
+#: tuple for it, derive it.
+QUIET_MOUNT: tuple[str, ...] = ("S3a", "S3c")
 
 #: Challenging scenarios, 10 s outages. Grouped because they are reported per-scenario, not pooled
 #: -- a mean over roundabouts and motorway is a number that describes nothing.

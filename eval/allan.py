@@ -4,6 +4,11 @@ Seeds the InEKF process noise `Q_c` from the sensors that produced the graded da
 from a teammate's phone on a desk (D-038). Everything here reads through the guarded `S-` loader;
 there is no path in this file to the `V-` stream.
 
+The teammate's phone can still be *measured* -- the logger's raw sidecar (`<id>_raw_imu.csv`,
+`eval.loaders.android_raw`) goes through the same segment finder and estimator at the rate it was
+recorded, and its artefacts go to a directory of their own, never into `eval/figures/` beside the
+IO-VNBD ones (android/HANDOVER.md section 9 item 7).
+
 **What the numbers mean.** For a rate signal `x` sampled at `dt`, the overlapping Allan deviation
 `sigma(tau)` decomposes the noise by averaging time:
 
@@ -35,6 +40,11 @@ import numpy as np
 import pandas as pd
 
 from core.reference.inekf import FilterConfig
+from eval.loaders.android_raw import (
+    GYRO_BIAS_AXES,
+    is_raw_imu_sidecar,
+    load_raw_imu_sidecar,
+)
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence, load_sequence
 from idr.stamp import seed_everything
 
@@ -54,6 +64,11 @@ GYRO_AXES: tuple[str, str, str] = ("gyro_yaw", "gyro_pitch", "gyro_roll")
 #: usual working limit and is what we report to.
 MAX_TAU_FRACTION = 0.1
 
+#: Length of the stationarity window, in seconds of the sequence's own rate. Longer than the
+#: filter's 2 s (`FilterConfig.zupt_window_s`) because a segment is kept for minutes, not
+#: detected for a step; the thresholds are the filter's own.
+WINDOW_S = 10.0
+
 #: A stationary segment is quiet enough to characterise *sensor* noise on only if it sits this
 #: far inside the ZUPT detector's thresholds. The detector answers "is the vehicle stopped", and a
 #: car idling with someone shifting in the seat passes it comfortably -- IO-VNBD's S-A6 segments
@@ -65,9 +80,17 @@ QUIET_MARGIN = 10.0
 
 #: How far the fitted log-log slope may sit from -1/2 before the white-noise band is declared
 #: contaminated and the random-walk coefficient read from it is refused. Not cosmetic: on segment
-#: S-T2 the accel_x curve carries a low-frequency bump that flattens tau = 0.6-1.4 s to a plateau,
-#: and reading an "ARW" off it returns a number 4x the other two axes that is not an ARW at all.
+#: S-T2 the accel_x curve carried a low-frequency bump that flattened tau = 0.6-1.4 s to a plateau,
+#: and reading an "ARW" off it returned a number 4x the other two axes that was not an ARW at all.
+#: (The bump was the car settling in the segment's first second, which the D-120 segment rule now
+#: excludes; with it gone that axis is white at a fifth of the value. The gate stays, because the
+#: 10 Hz gyro is flatter than -1/2 on three axes even then, and those are refused for the same
+#: reason.)
 SLOPE_TOLERANCE = 0.15
+
+#: Relative slack on the white-band edges in `random_walk_coefficient`. 1e-6 is six orders above
+#: the float residue it exists to absorb and three below the coarsest tau spacing in the band.
+BAND_EDGE_RTOL = 1e-6
 
 #: IEEE Std 952 flicker-floor coefficient: sigma_min = BIAS_INSTABILITY_COEFF * B.
 BIAS_INSTABILITY_COEFF = math.sqrt(2.0 * math.log(2.0) / math.pi)  # 0.6643
@@ -110,12 +133,21 @@ class StationarySegment:
         return self.duration_s * MAX_TAU_FRACTION
 
 
-def imu_arrays(seq: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def imu_arrays(
+    seq: Sequence, *, bias_compensated: bool = False
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pull `(t_s, accel, gyro)` out of a loaded sequence as float arrays.
 
     Rows with a non-finite timestamp or sample are dropped rather than interpolated: a synthesised
     IMU sample inside an Allan run is indistinguishable from a real one and biases sigma(tau)
     downward at exactly the taus we care about.
+
+    `bias_compensated` subtracts the OS gyro-bias estimate when the sequence carries one (a raw
+    sidecar from `android/`, `eval.loaders.android_raw`). IO-VNBD's `GYROSCOPE` is already the
+    calibrated type, so for it the flag is a no-op. The stationarity gate asks for the compensated
+    stream -- a static bias is not motion -- and the curve asks for the raw one, because the
+    second difference does not see a constant offset but does see the vendor estimate stepping.
+    The rows kept are the same either way, so indices found on one address the other.
     """
     imu = seq.imu
     missing = [c for c in (*ACCEL_AXES, *GYRO_AXES, "time_since_start_ms") if c not in imu.columns]
@@ -127,7 +159,19 @@ def imu_arrays(seq: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     gyro = imu[list(GYRO_AXES)].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
 
     keep = np.isfinite(t) & np.isfinite(accel).all(axis=1) & np.isfinite(gyro).all(axis=1)
+    if all(c in imu.columns for c in GYRO_BIAS_AXES):
+        bias = imu[list(GYRO_BIAS_AXES)].apply(pd.to_numeric, errors="coerce")
+        bias = bias.to_numpy(dtype=float)
+        keep &= np.isfinite(bias).all(axis=1)
+        if bias_compensated:
+            gyro = gyro - bias
     return t[keep], accel[keep], gyro[keep]
+
+
+def sample_rate_hz(seq: Sequence) -> float:
+    """The rate the stationarity window is sized in. IO-VNBD is 10 Hz by protocol; a device
+    sidecar carries the rate it was measured at."""
+    return float(getattr(seq, "sample_rate_hz", SAMPLE_RATE_HZ))
 
 
 def _rolling_mean(x: np.ndarray, window: int) -> np.ndarray:
@@ -147,28 +191,55 @@ def find_stationary_segments(
     *,
     cfg: FilterConfig | None = None,
     min_duration_s: float = 120.0,
-    window_s: float = 10.0,
+    window_s: float = WINDOW_S,
     max_gap_s: float = 0.5,
     max_duplicate_dt_fraction: float = 0.02,
 ) -> list[StationarySegment]:
     """Find stretches long and clean enough to compute an Allan curve on.
 
-    Stationarity uses the filter's own ZUPT criteria (`core.reference.inekf.is_stationary`:
-    mean per-axis accelerometer variance *and* mean gyro magnitude, both under
-    `FilterConfig`'s thresholds), vectorised over a sliding window. Sharing the definition means
-    the segments we characterise noise on are exactly the segments the filter will ZUPT on --
-    tuning Q on a stricter notion of "stopped" than the runtime one would measure a sensor the
-    filter never sees.
+    Stationarity uses the filter's ZUPT thresholds (`FilterConfig.zupt_*`): mean per-axis
+    accelerometer variance *and* mean gyro magnitude, both under threshold, vectorised over a
+    sliding window. Sharing the thresholds means the segments we characterise noise on are the
+    segments the filter will ZUPT on -- tuning Q on a stricter notion of "stopped" than the
+    runtime one would measure a sensor the filter never sees.
+
+    One deliberate difference from the runtime detector: `is_stationary` now takes the norm of
+    the bias-corrected window *mean* (D-130, Fix 1), while this selection keeps the mean of
+    per-sample norms it was seeded with. An Allan run has no bias estimate to subtract, and the
+    D-120 seeds (`eval/figures/allan_*`) must stay reproducible from this function unchanged;
+    changing the rule here is a re-seed and needs its own DECISION_LOG row.
 
     Two sampling checks on top, both learned from the data rather than assumed. IO-VNBD's `S-`
     files are mostly a clean 10 Hz, but at least one (`S-I`) contains a 285 s recorder pause and a
     burst-mode section whose timestamps repeat at ~1 ms. Allan variance assumes a uniform grid, so
     a run is rejected if it holds a gap over `max_gap_s` or more than `max_duplicate_dt_fraction`
     non-advancing timestamps.
+
+    The window is `window_s` of *samples at the sequence's own rate* (`sample_rate_hz`), so a
+    125 Hz sidecar is judged over the same ten seconds as a 10 Hz file. The thresholds are not
+    rescaled with the rate: per-sample noise at 125 Hz exceeds a 10 Hz sample-and-hold of the same
+    part only if the extra bandwidth carries energy, and if it does, that energy is real and the
+    segment is not quiet. A gate that passed a desk at 125 Hz by loosening itself would be
+    measuring its own tolerance.
+
+    **A sample is in the segment only if every window that contains it passes** (D-120). The
+    earlier rule kept the *union* of the passing windows, and a 10 s mean lets up to a second of
+    vehicle motion through at each end of a stop: on IO-VNBD's two usable segments the first and
+    last second carried 10-74x the interior gyro RMS -- the car settling on its suspension and
+    pulling away -- and because ARW and VRW are read at tau = 0.2-2 s, those seconds set the
+    seeds. Excluding them halves every seed (ARW 1.41 -> 0.75 deg/sqrt(hr), B 42 -> 22 deg/hr);
+    trimming a further 5 s moves none by more than 1%. The union rule also made the seeds a
+    function of the detector thresholds, since the thresholds decide how much transient a
+    window may hold, which is how D-115's retune moved D-045's numbers by 15-35% without
+    touching this file. Under this rule the bias instabilities agree between the two threshold
+    sets to 0.3%; the ARW still differs (1.00 against 0.75) because the looser set keeps 1-2 s
+    more of the settle, and that residue is exactly what made three gyro fits *look* white
+    (S-T2 gyro_pitch: slope -0.51 with it, -0.32 without). A run at the record's own edge is
+    not eroded there: no window before the first sample failed, so nothing bounds it.
     """
     cfg = cfg or FilterConfig()
-    t, accel, gyro = imu_arrays(seq)
-    window = max(2, int(round(window_s * SAMPLE_RATE_HZ)))
+    t, accel, gyro = imu_arrays(seq, bias_compensated=True)
+    window = max(2, int(round(window_s * sample_rate_hz(seq))))
     if len(t) < 2 * window:
         return []
 
@@ -180,8 +251,13 @@ def find_stationary_segments(
     )
 
     segments: list[StationarySegment] = []
+    n_windows = stationary.size
     for run_start, run_stop in _true_runs(stationary):
-        start, stop = int(run_start), int(run_stop + window - 1)
+        # Sample j lies in windows [j - window + 1, j]. Every one of them passes iff the run
+        # reaches from j - window + 1 to j, so the kept samples are [run_start + window - 1,
+        # run_stop) -- except at the record's edges, where no failing window bounds the run.
+        start = int(run_start + window - 1) if run_start > 0 else 0
+        stop = int(run_stop) if run_stop < n_windows else len(t)
         dt_all = np.diff(t[start:stop])
         if dt_all.size < 2:
             continue
@@ -350,8 +426,17 @@ def random_walk_coefficient(
 
     The returned slope is the check: if it is not close to -0.5 the band is not white noise and the
     coefficient is not an ARW, whatever the units say.
+
+    The band edges carry a relative tolerance because every tau is `m * dt_s` and `dt_s` is a
+    median of float differences: IO-VNBD's S-T2 gives 0.09999999999990905 and S-T7
+    0.1000000000003638, so an exact `>= 0.2` kept tau = 2 dt on one file and dropped it on the
+    other. With ten points in the band that one point moved S-T2's gyro_pitch slope from -0.32
+    to -0.36 -- across the whiteness gate -- and the seed ARW by 22% (D-120). A rounding residue
+    in a timestamp median is not a property of the sensor.
     """
-    band = (curve.tau_s >= fit_lo_s) & (curve.tau_s <= fit_hi_s)
+    band = (curve.tau_s >= fit_lo_s * (1.0 - BAND_EDGE_RTOL)) & (
+        curve.tau_s <= fit_hi_s * (1.0 + BAND_EDGE_RTOL)
+    )
     if band.sum() < 2:
         band = curve.tau_s <= max(fit_hi_s, curve.tau_s[min(3, curve.tau_s.size - 1)])
     tau, adev = curve.tau_s[band], curve.adev[band]
@@ -596,6 +681,28 @@ def _summarise(report: AllanReport) -> dict[str, float]:
     }
 
 
+def detector_settings(
+    cfg: FilterConfig, *, min_duration_s: float = 120.0, window_s: float = WINDOW_S
+) -> dict[str, object]:
+    """The stationarity rule the segments were found under, for the summary's provenance block.
+
+    The seeds depend on it: the thresholds decide where a stop's edges fall, and the edges are
+    where the settle and the pull-away live. D-115 tightened `FilterConfig`'s thresholds for a
+    reason of its own and the committed artefacts went stale without any test noticing, because
+    the test compared `FilterConfig` with the summary and both were old together. Writing the
+    rule into the summary lets `tests/test_allan.py` compare it with the *current* `FilterConfig`
+    instead, so the next retune fails loudly and names the regeneration it needs (D-120).
+    """
+    return {
+        "zupt_accel_var_thresh": cfg.zupt_accel_var_thresh,
+        "zupt_gyro_norm_thresh": cfg.zupt_gyro_norm_thresh,
+        "window_s": window_s,
+        "quiet_margin": QUIET_MARGIN,
+        "min_duration_s": min_duration_s,
+        "segment_rule": "every window containing the sample passes (D-120)",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -624,6 +731,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     stamp = seed_everything(args.seed)
+    cfg = FilterConfig()
     report = AllanReport()
     loaded: dict[str, Sequence] = {}
 
@@ -637,11 +745,30 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         parser.error("give at least one path, or --paths-from")
 
+    # A device sidecar is recorded *next to* the IO-VNBD artefacts, never over them (D-038,
+    # D-045): the seeds in FilterConfig come from the sensors that produced the graded data.
+    if Path(args.out_dir) == Path(parser.get_default("out_dir")) and any(
+        Path(p).is_file() and is_raw_imu_sidecar(p) for p in paths
+    ):
+        parser.error(
+            "a raw sidecar from android/ must not write into eval/figures/ -- pass --out-dir "
+            "(for example eval/figures/device/<session-id>)"
+        )
+
     for raw in paths:
         path = Path(raw)
-        seq = load_sequence(path)
+        if is_raw_imu_sidecar(path):
+            seq = load_raw_imu_sidecar(path)
+            print(
+                f"{seq.name}: raw sidecar, {seq.n_samples} paired samples at "
+                f"{seq.sample_rate_hz:.2f} Hz over {seq.duration_s:.1f} s, "
+                f"{seq.n_unpaired} unpaired rows dropped, "
+                f"{seq.n_gyro_bias_updates} OS gyro-bias updates"
+            )
+        else:
+            seq = load_sequence(path)
         loaded[seq.name] = seq
-        found = find_stationary_segments(seq, min_duration_s=args.min_duration_s)
+        found = find_stationary_segments(seq, cfg=cfg, min_duration_s=args.min_duration_s)
         for s in found:
             report.segments.append(
                 StationarySegment(**{**asdict(s), "path": str(path).replace("\\", "/")})
@@ -693,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "stamp": asdict(stamp),
+                "detector": detector_settings(cfg, min_duration_s=args.min_duration_s),
                 "segments": [asdict(s) for s in report.segments],
                 "summary": summary,
             },

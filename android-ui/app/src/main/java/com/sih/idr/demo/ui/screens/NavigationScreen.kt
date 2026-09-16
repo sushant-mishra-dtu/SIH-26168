@@ -1,44 +1,67 @@
 package com.sih.idr.demo.ui.screens
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.GpsFixed
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.sih.idr.demo.backend.NavigationMode
+import java.util.Locale
+import kotlinx.coroutines.launch
 import com.sih.idr.demo.backend.TelemetryState
-import com.sih.idr.demo.ui.IDRColors
+import com.sih.idr.demo.backend.TelemetryStore
+import com.sih.idr.demo.backend.routing.GeoCoordinate
+import com.sih.idr.demo.backend.routing.GeocodingService
+import com.sih.idr.demo.backend.routing.RouteService
+import com.sih.idr.demo.backend.routing.SearchItem
+import com.sih.idr.demo.backend.tunnel.TunnelOverride
+import com.sih.idr.demo.backend.tunnel.TunnelState
+import com.sih.idr.demo.ui.LocalIDRPalette
+import com.sih.idr.demo.ui.glassmorphic
+import com.sih.idr.demo.ui.components.ArrivalCard
+import com.sih.idr.demo.ui.components.DestinationSearchBar
+import com.sih.idr.demo.ui.components.ExitProgressBar
+import com.sih.idr.demo.ui.components.GuidanceBanner
+import com.sih.idr.demo.ui.components.HazardChips
+import com.sih.idr.demo.ui.components.MapStack
 import com.sih.idr.demo.ui.components.MapView
-import com.sih.idr.demo.ui.components.TelemetryPanel
+import com.sih.idr.demo.ui.components.NavigationBottomSheet
+import com.sih.idr.demo.ui.components.NavigationHeader
+import com.sih.idr.demo.ui.components.ReconvergenceToast
+import com.sih.idr.demo.ui.components.SpeedHud
 
 /**
- * Main screen — full-bleed map with floating UI overlays matching screenshot style.
+ * Main screen — Google Maps-style navigation UI with full-bleed map, turn guidance banner,
+ * theme toggle, Course-Up/North-Up switching, and real-time dead-reckoning telemetry.
  */
 @Composable
 fun NavigationScreen(
@@ -46,204 +69,343 @@ fun NavigationScreen(
     isRecording: Boolean,
     onStartStop: () -> Unit,
     permissionsGranted: Boolean,
+    onToggleTunnelMode: () -> Unit = {},
+    onSetTunnelOverride: (TunnelOverride) -> Unit = {},
+    onResetOrigin: () -> Unit = {},
+    darkTheme: Boolean = false,
+    onToggleTheme: () -> Unit = {},
+    courseUpMode: Boolean = false,
+    onToggleCourseUp: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val palette = LocalIDRPalette.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val recentSearches = remember {
+        com.sih.idr.demo.backend.routing.RecentSearches(
+            context.getSharedPreferences("idr_recent_searches", android.content.Context.MODE_PRIVATE)
+        )
+    }
+    val tunnelState = telemetry.tunnelState
+    val inTunnel = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR || telemetry.tunnelModeActive
+    val activeRoute = telemetry.activeRoute
+    var isSearchExpanded by remember { mutableStateOf(false) }
+    var isSheetExpanded by remember { mutableStateOf(false) }
+    var searchResultsForMap by remember { mutableStateOf<List<SearchItem>>(emptyList()) }
+
+    // The bottom chrome (speed HUD + sheet) is measured, not assumed: the sheet roughly triples
+    // in height when the diagnostics drawer opens, and anything anchored to the bottom of the map
+    // -- the arrival card, the map's own Re-center pill -- has to clear whatever height it has.
+    var bottomChromeHeightPx by remember { mutableIntStateOf(0) }
+    val bottomChromeHeight = with(density) { bottomChromeHeightPx.toDp() }
+
+    val quickActionsAlpha by animateFloatAsState(
+        targetValue = if (isSearchExpanded) 0.15f else 1f,
+        animationSpec = spring(stiffness = 300f),
+        label = "quick_actions_alpha"
+    )
+
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(IDRColors.BgPrimary)
+            .background(palette.bgPrimary)
     ) {
-        // ── Full-bleed map ──────────────────────────────────────────
+        // ── 1. Full-bleed map (D-121, D-126) ──────────────────────────
         MapView(
             telemetry = telemetry,
+            courseUpMode = courseUpMode,
+            onToggleCourseUp = onToggleCourseUp,
+            bottomInset = bottomChromeHeight,
+            searchResults = if (isSearchExpanded) searchResultsForMap else emptyList(),
+            onMapLongPress = { lat, lon ->
+                // Step 1: start routing immediately with a coordinate-string name so the user
+                // sees the route line right away without waiting for the geocoder.
+                val pin = SearchItem(
+                    id       = "pin_%.5f_%.5f".format(Locale.US, lat, lon),
+                    title    = "Dropped pin",
+                    subtitle = "%.5f, %.5f".format(Locale.US, lat, lon),
+                    category = "Landmarks",
+                    coordinate = GeoCoordinate(lat, lon)
+                )
+                isSearchExpanded = false
+                scope.launch {
+                    val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)
+                    TelemetryStore.setActiveRoute(RouteService.fetchRoute(start, pin))
+                    // Step 2: patch the route name once the geocoder returns — no second route fetch
+                    val named = GeocodingService.default.reverse(lat, lon)
+                    if (named != null) {
+                        TelemetryStore.updateRouteName(named.title)
+                    }
+                }
+            },
             modifier = Modifier.fillMaxSize()
         )
 
-        // ── Floating Top UI ─────────────────────────────────────────
-        Row(
+        // ── 4. Destination Arrival Celebration Modal ───────────────────
+        ArrivalCard(
+            telemetry = telemetry,
+            onDismiss = {
+                TelemetryStore.clearActiveRoute()
+            },
             modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            // "All" Pill
-            FloatingPill(text = "All")
+                .align(Alignment.BottomCenter)
+                .padding(bottom = bottomChromeHeight)
+        )
 
-            // Status Pill (GNSS Denied / Coasting)
-            AnimatedVisibility(
-                visible = telemetry.mode == NavigationMode.INS,
-                enter = fadeIn() + slideInVertically { -it },
-                exit = fadeOut() + slideOutVertically { -it }
-            ) {
-                Surface(
-                    color = IDRColors.OverlayBg,
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier.shadow(8.dp, RoundedCornerShape(24.dp), spotColor = IDRColors.TextDim)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Rounded.Warning, contentDescription = null, modifier = Modifier.size(16.dp), tint = IDRColors.TextSecondary)
-                        Text(
-                            "INS Coasting...",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = IDRColors.TextSecondary
-                        )
-                    }
-                }
-            }
-            if (telemetry.mode != NavigationMode.INS) {
-                Spacer(Modifier.width(1.dp)) // Maintain spacing
-            }
-
-            // Right icons (Search & Location)
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                FloatingIconButton(icon = Icons.Rounded.Search)
-                FloatingIconButton(icon = Icons.Rounded.GpsFixed)
-            }
-        }
-
-        // ── Bottom Sheet Area ───────────────────────────────────────
+        // ── 5. Bottom Sheet Area & Speed HUD ───────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .onSizeChanged { bottomChromeHeightPx = it.height }
         ) {
-            Surface(
-                color = IDRColors.BgSheet,
-                shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-                modifier = Modifier.fillMaxWidth(),
-                shadowElevation = 16.dp
-            ) {
-                Column(
+            // Speed HUD placed bottom-left directly above the bottom sheet (D-081). It exists only
+            // while the estimator is producing a speed: before Start there is no reading, and a
+            // gauge at zero is a reading (D-080). The open drawer carries the same speed on its
+            // first card, so the HUD steps aside rather than ride the sheet up into the banner.
+            if (telemetry.running && !isSheetExpanded) {
+                val postedLimit = if (telemetry.tunnelFix?.inside == true) {
+                    telemetry.tunnelFix.tunnel.postedLimitKmh
+                } else {
+                    null
+                }
+                SpeedHud(
+                    speedMps = telemetry.speedMps,
+                    postedLimitKmh = postedLimit,
+                    onClick = { isSheetExpanded = true },
                     modifier = Modifier
-                        .padding(horizontal = 24.dp, vertical = 24.dp)
-                        .navigationBarsPadding()
-                ) {
-                    // Telemetry cards (Speed, Drift, Sats)
-                    TelemetryPanel(telemetry = telemetry)
+                        .padding(start = 16.dp, bottom = 8.dp)
+                        .align(Alignment.Start)
+                )
+            }
 
-                    Spacer(Modifier.height(16.dp))
+            NavigationBottomSheet(
+                telemetry = telemetry,
+                isRecording = isRecording,
+                permissionsGranted = permissionsGranted,
+                isExpanded = isSheetExpanded,
+                onExpandedChange = { isSheetExpanded = it },
+                tunnelOverride = telemetry.tunnelOverride,
+                onSetTunnelOverride = onSetTunnelOverride,
+                onStartStop = {
+                    // Stopping the recording ends the trip with it; a route with no estimator
+                    // behind it would sit on screen with a countdown that never moves.
+                    if (telemetry.activeRoute != null && isRecording) {
+                        TelemetryStore.clearActiveRoute()
+                    }
+                    onStartStop()
+                },
+                onResetOrigin = onResetOrigin,
+                provenanceContent = {
+                    // Caption discipline, D-081. It says what produced the numbers above, and it
+                    // is here because a screenshot of this sheet travels further than any README.
+                    // Do not drop it because it is ugly on a slide.
+                    Text(
+                        text = if (telemetry.running) {
+                            "On-device demo estimator over the phone's own sensors — not the " +
+                                "evaluated InEKF, and not a drift figure. The graded numbers come " +
+                                "from the offline harness; the 200 Hz FOG configuration is not " +
+                                "demonstrated here. Map: ${MapStack.engineCaption}."
+                        } else {
+                            "Not recording. No sensor data has been read, so there is nothing to " +
+                                "show — this screen displays no stand-in trajectory."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            )
+        }
+        // ── 6. Search scrim and top chrome, above everything else ─────
+        // A tap anywhere outside the search card closes its list: the map's touch handling lives
+        // in a View and the sheet has its own, so this scrim sits over both only while the list
+        // is open. The top column is composed last so the open list draws over the sheet.
+        if (isSearchExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { isSearchExpanded = false }
+                    }
+            )
+        }
 
-                    // Action bar (Cancel & Generate/Start)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Cancel / Grant Permissions Button
-                        AnimatedContent(
-                            targetState = !permissionsGranted,
-                            label = "permissions_text",
-                            transitionSpec = { fadeIn() togetherWith fadeOut() }
-                        ) { showPermissions ->
-                            Text(
-                                text = if (showPermissions) "Permissions" else "Cancel",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = IDRColors.TextSecondary,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { if (!permissionsGranted) onStartStop() }
-                                    .padding(horizontal = 20.dp, vertical = 14.dp)
-                            )
-                        }
-
-                        // Generate / Start Button (Bounce on tap)
-                        val interactionSource = remember { MutableInteractionSource() }
-                        val isPressed by interactionSource.collectIsPressedAsState()
-                        val scale by animateFloatAsState(
-                            targetValue = if (isPressed) 0.94f else 1f,
-                            animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
-                            label = "button_scale"
-                        )
-
-                        Button(
-                            onClick = onStartStop,
-                            enabled = permissionsGranted,
-                            interactionSource = interactionSource,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(56.dp)
-                                .padding(start = 12.dp)
-                                .scale(scale),
-                            shape = RoundedCornerShape(28.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isRecording) IDRColors.RedError else IDRColors.Blue,
-                                disabledContainerColor = IDRColors.TextDim.copy(alpha = 0.5f)
-                            ),
-                            elevation = ButtonDefaults.buttonElevation(defaultElevation = if (permissionsGranted) 4.dp else 0.dp)
-                        ) {
-                            AnimatedContent(
-                                targetState = isRecording,
-                                label = "start_stop_text",
-                                transitionSpec = {
-                                    (slideInVertically { height -> height } + fadeIn())
-                                        .togetherWith(slideOutVertically { height -> -height } + fadeOut())
-                                }
-                            ) { recording ->
-                                Text(
-                                    if (recording) "Stop" else "Start",
-                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                    color = IDRColors.BgPrimary
-                                )
-                            }
+        // ── 2. Top Navigation Guidance / Search Area ───────────────────
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (activeRoute != null) {
+                // A. Active Turn-by-Turn Navigation Header
+                NavigationHeader(
+                    route = activeRoute,
+                    stepIndex = telemetry.activeStepIndex,
+                    distanceToNextStepM = telemetry.distanceToNextStepM,
+                    routeProgressFraction = telemetry.routeProgressFraction,
+                    inTunnel = inTunnel,
+                    onCancelRoute = {
+                        TelemetryStore.clearActiveRoute()
+                    }
+                )
+            } else {
+                // B. Idle Mode: Clean floating search bar
+                DestinationSearchBar(
+                    userLat = telemetry.latitude,
+                    userLon = telemetry.longitude,
+                    expanded = isSearchExpanded,
+                    onExpandedChange = { isSearchExpanded = it },
+                    recentSearches = recentSearches,
+                    onResultsChanged = { searchResultsForMap = it },
+                    onSelectDestination = { item ->
+                        scope.launch {
+                            val start = GeoCoordinate(telemetry.latitude, telemetry.longitude)
+                            val route = RouteService.fetchRoute(start, item)
+                            TelemetryStore.setActiveRoute(route)
                         }
                     }
+                )
+
+                // Tunnel guidance banner only when tunnel FSM is active and without active route
+                if (tunnelState != TunnelState.GNSS_HEALTHY) {
+                    GuidanceBanner(
+                        telemetry = telemetry,
+                        courseUpMode = courseUpMode
+                    )
+                }
+            }
+
+            // The tunnel strip is the same with or without a route: the machine does not know
+            // whether a destination was picked, and the DESK_RUN checklist reads these chips on
+            // the idle screen (Steps 1, 2 and 4).
+            AnimatedVisibility(
+                visible = tunnelState == TunnelState.TUNNEL_ACTIVE_IDR && telemetry.tunnelFix?.inside == true,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                telemetry.tunnelFix?.let { fix ->
+                    ExitProgressBar(
+                        fix = fix,
+                        speedMps = telemetry.speedMps
+                    )
+                }
+            }
+
+            HazardChips(
+                telemetry = telemetry,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Stage 5: Measured exit summary toast after GNSS returns (D-124)
+            ReconvergenceToast(summary = telemetry.lastExit)
+
+            // ── 3. Floating Quick Action Controls (Right-side column) ──────
+            // Flow naturally below whichever top cards / banners are visible so they never
+            // overlap. They step aside with the open drawer: the map is a sliver then, and its
+            // own zoom capsule rises into this column.
+            AnimatedVisibility(
+                visible = !isSearchExpanded && !isSheetExpanded,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Column(
+                    modifier = Modifier.graphicsLayer {
+                        alpha = quickActionsAlpha
+                    },
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    // Course-Up / North-Up Toggle Button
+                    FloatingActionPill(
+                        icon = Icons.Rounded.Navigation,
+                        active = courseUpMode,
+                        contentDescription = if (courseUpMode) "Switch to North-Up" else "Switch to Course-Up",
+                        onClick = onToggleCourseUp
+                    )
+
+                    // Dark Mode / Light Mode Toggle Button. The icon follows the user's choice,
+                    // not the palette on screen: the tunnel palette overrides it and reverts.
+                    FloatingActionPill(
+                        icon = if (darkTheme) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                        contentDescription = if (darkTheme) "Switch to light theme" else "Switch to dark theme",
+                        onClick = onToggleTheme
+                    )
+
+                    // Reset Origin Button. SensorForegroundService.resetOrigin() is a no-op
+                    // without a running service, so the pill is disabled -- and dimmed, so it
+                    // does not look like a button that ignores taps -- until recording starts.
+                    FloatingActionPill(
+                        icon = Icons.Rounded.GpsFixed,
+                        contentDescription = if (isRecording) "Reset Origin" else "Reset Origin (available while recording)",
+                        onClick = onResetOrigin,
+                        enabled = isRecording
+                    )
                 }
             }
         }
+
     }
 }
 
-@Composable
-private fun FloatingPill(text: String) {
-    Surface(
-        color = IDRColors.BgPrimary,
-        shape = RoundedCornerShape(24.dp),
-        modifier = Modifier.shadow(8.dp, RoundedCornerShape(24.dp), spotColor = IDRColors.TextDim)
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = IDRColors.TextPrimary,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
-        )
-    }
-}
+
 
 @Composable
-private fun FloatingIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector) {
+private fun FloatingActionPill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    active: Boolean = false,
+    contentDescription: String? = null,
+    onClick: () -> Unit = {},
+    enabled: Boolean = true
+) {
+    val palette = LocalIDRPalette.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.85f else 1f,
+        targetValue = if (isPressed && enabled) 0.88f else 1f,
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 400f),
         label = "icon_scale"
     )
+    // Same disabled treatment as the sheet's tunnel selector, so "not available now" reads the
+    // same everywhere on the screen.
+    val disabledAlpha by animateFloatAsState(
+        targetValue = if (enabled) 1f else 0.4f,
+        animationSpec = spring(stiffness = 300f),
+        label = "pill_alpha"
+    )
 
-    Surface(
-        color = IDRColors.BgPrimary,
-        shape = CircleShape,
+    val pillBg = if (active) palette.primary.copy(alpha = 0.25f) else palette.glassSurface
+    val pillBorder = if (active) palette.primary else palette.glassBorder
+
+    Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(42.dp)
             .scale(scale)
-            .shadow(if (isPressed) 2.dp else 8.dp, CircleShape, spotColor = IDRColors.TextDim)
+            .alpha(disabledAlpha)
+            .glassmorphic(
+                shape = CircleShape,
+                backgroundColor = pillBg,
+                borderWidth = 1.dp,
+                borderColor = pillBorder,
+                glowColor = Color.Transparent,
+                glowRadius = 4.dp
+            )
             .clickable(
                 interactionSource = interactionSource,
-                indication = null, // Handled by scale animation
-                onClick = { /* No-op for demo */ }
-            )
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = IDRColors.TextPrimary,
-                modifier = Modifier.size(24.dp)
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (active) palette.primary else palette.textPrimary,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }

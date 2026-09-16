@@ -1,0 +1,247 @@
+{
+  "app/build.gradle.kts": {
+    "mtime": 1789324478.2175555,
+    "ast_hash": "659465869ae94243bd594469e3bed515",
+    "semantic_hash": ""
+  },
+  "app/src/main/assets/tunnels.json": {
+    "mtime": 1789324478.2190597,
+    "ast_hash": "28bdddc63b9de306ee1bdcc487ebb91f",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/MainActivity.kt": {
+    "mtime": 1789325492.8604236,
+    "ast_hash": "9f53286fafd3fd535021927d23f80214",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/Covariance.kt": {
+    "mtime": 1789324478.2205646,
+    "ast_hash": "c3ef4e7e9be25073393ecf53a6039b78",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/DeadReckoningBackend.kt": {
+    "mtime": 1789246516.4945102,
+    "ast_hash": "df90d7da17b039e0252dd17dac0e2c3c",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/LocalNavigationEstimator.kt": {
+    "mtime": 1789324478.2215693,
+    "ast_hash": "fd672456eb9532c8097642c9c6c20b7b",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/SensorForegroundService.kt": {
+    "mtime": 1789325500.6837206,
+    "ast_hash": "8934410e84449fb0ccf10ce01f8093ce",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/Telemetry.kt": {
+    "mtime": 1789324478.2235694,
+    "ast_hash": "e144fca59405d2e4bded1df6be146ebf",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/routing/NavigationRoute.kt": {
+    "mtime": 1789324478.2245698,
+    "ast_hash": "e1b3287976b790f9b29cdaa8bbf400df",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/routing/RouteService.kt": {
+    "mtime": 1789324478.2245698,
+    "ast_hash": "27e016ca9e51ae7fbbd8dea9a5e40753",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/routing/RouteTracker.kt": {
+    "mtime": 1789324478.225569,
+    "ast_hash": "c0dd198b4b163fd91055a577f11b74f3",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/routing/SearchPreset.kt": {
+    "mtime": 1789324478.225569,
+    "ast_hash": "91d44daa967b03fc73e54abdc3d1aa91",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelAssetLoader.kt": {
+    "mtime": 1789324478.2265697,
+    "ast_hash": "a2d59f7adf5d43883a7bad02631e2714",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelFsm.kt": {
+    "mtime": 1789324478.2275693,
+    "ast_hash": "b52878d208e3b543567b16290e1c3655",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/backend/tunnel/TunnelGeometry.kt": {
+    "mtime": 1789324478.2275693,
+    "ast_hash": "39c4610de9414d00fe1bd2cc8ae4ba96",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/Gestures.kt": {
+    "mtime": 1789326535.5745318,
+    "ast_hash": "7fdd0a7a522e69970b22ba0a73328c4c",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/Theme.kt": {
+    "mtime": 1789324478.229074,
+    "ast_hash": "c071b36a8920098a8c1fbd9796301d9c",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/ArrivalCard.kt": {
+    "mtime": 1789326599.4218903,
+    "ast_hash": "eef3fe98affb34e16e10185c276bcdbb",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/DestinationSearchBar.kt": {
+    "mtime": 1789326644.1962986,
+    "ast_hash": "25b8bad4f56b5c10e81d101b319c67d8",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/ExitProgressBar.kt": {
+    "mtime": 1789325675.095325,
+    "ast_hash": "10adecef21089a284586413234bc09df",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/GuidanceBanner.kt": {
+    "mtime": 1789326216.8237062,
+    "ast_hash": "cfb4b8d692161ff24c226756ad164759",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/HazardChips.kt": {
+    "mtime": 1789324478.232582,
+    "ast_hash": "67c2e1243d5c9b3a2048aa1a2e435254",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/MapChrome.kt": {
+    "mtime": 1789324478.232582,
+    "ast_hash": "388b1a7502481cbfc52c65dfa50cfbc9",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/NavigationBottomSheet.kt": {
+    "mtime": 1789326794.5171216,
+    "ast_hash": "84642c9f71f36bf999c32995d59b1fb2",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/NavigationHeader.kt": {
+    "mtime": 1789326599.4218903,
+    "ast_hash": "e2b7bbd7d10b2e886e479b46ec093006",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/ReconvergenceToast.kt": {
+    "mtime": 1789326599.420385,
+    "ast_hash": "70d9dc739c4dc9851014c18582e11610",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/SpeedHud.kt": {
+    "mtime": 1789326599.420385,
+    "ast_hash": "008c73ef0c5403e08dc74aef7b743c9b",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/TelemetryPanel.kt": {
+    "mtime": 1789326216.8237062,
+    "ast_hash": "a22d42d3b61374f5256f1c67ee474a58",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/components/TunnelCorridor.kt": {
+    "mtime": 1789324478.2365828,
+    "ast_hash": "2988ba1644766233e5038043ec8ffac7",
+    "semantic_hash": ""
+  },
+  "app/src/main/java/com/sih/idr/demo/ui/screens/NavigationScreen.kt": {
+    "mtime": 1789326809.2183967,
+    "ast_hash": "57fb0f966841b123a2b17ccaac971986",
+    "semantic_hash": ""
+  },
+  "app/src/mapbox/java/com/sih/idr/demo/backend/mapbox/IdrMapboxNavigation.kt": {
+    "mtime": 1789324478.2405932,
+    "ast_hash": "abde1bed3d72efc6db6de59fcbc1a434",
+    "semantic_hash": ""
+  },
+  "app/src/mapbox/java/com/sih/idr/demo/backend/mapbox/InekfLocationProvider.kt": {
+    "mtime": 1789324478.241597,
+    "ast_hash": "e3d80fb9648c248c6216dad8427ffc1c",
+    "semantic_hash": ""
+  },
+  "app/src/mapbox/java/com/sih/idr/demo/ui/components/MapStack.kt": {
+    "mtime": 1789324478.2425973,
+    "ast_hash": "9acacd9d04e5f08561c567c65434e4aa",
+    "semantic_hash": ""
+  },
+  "app/src/mapbox/java/com/sih/idr/demo/ui/components/MapView.kt": {
+    "mtime": 1789326605.3592896,
+    "ast_hash": "e1e50b51e0a77c66c690149381e9ac89",
+    "semantic_hash": ""
+  },
+  "app/src/osm/java/com/sih/idr/demo/ui/components/MapStack.kt": {
+    "mtime": 1789324478.2455983,
+    "ast_hash": "f319ce3efb9dbd41ef2d4606a08fdb1d",
+    "semantic_hash": ""
+  },
+  "app/src/osm/java/com/sih/idr/demo/ui/components/MapView.kt": {
+    "mtime": 1789326599.4238968,
+    "ast_hash": "721585ab215e7f68290868b8c591c520",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/backend/CovarianceTest.kt": {
+    "mtime": 1789324478.2475965,
+    "ast_hash": "9ab3539dcdf447324917a08632257265",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/backend/routing/RouteTrackerTest.kt": {
+    "mtime": 1789324478.2499926,
+    "ast_hash": "e41fbb38f50163eb69c62c1fc5e15b41",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/backend/tunnel/TunnelFsmTest.kt": {
+    "mtime": 1789324478.2499926,
+    "ast_hash": "278c36c4665a3cbc6e77cf9f1a1406f6",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/backend/tunnel/TunnelGeometryTest.kt": {
+    "mtime": 1789324478.2509968,
+    "ast_hash": "703d16d7251e2033e6346fead58e60f9",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/ui/components/CorridorGeometryTest.kt": {
+    "mtime": 1789324478.2520113,
+    "ast_hash": "adcc582fd2a164250422fb8a3f352107",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/ui/components/GuidanceBannerTest.kt": {
+    "mtime": 1789324478.253012,
+    "ast_hash": "988e46389d16a81e8e4b0d1fdf83f017",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/ui/components/HazardChipsTest.kt": {
+    "mtime": 1789324478.253012,
+    "ast_hash": "4f34eaf6f68d1ca5ed77c7c378907ada",
+    "semantic_hash": ""
+  },
+  "app/src/test/java/com/sih/idr/demo/ui/components/SpeedHudTest.kt": {
+    "mtime": 1789324478.254011,
+    "ast_hash": "21f27829593fd4acf51eb40137720a89",
+    "semantic_hash": ""
+  },
+  "build.gradle.kts": {
+    "mtime": 1789246516.5001843,
+    "ast_hash": "7a0085c101cb683094ec0a5aef52c176",
+    "semantic_hash": ""
+  },
+  "gradlew": {
+    "mtime": 1789246516.5036871,
+    "ast_hash": "b60a94c7e112b22b5f03b88ba3566178",
+    "semantic_hash": ""
+  },
+  "settings.gradle.kts": {
+    "mtime": 1789324478.255012,
+    "ast_hash": "346bba597d5d2bb0092afa3fb0446ac5",
+    "semantic_hash": ""
+  },
+  "DESK_RUN.md": {
+    "mtime": 1789326239.176941,
+    "ast_hash": "c492638a15861307af57a715b834e020",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1789324716.0117612,
+    "ast_hash": "52e72efe972c50b8abb3b73d1b82da82",
+    "semantic_hash": ""
+  }
+}

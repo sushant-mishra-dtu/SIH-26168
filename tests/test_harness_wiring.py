@@ -23,15 +23,21 @@ import pytest
 from core.reference.inekf import FilterConfig, InEKF
 from eval.loaders.io_vnbd import SAMPLE_RATE_HZ, Sequence
 from eval.loaders.truth import TruthTrack, align_to_sequence
+from eval.metrics.core import OutageMetrics
 from eval.outages.inject import Outage
 from eval.run import (
     EPOCH_STRIDE,
     GATE1_LENGTH_S,
+    GYRO_BIAS_DIRECT_ONLY,
+    HOLD_BIASES_IN_OUTAGE,
     METHODS,
+    ZARU_SIGMA_FROM_WINDOW,
     SequenceUnusable,
+    WindowResult,
     assert_uniform_grid,
     evaluate_sequence,
     fix_arrays,
+    gate1_by_mount_class,
     gate1_ratio,
     imu_stream,
     initialise_filter,
@@ -81,8 +87,26 @@ def synthetic_drive(
     fix_interval_s: float = 9.0,
     name: str = "SYNTH",
     t_rel_start_s: float = 0.0,
+    road_floor_mps2: float = 0.6,
 ):
     """A level vehicle driving due north at a constant speed, as a `Sequence` + `TruthTrack` pair.
+
+    `road_floor_mps2` is a vertical 3 Hz vibration of that amplitude on the accelerometer, the
+    floor every real `S-` stream carries while moving (S3a: 0.5 m/s^2 per sample, white; Vta1a
+    0.27). Without it the IMU is *silent* at 15 m/s -- zero gyro, zero accelerometer variance --
+    and `is_stationary` reads every sample as a standstill; only the state veto in
+    `_step_constraints` then stands between the filter and a ZUPT of a moving car, and it gave way
+    at 95 s (the filter sat at ~100 % drift on this fixture for its whole life) or, once the
+    gyro-bias block carried an honest covariance (D-133), at 54 s with a 9 degree tilt and a
+    runaway. Mean per-axis variance 0.06 (m/s^2)^2, three times `zupt_accel_var_thresh`, so the
+    detector never fires here, as it never fires on a moving car. Vertical only, phased on the
+    sample index rather than `t_rel`, and zero-mean over every 1 s, so the closed forms this
+    fixture pins (the 176 m strapdown, the late-clock equality) are untouched. A seeded 0.02
+    m/s^2 white floor rides on all three axes with it: `level_and_mount` reads "up" from the
+    accelerometer mean over 299 samples, which leaves a sliver of the vibration in the horizontal
+    plane as a perfect line, and a PCA on a perfect line has a zero second eigenvalue and a zero
+    mount spread, which `P0` rightly refuses. 1 % of the strapdown closed form; identical for
+    every `t_rel_start_s`, so the late-clock equality still holds to 1e-3.
 
     The two carry *different clocks on purpose*, which is the property most worth testing: the
     `S-` side counts milliseconds from the start of the recording and the `V-` side counts seconds
@@ -102,6 +126,9 @@ def synthetic_drive(
     truth = TruthTrack(name=name, t_s=t_tod, lat=lat, lon=lon, source="synthetic (tests)")
 
     accel = np.tile([accel_bias_x, 0.0, -G], (n, 1))
+    accel[:, 2] += road_floor_mps2 * np.sin(2.0 * np.pi * 3.0 * np.arange(n) / SAMPLE_RATE_HZ)
+    if road_floor_mps2 > 0:
+        accel += np.random.default_rng(0).normal(0.0, 0.02, (n, 3))
     gyro = np.zeros((n, 3))
     imu = pd.DataFrame(
         {
@@ -174,8 +201,8 @@ def test_an_excerpt_whose_clock_opens_late_is_graded_against_the_road_it_drove()
     # `start`, because it is the same road either way. The absolute bound is chosen against the
     # failure it has to catch -- addressing the window 1118 s early points it at a stretch of road
     # 16.8 km away, which does not perturb a drift figure, it replaces it. The methods differ
-    # hugely from each other here (the filter has no speed input on this fixture and sits at
-    # ~100 %, the strapdown is exact at ~1e-9 %), so they are compared like for like.
+    # hugely from each other here (the filter has no speed input on this fixture, the strapdown
+    # is exact at ~1e-9 %), so they are compared like for like.
     assert [r.method for r in results] == [r.method for r in at_zero]
     for late, zero in zip(results, at_zero, strict=True):
         assert late.metrics.drift_pct == pytest.approx(zero.metrics.drift_pct, abs=1e-3)
@@ -202,15 +229,15 @@ def test_the_synthetic_pair_aligns_and_is_usable_as_truth():
 # ------------------------------------------------------------------------------------------
 
 
-def test_the_gyro_axis_mapping_is_the_one_d047_established():
-    """`gyro_yaw` is device **x**, not the vertical axis (D-047). Getting this wrong is silent:
-    the filter still runs and the trajectory still looks like a drive."""
+def test_the_gyro_axis_mapping_is_the_one_d101_established():
+    """Proper right-handed triad (+gyro_yaw, -gyro_roll, +gyro_pitch) established by D-101
+    (superseding D-047). `gyro_pitch` is the vertical body rate across synchronised stems."""
     seq, _ = synthetic_drive()
     seq.imu["gyro_yaw"] = 1.0
     seq.imu["gyro_pitch"] = 2.0
     seq.imu["gyro_roll"] = 3.0
     gyro, _, _ = imu_stream(seq)
-    assert gyro[0] == pytest.approx([1.0, 2.0, 3.0])
+    assert gyro[0] == pytest.approx([1.0, -3.0, 2.0])
 
 
 def test_dt_comes_from_the_timestamps_and_a_backwards_clock_is_refused():
@@ -319,6 +346,52 @@ def test_gnss_is_applied_outside_the_outage_and_never_inside_it():
     assert open_run.n_gnss_applied + open_run.n_gnss_rejected == idx.size
 
 
+def test_the_aided_pass_and_every_replayed_window_read_the_gyro_bias_policy_from_the_module(
+    monkeypatch,
+):
+    """D-133 wiring. `run_filter` sets `InEKF.gyro_bias_direct_only` from
+    `eval.run.GYRO_BIAS_DIRECT_ONLY` on the filter it builds, and `replay_window` sets it again on
+    the copy it dead-reckons from -- the module constant, read at call time, never a per-call
+    flag -- so the aided pass and the windows replayed from it cannot run under different
+    policies, and an artefact's `gyro_bias_direct_only` describes both."""
+    import copy
+
+    import eval.run as run
+
+    seq, truth = synthetic_drive(seconds=200.0)
+    gyro, accel, t_rel = imu_stream(seq)
+    dt = assert_uniform_grid(seq.name, t_rel)
+    idx, ned, sigma = fix_arrays(seq, float(truth.lat[0]), float(truth.lon[0]))
+    n = gyro.shape[0]
+    outage = Outage(sequence=seq.name, start_idx=600, end_idx=700, length_s=10)
+    replayed: list[InEKF] = []
+    real_deepcopy = copy.deepcopy
+
+    def capturing(obj, *a, **kw):
+        out = real_deepcopy(obj, *a, **kw)
+        if isinstance(out, InEKF):
+            replayed.append(out)
+        return out
+
+    for policy in (True, False):
+        monkeypatch.setattr(run, "GYRO_BIAS_DIRECT_ONLY", policy)
+        aided = run.run_filter(
+            gyro, accel, dt, idx, ned, sigma, np.ones(n, dtype=bool), snapshot_at={600}
+        )
+        assert aided.snapshots[600].filter.gyro_bias_direct_only is policy
+
+        replayed.clear()
+        monkeypatch.setattr(copy, "deepcopy", capturing)
+        # The snapshot was taken under `policy`; flip the constant to show the window reads it
+        # afresh rather than inheriting whatever the snapshot carried.
+        monkeypatch.setattr(run, "GYRO_BIAS_DIRECT_ONLY", not policy)
+        run.replay_window(aided.snapshots[600], gyro, accel, dt, outage, name=seq.name)
+        monkeypatch.setattr(copy, "deepcopy", real_deepcopy)
+        assert replayed and replayed[0].gyro_bias_direct_only is (not policy)
+        assert replayed[0].hold_biases is HOLD_BIASES_IN_OUTAGE
+        assert aided.snapshots[600].filter.gyro_bias_direct_only is policy, "snapshot untouched"
+
+
 def test_the_gate_1_ratio_carries_the_window_count_it_rests_on():
     """A ratio quoted without its sample size is the number a judge asks about second."""
     seq, truth = synthetic_drive(seconds=200.0)
@@ -340,6 +413,69 @@ def test_gate_1_reports_that_it_could_not_be_measured_rather_than_a_number():
     assert gate["measured"] is False
 
 
+def test_gate1_by_mount_class_key_set_and_membership():
+    """D-115: Gate 1 ratio partitioned by mount class.
+
+    Quiet mount carries S3a and S3c; vibrating mount carries the remaining LONG_OUTAGE stems
+    (such as Vw4). Verify key set is exactly {'quiet', 'vibrating'} and windows partition correctly.
+    """
+
+    def _synthetic_metric(drift: float) -> OutageMetrics:
+        return OutageMetrics(
+            cte_m=1.0,
+            crse_m=1.0,
+            drift_pct=drift,
+            yaw_rmse_rad=0.01,
+            yaw_max_rad=0.02,
+            distance_m=100.0,
+            duration_s=60.0,
+            n_epochs=60,
+        )
+
+    results = [
+        WindowResult("filter", "S3a", 60, 0, _synthetic_metric(12.0)),
+        WindowResult("gnss_available", "S3a", 60, 0, _synthetic_metric(2.0)),
+        WindowResult("filter", "Vw4", 60, 0, _synthetic_metric(40.0)),
+        WindowResult("gnss_available", "Vw4", 60, 0, _synthetic_metric(4.0)),
+    ]
+
+    by_mount = gate1_by_mount_class(results)
+    assert set(by_mount.keys()) == {"quiet", "vibrating"}
+
+    expected_fields = {
+        "filter_drift_pct_median",
+        "gnss_available_drift_pct_median",
+        "ratio",
+        "in_range",
+        "n_windows_filter",
+        "n_windows_gnss_available",
+    }
+    assert set(by_mount["quiet"].keys()) == expected_fields
+    assert set(by_mount["vibrating"].keys()) == expected_fields
+
+    # S3a lands in quiet
+    quiet = by_mount["quiet"]
+    assert quiet["n_windows_filter"] == 1
+    assert quiet["n_windows_gnss_available"] == 1
+    assert quiet["filter_drift_pct_median"] == pytest.approx(12.0)
+    assert quiet["gnss_available_drift_pct_median"] == pytest.approx(2.0)
+    assert quiet["ratio"] == pytest.approx(6.0)
+
+    # Vw4 lands in vibrating
+    vibrating = by_mount["vibrating"]
+    assert vibrating["n_windows_filter"] == 1
+    assert vibrating["n_windows_gnss_available"] == 1
+    assert vibrating["filter_drift_pct_median"] == pytest.approx(40.0)
+    assert vibrating["gnss_available_drift_pct_median"] == pytest.approx(4.0)
+    assert vibrating["ratio"] == pytest.approx(10.0)
+
+    # Also check gate1_ratio passes it through
+    by_method = summarise_by_method_and_length(results)
+    gate = gate1_ratio(by_method, results=results)
+    assert "by_mount_class" in gate
+    assert gate["by_mount_class"] == by_mount
+
+
 def test_artefacts_carry_the_stamp_inside_the_file_not_in_its_name(tmp_path):
     """H-5. A filename is renamed, copied, and pasted into a slide, and the provenance is lost at
     the first of those."""
@@ -353,6 +489,15 @@ def test_artefacts_carry_the_stamp_inside_the_file_not_in_its_name(tmp_path):
     assert written["crse_convention"] == "sum_abs"
     assert written["n_windows"] == len(results)
     assert summary["gate1"]["measured"] is True
+    # D-130: the artefact says which bias-hold variant produced it, and the value is the
+    # module constant `replay_window` reads -- never a per-call flag.
+    assert written["biases_held_in_outage"] is HOLD_BIASES_IN_OUTAGE
+    assert written["zaru_sigma_from_window"] is ZARU_SIGMA_FROM_WINDOW, (
+        "the artefact says which ZARU R produced it (D-131), as it does for the bias hold"
+    )
+    assert written["gyro_bias_direct_only"] is GYRO_BIAS_DIRECT_ONLY, (
+        "and whether b_g moved only under ZARU (D-133)"
+    )
 
     csv_text = (tmp_path / "windows.csv").read_text(encoding="utf-8")
     assert csv_text.startswith(f"# {stamp.caption()}")
@@ -619,3 +764,89 @@ def test_the_mount_block_of_p0_carries_the_measured_spread_not_the_fallback():
 
     assert np.isfinite(init.mount_spread_rad), "the PCA initialiser must have run"
     assert f.P[15, 15] == pytest.approx(init.mount_spread_rad**2, rel=1e-9)
+
+
+# --------------------------------------------------------------------------------------------
+# D-115: process noise read from the stream, and the Doppler velocity as a measurement
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_white_level_of_a_white_stream_is_its_sigma():
+    """`stream_white_level` is the residual from a 5-sample centred mean, corrected for the
+    1 - 1/5 of the variance the mean removes; on white noise it returns sigma to a few percent,
+    and a slow ramp -- the vehicle's own dynamics -- does not register as noise."""
+    from eval.run import stream_white_level
+
+    rng = np.random.default_rng(3)
+    sigma = np.array([0.5, 2.0, 0.05])
+    x = rng.normal(0.0, 1.0, (20_000, 3)) * sigma
+    assert stream_white_level(x) == pytest.approx(sigma, rel=0.03)
+    ramp = np.linspace(0.0, 30.0, 20_000)[:, None] * np.array([1.0, -1.0, 0.5])
+    assert stream_white_level(x + ramp) == pytest.approx(sigma, rel=0.03)
+    x[100] = np.nan
+    assert stream_white_level(x) == pytest.approx(sigma, rel=0.03), "NaN rows are dropped"
+
+
+def test_in_motion_config_raises_q_to_the_stream_and_never_lowers_it():
+    """A rattling phone is filtered as one; a still one keeps the Allan-run floor (D-045)."""
+    from eval.run import in_motion_config
+
+    cfg = FilterConfig()
+    rng = np.random.default_rng(5)
+    dt = np.full(2999, 0.1)
+    quiet_gyro = rng.normal(0.0, 1e-5, (3000, 3))
+    quiet_accel = rng.normal(0.0, 1e-4, (3000, 3)) + np.array([0.0, 0.0, -G])
+    same = in_motion_config(cfg, quiet_gyro, quiet_accel, dt, upto=300)
+    assert same.gyro_arw == cfg.gyro_arw and same.accel_vrw == cfg.accel_vrw
+
+    loud_gyro = rng.normal(0.0, np.deg2rad(12.0), (3000, 3))  # Vw4's yaw axis, per sample
+    loud_accel = rng.normal(0.0, 2.3, (3000, 3)) + np.array([0.0, 0.0, -G])
+    loud = in_motion_config(cfg, loud_gyro, loud_accel, dt, upto=300)
+    assert loud.gyro_arw == pytest.approx(np.deg2rad(12.0) * np.sqrt(0.1), rel=0.15)
+    assert loud.accel_vrw == pytest.approx(2.3 * np.sqrt(0.1), rel=0.15)
+    assert loud.zaru_sigma == cfg.zaru_sigma, (
+        "ZARU's R is a standstill figure and never the in-motion level: the config value is the "
+        "Allan floor, and `_step_constraints` reads the stop's own level above it (D-131)"
+    )
+    assert cfg.gyro_arw == FilterConfig().gyro_arw, "the input config is not modified"
+    assert in_motion_config(cfg, loud_gyro, loud_accel, dt, upto=3) is cfg, "too short: unchanged"
+
+
+def test_step_constraints_tests_zaru_against_the_stops_own_gyro_level():
+    """D-131 wiring. At a detected stop the harness reads ZARU's sigma from the detector's own
+    window (`zaru_sigma_from_window`) and passes it to `update_zaru`; the config value is only
+    the floor. On a synthetic standstill carrying 1 deg/s of idle vibration per axis -- S3a's
+    level -- the desk figure refused 98.8 % of the offered ZARUs (D-130, 1,356 of 1,372); the
+    window figure accepts them, and the sigma the pass used is reported next to the counts."""
+    from eval.run import _mean_zaru_sigma, _step_constraints
+
+    rng = np.random.default_rng(7)
+    n = 300
+    level = np.deg2rad(1.0)
+    gyro = np.deg2rad([0.1, -0.05, 0.15]) + rng.normal(0.0, level, (n, 3))
+    accel = np.array([0.0, 0.0, -G]) + rng.normal(0.0, 0.03, (n, 3))  # var 9e-4 << 0.02
+    cfg = FilterConfig()
+    f = InEKF(cfg)
+    window = int(round(cfg.zupt_window_s * SAMPLE_RATE_HZ))
+    counts: dict[str, float] = dict(zupt=0, zaru_ok=0, zaru_no=0, nhc=0)
+    for k in range(n):
+        _step_constraints(f, k, gyro, accel, cfg, window, counts)
+    offered = counts["zaru_ok"] + counts["zaru_no"]
+    assert counts["zupt"] == offered > 100, "ZUPT and ZARU are offered together (D-004)"
+    assert counts["zaru_ok"] / offered > 0.95, f"{counts['zaru_no']} of {offered} refused"
+    assert _mean_zaru_sigma(counts) == pytest.approx(level, rel=0.2)
+    assert np.isnan(_mean_zaru_sigma(dict(zaru_ok=0, zaru_no=0))), "no stop: NaN, not 0"
+
+
+def test_the_doppler_velocity_is_along_and_across_the_course():
+    """Speed sigma along the course, cross-track sigma across it, rotated into north/east."""
+    from eval.run import velocity_measurement
+
+    cfg = FilterConfig(gnss_speed_sigma_mps=0.5, course_cross_track_sigma_mps=0.2)
+    v, cov = velocity_measurement(cfg, np.pi / 2, 10.0)  # due east
+    assert v == pytest.approx([0.0, 10.0], abs=1e-12)
+    assert cov == pytest.approx(np.diag([0.2**2, 0.5**2]), abs=1e-12)
+    v, cov = velocity_measurement(cfg, 0.0, 7.0)  # due north
+    assert v == pytest.approx([7.0, 0.0], abs=1e-12)
+    assert cov == pytest.approx(np.diag([0.5**2, 0.2**2]), abs=1e-12)
+

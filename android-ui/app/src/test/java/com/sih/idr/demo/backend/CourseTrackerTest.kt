@@ -1,0 +1,613 @@
+package com.sih.idr.demo.backend
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+
+/**
+ * The heading rules of D-127.
+ *
+ * Every scenario here is a phone attitude and a vehicle motion built independently of the code, so
+ * the expected course is known without running it. The two the field test found are
+ * [a_mounting_angle_does_not_rotate_the_track] and
+ * [re_seating_the_phone_mid_drive_leaves_the_course_where_it_was]; the rest are the reasons those
+ * two work.
+ *
+ * The last section is D-128's gyro bias, and its scenarios are built the same way: a *known* null
+ * offset is added to the gyro the attitude would read, and the question each time is whether the
+ * course goes where the vehicle went rather than where the offset pushed it.
+ */
+class CourseTrackerTest {
+
+    // --------------------------------------------------------------------------------------
+    // Attitudes. `R` is what `getRotationMatrixFromVector` fills: row-major, v_world(ENU) = R v_dev,
+    // so the columns are the device axes in world coordinates and the third row is world up in
+    // device coordinates.
+    // --------------------------------------------------------------------------------------
+
+    /** Flat on a seat, screen up, the top of the phone (device +y) pointing along [bearingRad]. */
+    private fun flatPhone(bearingRad: Float): FloatArray {
+        val s = sin(bearingRad)
+        val c = cos(bearingRad)
+        // columns: x -> (cos, -sin, 0), y -> (sin, cos, 0), z -> up
+        return floatArrayOf(
+            c, s, 0f,
+            -s, c, 0f,
+            0f, 0f, 1f
+        )
+    }
+
+    /**
+     * Upright in a windscreen cradle, screen facing back down the cabin, driving along
+     * [bearingRad]. Device +y points at the sky -- the case where reading the azimuth off +y
+     * projected onto the ground plane divides by nothing at all.
+     */
+    private fun uprightPhone(bearingRad: Float): FloatArray {
+        val s = sin(bearingRad)
+        val c = cos(bearingRad)
+        // columns: x -> right of travel, y -> up, z -> backwards
+        return floatArrayOf(
+            c, 0f, -s,
+            -s, 0f, -c,
+            0f, 1f, 0f
+        )
+    }
+
+    /**
+     * The gyro a device at attitude [r] reads while the vehicle turns at [bearingRateRadPerSec].
+     *
+     * A vehicle turn is a rotation about the world vertical and nothing else. In the bearing
+     * convention a right turn is *positive*, which is a *negative* right-hand rotation about up;
+     * expressed in the device frame that vector is `omega_up * (world up in device coordinates)`,
+     * which is the matrix's third row.
+     */
+    private fun gyroForTurn(r: FloatArray, bearingRateRadPerSec: Float): FloatArray {
+        val omegaUp = -bearingRateRadPerSec
+        return floatArrayOf(omegaUp * r[6], omegaUp * r[7], omegaUp * r[8])
+    }
+
+    private fun assertAngle(expectedRad: Float, actualRad: Float, toleranceRad: Float = 1e-3f) {
+        val diff = CourseTracker.wrapAngle(expectedRad - actualRad)
+        assertTrue("expected ${expectedRad}rad, got ${actualRad}rad", abs(diff) <= toleranceRad)
+    }
+
+    /** Drive [seconds] at [speedMps] turning at [bearingRateRadPerSec], phone held at [attitude]. */
+    private fun drive(
+        tracker: CourseTracker,
+        attitude: FloatArray,
+        seconds: Float,
+        bearingRateRadPerSec: Float,
+        speedMps: Float,
+        startNs: Long = 0L,
+        hz: Int = 100
+    ): Long {
+        val dt = 1f / hz
+        val stepNs = 1_000_000_000L / hz
+        val gyro = gyroForTurn(attitude, bearingRateRadPerSec)
+        var t = startNs
+        repeat((seconds * hz).toInt()) {
+            t += stepNs
+            tracker.onRotationMatrix(attitude, t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, speedMps)
+        }
+        return t
+    }
+
+    // --------------------------------------------------------------------------------------
+    // The turn rate is about the world vertical, at any attitude
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    fun a_flat_phone_turning_right_increases_the_bearing() {
+        val tracker = CourseTracker()
+        val attitude = flatPhone(0f)
+        tracker.onRotationMatrix(attitude, 0L)
+        tracker.onGnssCourse(0f, 10f) // heading north
+        // 90 degrees of right turn at 30 deg/s takes 3 s.
+        drive(tracker, attitude, seconds = 3f, bearingRateRadPerSec = (PI / 6).toFloat(), speedMps = 10f)
+        assertAngle((PI / 2).toFloat(), tracker.courseRad, 0.02f)
+    }
+
+    @Test
+    fun an_upright_cradled_phone_reads_the_same_turn_as_a_flat_one() {
+        // The bug: the old code took the device-frame z rate as the turn rate. In this attitude the
+        // vehicle's turn lands entirely on device y and z reads zero, so the heading never moved.
+        val flat = CourseTracker()
+        val flatAttitude = flatPhone(0f)
+        flat.onRotationMatrix(flatAttitude, 0L)
+        flat.onGnssCourse(0f, 10f)
+        drive(flat, flatAttitude, 3f, (PI / 6).toFloat(), 10f)
+
+        val upright = CourseTracker()
+        val uprightAttitude = uprightPhone(0f)
+        upright.onRotationMatrix(uprightAttitude, 0L)
+        upright.onGnssCourse(0f, 10f)
+        drive(upright, uprightAttitude, 3f, (PI / 6).toFloat(), 10f)
+
+        assertAngle(flat.courseRad, upright.courseRad, 1e-3f)
+        assertAngle((PI / 2).toFloat(), upright.courseRad, 0.02f)
+    }
+
+    @Test
+    fun a_phone_lying_face_down_reads_the_same_turn_too() {
+        // Face down is the flat attitude with z pointing at the ground: the projection changes sign
+        // and so does the gyro reading, and the two cancel.
+        val faceUp = flatPhone(0f)
+        val faceDown = floatArrayOf(
+            faceUp[0], faceUp[1], -faceUp[2],
+            -faceUp[3], -faceUp[4], faceUp[5],
+            faceUp[6], faceUp[7], -faceUp[8]
+        )
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(faceDown, 0L)
+        tracker.onGnssCourse(0f, 10f)
+        drive(tracker, faceDown, 3f, (PI / 6).toFloat(), 10f)
+        assertAngle((PI / 2).toFloat(), tracker.courseRad, 0.02f)
+    }
+
+    // --------------------------------------------------------------------------------------
+    // The mount angle is an offset, not a heading
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    fun a_mounting_angle_does_not_rotate_the_track() {
+        // Two phones in the same car driving due north, one pointing along the car and one 40
+        // degrees off. Both must report the car's heading; only the offsets differ. Under the old
+        // rule the second one's whole traced track was rotated by 40 degrees.
+        val straight = CourseTracker()
+        straight.onRotationMatrix(flatPhone(0f), 1_000L)
+        straight.onGnssCourse(0f, 12f)
+
+        val skewed = CourseTracker()
+        val skew = (40.0 * PI / 180.0).toFloat()
+        skewed.onRotationMatrix(flatPhone(skew), 1_000L)
+        skewed.onGnssCourse(0f, 12f)
+
+        assertAngle(0f, straight.courseRad)
+        assertAngle(0f, skewed.courseRad)
+        assertTrue(skewed.hasMountOffset)
+        assertAngle(skew, skewed.mountOffsetRad, 1e-3f)
+        assertAngle(0f, straight.mountOffsetRad, 1e-3f)
+    }
+
+    @Test
+    fun re_seating_the_phone_mid_drive_leaves_the_course_where_it_was() {
+        // Drive east, then pick the phone up, turn it over and put it back at a new angle while
+        // the car keeps going straight. The course must not move; the mount offset must.
+        val tracker = CourseTracker()
+        val attitude = flatPhone(0f)
+        tracker.onRotationMatrix(attitude, 0L)
+        tracker.onGnssCourse((PI / 2).toFloat(), 12f)
+        var t = drive(tracker, attitude, 2f, 0f, 12f, startNs = 0L)
+        val courseBefore = tracker.courseRad
+        val offsetBefore = tracker.mountOffsetRad
+
+        // The handling itself: the phone tumbles through a large tilt and a large yaw over 0.5 s.
+        val hz = 100
+        val stepNs = 1_000_000_000L / hz
+        repeat(50) { i ->
+            t += stepNs
+            val frac = i / 50f
+            val pitch = frac * (PI / 2).toFloat()
+            // Tilting from flat towards upright, and swinging the azimuth round by 90 degrees.
+            val tumbling = tiltedPhone(bearingRad = frac * (PI / 2).toFloat(), pitchRad = pitch)
+            tracker.onRotationMatrix(tumbling, t)
+            // A hand turning a phone over: 3 rad/s, far past anything a car does.
+            tracker.onGyro(3f, 3f, 3f, 1f / hz, t, 12f)
+        }
+        assertTrue("handling should have been detected", tracker.isDisturbed)
+        assertAngle(courseBefore, tracker.courseRad, 0.05f)
+
+        // It settles at the new angle; the car has still been going straight the whole time.
+        val settled = tiltedPhone(bearingRad = (PI / 2).toFloat(), pitchRad = (PI / 2).toFloat())
+        t = drive(tracker, settled, 2f, 0f, 12f, startNs = t)
+        assertFalse(tracker.isDisturbed)
+        assertAngle(courseBefore, tracker.courseRad, 0.05f)
+        assertTrue(
+            "the mount offset should have absorbed the re-seat",
+            abs(CourseTracker.wrapAngle(tracker.mountOffsetRad - offsetBefore)) > 0.5f
+        )
+    }
+
+    /** Flat phone at [bearingRad], then pitched back by [pitchRad] about its own x axis. */
+    private fun tiltedPhone(bearingRad: Float, pitchRad: Float): FloatArray {
+        val flat = flatPhone(bearingRad)
+        val cp = cos(pitchRad)
+        val sp = sin(pitchRad)
+        // Device-frame rotation about x by pitch, applied on the right: R' = R * Rx(pitch).
+        val rx = floatArrayOf(
+            1f, 0f, 0f,
+            0f, cp, -sp,
+            0f, sp, cp
+        )
+        val out = FloatArray(9)
+        for (row in 0..2) for (col in 0..2) {
+            var sum = 0f
+            for (k in 0..2) sum += flat[row * 3 + k] * rx[k * 3 + col]
+            out[row * 3 + col] = sum
+        }
+        return out
+    }
+
+    // --------------------------------------------------------------------------------------
+    // The freezes
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    fun a_parked_car_does_not_change_course_however_the_phone_is_waved() {
+        val tracker = CourseTracker()
+        val attitude = flatPhone(0f)
+        tracker.onRotationMatrix(attitude, 0L)
+        tracker.onGnssCourse(0f, 12f)
+        // Stopped at a light, and the phone is turned a full quarter circle in the hand.
+        drive(tracker, attitude, seconds = 3f, bearingRateRadPerSec = (PI / 6).toFloat(), speedMps = 0.1f)
+        assertAngle(0f, tracker.courseRad)
+    }
+
+    @Test
+    fun a_rate_no_vehicle_can_turn_at_is_not_integrated() {
+        val tracker = CourseTracker()
+        val attitude = flatPhone(0f)
+        tracker.onRotationMatrix(attitude, 0L)
+        tracker.onGnssCourse(0f, 12f)
+        drive(tracker, attitude, seconds = 1f, bearingRateRadPerSec = 5f, speedMps = 12f)
+        assertAngle(0f, tracker.courseRad, 0.05f)
+    }
+
+    @Test
+    fun a_single_sample_spike_is_clamped_rather_than_kinking_the_track() {
+        val tracker = CourseTracker()
+        val attitude = flatPhone(0f)
+        tracker.onRotationMatrix(attitude, 0L)
+        tracker.onGnssCourse(0f, 12f)
+        // Just under the implausible bar, so it is integrated -- but clamped.
+        val rate = CourseTracker.IMPLAUSIBLE_TURN_RATE_RAD_PER_SEC - 0.1f
+        val gyro = gyroForTurn(attitude, rate)
+        tracker.onGyro(gyro[0], gyro[1], gyro[2], 0.1f, 1_000_000L, 12f)
+        assertAngle(CourseTracker.MAX_VEHICLE_TURN_RATE_RAD_PER_SEC * 0.1f, tracker.courseRad, 1e-3f)
+    }
+
+    // --------------------------------------------------------------------------------------
+    // The GNSS anchor
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    fun a_bearing_at_a_crawl_does_not_anchor_anything() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(0f), 0L)
+        tracker.onGnssCourse((PI / 2).toFloat(), 0.5f)
+        assertFalse(tracker.hasCourse)
+        tracker.onGnssCourse((PI / 2).toFloat(), 5f)
+        assertTrue(tracker.hasCourse)
+    }
+
+    @Test
+    fun the_anchor_closes_on_the_gnss_course_rather_than_snapping_to_it() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(0f), 0L)
+        tracker.onGnssCourse(0f, 10f)
+        repeat(20) { tracker.onGnssCourse((PI / 2).toFloat(), 10f) }
+        assertAngle((PI / 2).toFloat(), tracker.courseRad, 0.02f)
+    }
+
+    @Test
+    fun the_anchor_takes_the_short_way_round_north() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(0f), 0L)
+        tracker.onGnssCourse((-3.0).toFloat(), 10f)
+        // 3.1 rad is 0.18 rad away going *through* pi, not 6.1 rad the other way.
+        tracker.onGnssCourse(3.1f, 10f)
+        val moved = CourseTracker.wrapAngle(tracker.courseRad - (-3.0f))
+        assertTrue("anchor went the long way: $moved", moved < 0f)
+    }
+
+    // --------------------------------------------------------------------------------------
+    // The azimuth reference
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    fun the_azimuth_is_read_off_an_axis_that_is_not_pointing_at_the_sky() {
+        // Upright in a cradle driving north: device +y is vertical, so its ground-plane projection
+        // is atan2(0, 0). The tracker must pick another axis; device x is due east.
+        val r = uprightPhone(0f)
+        val axis = CourseTracker.pickReferenceAxis(r, current = 1)
+        assertEquals(0, axis)
+        assertAngle((PI / 2).toFloat(), CourseTracker.axisAzimuth(r, axis))
+    }
+
+    @Test
+    fun the_reference_axis_is_sticky_while_it_stays_usable() {
+        val r = flatPhone(0f) // device y is horizontal
+        assertEquals(1, CourseTracker.pickReferenceAxis(r, current = 1))
+    }
+
+    @Test
+    fun switching_the_reference_axis_re_derives_the_offset_rather_than_turning_the_course() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(0f), 0L)
+        tracker.onGnssCourse(0f, 12f)
+        val before = tracker.courseRad
+        // Same car, same heading, phone tipped up into the cradle: the reference axis changes.
+        tracker.onRotationMatrix(uprightPhone(0f), 1_000_000_000L)
+        assertAngle(before, tracker.courseRad)
+        assertAngle((PI / 2).toFloat(), tracker.mountOffsetRad)
+    }
+
+    @Test
+    fun wrapAngle_lands_in_the_half_open_interval() {
+        assertEquals(0f, CourseTracker.wrapAngle(0f), 1e-6f)
+        assertEquals(PI.toFloat(), CourseTracker.wrapAngle(PI.toFloat()), 1e-5f)
+        assertEquals(PI.toFloat(), CourseTracker.wrapAngle(-PI.toFloat()), 1e-5f)
+        assertEquals(0f, CourseTracker.wrapAngle((4 * PI).toFloat()), 1e-5f)
+        assertEquals(-1f, CourseTracker.wrapAngle((2 * PI).toFloat() - 1f), 1e-5f)
+    }
+
+    @Test
+    fun without_a_course_the_heading_is_the_phones_azimuth_and_says_so() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(1f), 0L)
+        assertFalse(tracker.hasCourse)
+        assertAngle(1f, tracker.headingRad())
+        tracker.onGnssCourse(0f, 12f)
+        assertTrue(tracker.hasCourse)
+        assertAngle(0f, tracker.headingRad())
+    }
+
+    @Test
+    fun a_reset_forgets_the_mount_and_the_course() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(1f), 0L)
+        tracker.onGnssCourse(0.5f, 12f)
+        tracker.reset()
+        assertFalse(tracker.hasCourse)
+        assertFalse(tracker.hasMountOffset)
+        assertFalse(tracker.hasDeviceAzimuth)
+        assertEquals(0f, tracker.courseRad, 1e-6f)
+    }
+
+    // --------------------------------------------------------------------------------------
+    // D-128: the gyro null offset, which is what bent the traced curve inside a bore
+    // --------------------------------------------------------------------------------------
+
+    /**
+     * The gyro a device at attitude [r] reads while the vehicle turns at [bearingRateRadPerSec]
+     * and the sensor carries a null offset of [biasRadPerSec], both in the bearing convention.
+     *
+     * A null offset about the vertical is indistinguishable from a turn at that rate on a single
+     * sample -- that is the whole difficulty -- so it is added exactly as a turn would be.
+     */
+    private fun biasedGyro(r: FloatArray, bearingRateRadPerSec: Float, biasRadPerSec: Float) =
+        gyroForTurn(r, bearingRateRadPerSec + biasRadPerSec)
+
+    /** Drive with a biased gyro; [gnssBearingRad] anchors once a second when it is not null. */
+    private fun driveBiased(
+        tracker: CourseTracker,
+        attitude: FloatArray,
+        seconds: Float,
+        bearingRateRadPerSec: Float,
+        biasRadPerSec: Float,
+        speedMps: Float,
+        gnssBearingRad: Float? = null,
+        stationary: Boolean = false,
+        startNs: Long = 0L,
+        hz: Int = 100
+    ): Long {
+        val dt = 1f / hz
+        val stepNs = 1_000_000_000L / hz
+        var t = startNs
+        var trueBearing = 0f
+        repeat((seconds * hz).toInt()) { i ->
+            t += stepNs
+            val gyro = biasedGyro(attitude, bearingRateRadPerSec, biasRadPerSec)
+            tracker.onRotationMatrix(attitude, t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, speedMps, stationary)
+            trueBearing += bearingRateRadPerSec * dt
+            if (gnssBearingRad != null && (i + 1) % hz == 0) {
+                tracker.onGnssCourse(gnssBearingRad + trueBearing, speedMps)
+            }
+        }
+        return t
+    }
+
+    /** One degree per second: an ordinary, unremarkable phone gyro null offset. */
+    private val oneDegPerSec = (PI / 180.0).toFloat()
+
+    @Test
+    fun a_standstill_measures_the_gyro_null_offset() {
+        val tracker = CourseTracker()
+        assertFalse(tracker.hasGyroBias)
+        // Parked: the vehicle is turning at exactly zero, so whatever the gyro reads is the offset.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        assertTrue(tracker.hasGyroBias)
+        assertEquals(oneDegPerSec, tracker.gyroBiasRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun a_standstill_that_is_the_phone_being_handled_is_not_a_calibration() {
+        val tracker = CourseTracker()
+        tracker.onRotationMatrix(flatPhone(0f), 0L)
+        // A yaw rate no vehicle produces marks the sample as handling, and a hand's rotation is
+        // not a null offset however still the classifier thinks the car is.
+        tracker.onGyro(0f, 0f, -5f, 0.01f, 10_000_000L, 0f, stationary = true)
+        assertTrue(tracker.isDisturbed)
+        assertFalse(tracker.hasGyroBias)
+    }
+
+    @Test
+    fun the_offset_is_removed_from_the_rate_that_is_integrated() {
+        val tracker = CourseTracker()
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        assertEquals(0f, tracker.lastYawRateRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun an_uncompensated_offset_is_what_bends_a_dead_reckoned_bore() {
+        // The control for the test below: the same 20 s of straight driving, no calibration.
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 12f
+        )
+        // 1 deg/s for 20 s, integrated straight into the course.
+        assertEquals(20.0, Math.toDegrees(tracker.courseRad.toDouble()), 0.5)
+    }
+
+    @Test
+    fun a_calibrated_offset_leaves_a_dead_reckoned_bore_straight() {
+        val tracker = CourseTracker()
+        // Stopped at the lights before the portal: the ZARU measures the offset.
+        val parkedUntil = driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        tracker.onGnssCourse(0f, 12f)
+        // ...then 20 s of the bore, straight, with no fix to correct anything.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 12f, startNs = parkedUntil
+        )
+        assertEquals(0.0, Math.toDegrees(tracker.courseRad.toDouble()), 2.0)
+    }
+
+    @Test
+    fun gnss_tracked_driving_measures_the_offset_without_ever_stopping() {
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        // Two minutes of ordinary driving: the anchor keeps having to put back the same heading
+        // every second, and that one-sidedness is the offset.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 120f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 12f, gnssBearingRad = 0f
+        )
+        assertTrue(tracker.hasGyroBias)
+        assertEquals(oneDegPerSec, tracker.gyroBiasRadPerSec, 0.2f * oneDegPerSec)
+    }
+
+    @Test
+    fun a_real_turn_is_not_read_as_an_offset() {
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        // A long sweeping curve at 5 deg/s with a perfect gyro. The anchor has nothing to put
+        // back, so nothing here may be mistaken for a null offset.
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 60f, bearingRateRadPerSec = 5f * oneDegPerSec,
+            biasRadPerSec = 0f, speedMps = 12f, gnssBearingRad = 0f
+        )
+        assertEquals(0f, tracker.gyroBiasRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun a_lagging_bearing_through_turns_is_not_read_as_an_offset() {
+        // A receiver's course over ground trails the true heading by its own filter's lag, so
+        // through every turn the anchor first pulls the course back (the bearing has not caught
+        // up) and then pushes it forward again (it has). Both halves land in the window and the
+        // sum cancels; a gate that drops only the turning half leaves the catch-up behind and
+        // reads it as an offset the gyro does not have (D-129). Perfect gyro, five city turns,
+        // the bearing one second late: 0.05 deg/s here, 0.14 deg/s with the gate.
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        val hz = 100
+        val dt = 1f / hz
+        val stepNs = 1_000_000_000L / hz
+        val lagSamples = hz // 1 s
+        val turns = listOf( // start s, duration s, rate deg/s
+            Triple(20f, 6f, 10f), Triple(45f, 5f, -12f), Triple(70f, 8f, 8f),
+            Triple(100f, 6f, -10f), Triple(125f, 5f, 9f)
+        )
+        val bearings = ArrayList<Float>()
+        var trueBearing = 0f
+        var t = 0L
+        repeat(150 * hz) { i ->
+            t += stepNs
+            val tSec = i * dt
+            val rate = turns.firstOrNull { (s, d, _) -> tSec >= s && tSec < s + d }
+                ?.let { it.third * oneDegPerSec } ?: 0f
+            trueBearing = CourseTracker.wrapAngle(trueBearing + rate * dt)
+            bearings += trueBearing
+            val gyro = gyroForTurn(flatPhone(0f), rate)
+            tracker.onRotationMatrix(flatPhone(0f), t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, 12f)
+            if ((i + 1) % hz == 0) {
+                tracker.onGnssCourse(bearings[maxOf(0, bearings.size - 1 - lagSamples)], 12f)
+            }
+        }
+        assertEquals(0f, tracker.gyroBiasRadPerSec, 0.1f * oneDegPerSec)
+    }
+
+    @Test
+    fun the_bearing_at_a_tunnel_mouth_is_not_a_calibration() {
+        val tracker = CourseTracker()
+        tracker.onGnssCourse(0f, 12f)
+        // Through the bore with no fixes, the estimator declaring the denial every sample.
+        val dt = 0.01f
+        var t = 0L
+        repeat(2000) {
+            t += 10_000_000L
+            val gyro = biasedGyro(flatPhone(0f), 0f, oneDegPerSec)
+            tracker.onRotationMatrix(flatPhone(0f), t)
+            tracker.onGyro(gyro[0], gyro[1], gyro[2], dt, t, 12f)
+            tracker.onGnssDenied()
+        }
+        val before = tracker.gyroBiasRadPerSec
+        // The first bearing at the exit disagrees with the course by the whole accumulated drift.
+        // Divided by the outage that would look like a calibration; it is a multipath risk instead.
+        tracker.onGnssCourse(0f, 12f)
+        assertEquals(before, tracker.gyroBiasRadPerSec, 1e-6f)
+    }
+
+    @Test
+    fun an_absurd_offset_is_clamped_rather_than_believed() {
+        val tracker = CourseTracker()
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 30f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = 2f, speedMps = 0f, stationary = true
+        )
+        assertEquals(
+            CourseTracker.MAX_GYRO_BIAS_RAD_PER_SEC, tracker.gyroBiasRadPerSec, 1e-6f
+        )
+    }
+
+    @Test
+    fun a_reset_forgets_the_offset_too() {
+        val tracker = CourseTracker()
+        driveBiased(
+            tracker, flatPhone(0f), seconds = 20f, bearingRateRadPerSec = 0f,
+            biasRadPerSec = oneDegPerSec, speedMps = 0f, stationary = true
+        )
+        assertTrue(tracker.hasGyroBias)
+        tracker.reset()
+        assertFalse(tracker.hasGyroBias)
+        assertEquals(0f, tracker.gyroBiasRadPerSec, 1e-6f)
+    }
+
+    @Test
+    fun seedHardwareDrift_seeds_bias_when_uncalibrated_and_retains_it() {
+        val tracker = CourseTracker()
+        val flatAttitude = flatPhone(0f)
+        tracker.onRotationMatrix(flatAttitude, 0L)
+        assertFalse(tracker.hasGyroBias)
+
+        // Hardware reports 0.8 deg/s of drift on z axis
+        val driftZ = (0.8 * Math.PI / 180.0).toFloat()
+        tracker.seedHardwareDrift(0f, 0f, driftZ)
+
+        assertTrue(tracker.hasGyroBias)
+        assertEquals(-driftZ, tracker.gyroBiasRadPerSec, 1e-4f)
+
+        // Secondary call when already calibrated does not overwrite
+        tracker.seedHardwareDrift(0f, 0f, 0.05f)
+        assertEquals(-driftZ, tracker.gyroBiasRadPerSec, 1e-4f)
+    }
+}

@@ -1,0 +1,5 @@
+# commit d621cc0 | seed 26168 | 2026-09-13T09:13:40Z
+sequence,path,start,stop,n_samples,dt_s,duration_s,max_gap_s,duplicate_dt_fraction,accel_var_mean,gyro_norm_mean,is_quiet
+S-IDR-20260913-141119-samsung-sm-a556e,sessions/S-IDR-20260913-141119-samsung-sm-a556e/S-IDR-20260913-141119-samsung-sm-a556e_raw_imu.csv,64145,133493,69348,0.00799781,554.626,0.00801203,0,0.000878494,0.00264913,False
+S-IDR-20260913-141119-samsung-sm-a556e,sessions/S-IDR-20260913-141119-samsung-sm-a556e/S-IDR-20260913-141119-samsung-sm-a556e_raw_imu.csv,133503,179430,45927,0.00799519,367.184,0.0080075,0,0.00109788,0.00307559,False
+S-IDR-20260913-141119-samsung-sm-a556e,sessions/S-IDR-20260913-141119-samsung-sm-a556e/S-IDR-20260913-141119-samsung-sm-a556e_raw_imu.csv,0,24394,24394,0.00800246,195.209,0.00999219,0,0.000471678,0.00309234,False

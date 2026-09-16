@@ -167,9 +167,11 @@ Android app and JNI, car-park mode, comma2k19 pretraining, the Delhi/NCR collect
 domain-shift ablation, the C++/Rust port, and the two untrained learned components — which is the
 whole of the plan's §2C deferred list, plus the Onyekpe reproduction.
 
-It also carries **three open items that are gaps rather than deferrals**, which the plan's list does
-not contain because they were found this week: the mount-disturbance detector's 10 Hz blind spot
-(D-075), the unconfirmed accelerometer sign convention (D-059), and Gate 0 being open.
+It also carries **one remaining gap rather than a deferral**: the reference offline
+mount-disturbance detector's 10 Hz blind spot (D-075), noting that the on-device operator UI
+solves this directly via rotation-matrix tilt rate. Two items listed earlier have since closed:
+the accelerometer sign convention (R-8 / D-059 closed by D-085 with real stationary measurements)
+and Gate 0 being open (closed by D-092 and D-103).
 
 §13 leads with the car-park case as the least certain claim, states that drift may exceed 10% there,
 and says plainly that the phone stream is 10 Hz and that the 200 Hz FOG pipeline is an architecture

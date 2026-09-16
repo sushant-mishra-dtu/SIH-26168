@@ -1,0 +1,122 @@
+name: Android
+
+# Split from ci.yml rather than added to it, for one reason: this workflow needs a JDK and an
+# Android SDK and the harness workflow deliberately needs neither. Keeping them apart means the
+# critical-path Python checks stay a two-minute job that cannot be blocked by an SDK download.
+#
+# HANDOVER.md section 4, item 8. The blocker was never the workflow: `gradlew`, `gradlew.bat` and
+# the wrapper jar were all missing until 53e0053, so `./gradlew` did not exist at either Gradle
+# root. They are committed now, and this is what stops the Android modules silently rotting while
+# the Python suite stays green -- 2,296 lines of Kotlin have never been compiled by anything but a
+# laptop.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  logger:
+    name: logger (android/) — assemble + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Temurin 17, matching the sourceCompatibility/targetCompatibility in app/build.gradle.kts.
+      # HANDOVER.md section 6 records that three JDKs all failed identically on one Windows
+      # machine and that the JDK was not the variable; the fix there was
+      # -Djdk.net.unixdomain.tmpdir, and a Linux runner does not need it. Do not copy that flag
+      # here and do not conclude from this job passing that the Windows problem is gone.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+
+      - name: Assemble debug
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      # 50 tests as of b0aad0f, over RateStats percentile/Welford arithmetic, Records.formatCsvRow
+      # shape and precision, SessionClock timebase classification, the SAF exporter, and the
+      # trajectory record parser. Two of them deliberately pin quirks documented in HANDOVER.md
+      # section 5 so that a later reader does not "fix" them.
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew --no-daemon :app:test
+
+      # HANDOVER.md section 9 item 5: upload the debug APK so anyone can sideload a PR build
+      # without an SDK. Mirrors the operator-ui job's "Upload osm APK" step below.
+      - name: Upload logger APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: logger-app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logger-test-report
+          path: android/app/build/reports/tests/
+
+  operator-ui:
+    name: operator UI (android-ui/) — assemble + unit tests
+    runs-on: ubuntu-latest
+    env:
+      # Empty when the secret is not configured; the mapbox step keys off that.
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+
+      # Two product flavours since D-121. `osm` needs no account and is always built and unit
+      # tested. `mapbox` resolves from a Maven repository that refuses anonymous downloads, so it
+      # is built only when the repository carries the MAPBOX_DOWNLOADS_TOKEN secret (D-122): a
+      # fork or a PR from outside the org skips that step rather than failing on it. Gradle reads
+      # ORG_GRADLE_PROJECT_* as project properties, which is what settings.gradle.kts checks.
+      - name: Assemble osm flavour
+        working-directory: android-ui
+        run: ./gradlew --no-daemon :app:assembleOsmDebug
+
+      - name: Unit tests
+        working-directory: android-ui
+        run: ./gradlew --no-daemon :app:testOsmDebugUnitTest
+
+      - name: Assemble mapbox flavour
+        if: ${{ env.MAPBOX_DOWNLOADS_TOKEN != '' }}
+        working-directory: android-ui
+        env:
+          ORG_GRADLE_PROJECT_MAPBOX_DOWNLOADS_TOKEN: ${{ env.MAPBOX_DOWNLOADS_TOKEN }}
+        run: ./gradlew --no-daemon :app:assembleMapboxDebug
+
+      - name: Upload osm APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-osm-debug
+          path: android-ui/app/build/outputs/apk/osm/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-ui-test-report
+          path: android-ui/app/build/reports/tests/
