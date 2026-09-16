@@ -144,9 +144,17 @@
   "142": "MapChrome.kt",
   "143": "TelemetryStore",
   "144": "Pitch Script — \"Technical Approach\" slide, 60 seconds",
+  "145": "SwipeDirection",
   "146": "Available Builds",
   "147": "Training Environment",
   "148": "train",
+  "149": "zaru_sigma_from_window",
+  "150": "RouteTrackerTest",
+  "151": "ReconvergenceToast",
+  "152": "detector_settings",
+  "153": "stream_white_level",
   "154": "measured/README.md",
-  "155": "Hyperparameter"
+  "155": "Hyperparameter",
+  "156": "test_a_constant_offset_is_annihilated",
+  "157": "test_the_replay_view_never_recomputes_a_displayed_metric"
 }
